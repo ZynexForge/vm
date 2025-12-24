@@ -45,7 +45,6 @@ show_node_overview() {
     
     local total_ram=0
     local total_cpus=0
-    local total_disk=0
     local running_vms=0
     
     # Scan all locations
@@ -61,12 +60,12 @@ show_node_overview() {
                 # Calculate resources for this location
                 for config in "$location_dir"/*.conf; do
                     if [ -f "$config" ]; then
-                        source "$config"
+                        source "$config" 2>/dev/null
                         total_ram=$((total_ram + MEMORY))
                         total_cpus=$((total_cpus + CPUS))
                         
                         # Check if VM is running
-                        if pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null; then
+                        if pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null 2>&1; then
                             running_vms=$((running_vms + 1))
                         fi
                     fi
@@ -136,7 +135,7 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "Install missing packages and try again"
+        print_status "INFO" "On Ubuntu/Debian, install with: sudo apt install qemu-system cloud-image-utils wget"
         exit 1
     fi
 }
