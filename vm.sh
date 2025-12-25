@@ -509,7 +509,7 @@ EOF
     fi
 }
 
-# Function to start a VM
+# Function to start a VM with advanced boot options
 start_vm() {
     local vm_name=$1
     
@@ -539,19 +539,35 @@ start_vm() {
         echo -e "  ${COLOR_GRAY}Password: $PASSWORD${COLOR_RESET}"
         echo
         
-        # Base QEMU command
+        # Advanced boot configuration
+        print_status "INFO" "Advanced Boot Configuration:"
+        echo -e "  ${COLOR_GRAY}Boot Method:${COLOR_RESET} UEFI with Secure Boot (OVMF)"
+        echo -e "  ${COLOR_GRAY}Disk Interface:${COLOR_RESET} VirtIO with write-back caching"
+        echo -e "  ${COLOR_GRAY}Boot Priority:${COLOR_RESET} Hard Disk → Cloud-Init Seed"
+        
+        # Base QEMU command with advanced boot options
         local qemu_cmd=(
             qemu-system-x86_64
             -enable-kvm
+            -machine q35,accel=kvm,usb=off,dump-guest-core=off
             -m "$MEMORY"
-            -smp "$CPUS"
-            -cpu host
-            -drive "file=$IMG_FILE,format=qcow2,if=virtio"
+            -smp "$CPUS,sockets=1,cores=$CPUS,threads=1"
+            -cpu host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time,+invtsc
+            -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,discard=unmap"
             -drive "file=$SEED_FILE,format=raw,if=virtio"
-            -boot order=c
-            -device virtio-net-pci,netdev=n0
+            -boot "order=c,menu=on,splash-time=5000"
+            -device virtio-net-pci,netdev=n0,mac=52:54:00:$(openssl rand -hex 3 | sed 's/\(..\)/\1:/g; s/.$//')
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
+
+        # Add UEFI firmware if available
+        if [ -f "/usr/share/OVMF/OVMF_CODE.fd" ] && [ -f "/usr/share/OVMF/OVMF_VARS.fd" ]; then
+            qemu_cmd+=(
+                -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd"
+                -drive "if=pflash,format=raw,file=/tmp/OVMF_VARS_$VM_NAME.fd"
+            )
+            cp "/usr/share/OVMF/OVMF_VARS.fd" "/tmp/OVMF_VARS_$VM_NAME.fd" 2>/dev/null || true
+        fi
 
         # Add port forwards if specified
         if [[ -n "$PORT_FORWARDS" ]]; then
@@ -563,25 +579,84 @@ start_vm() {
             done
         fi
 
-        # Add GUI or console mode
+        # Add GUI or console mode with advanced display
         if [[ "$GUI_MODE" == true ]]; then
-            qemu_cmd+=(-vga virtio -display gtk,gl=on)
+            qemu_cmd+=(
+                -vga virtio
+                -display gtk,gl=on,show-cursor=on
+                -usb
+                -device usb-tablet
+                -device virtio-keyboard-pci
+                -device virtio-mouse-pci
+            )
         else
-            qemu_cmd+=(-nographic -serial mon:stdio)
+            qemu_cmd+=(
+                -nographic
+                -serial mon:stdio
+                -parallel none
+            )
         fi
 
-        # Add performance enhancements
+        # Add advanced performance enhancements
         qemu_cmd+=(
-            -device virtio-balloon-pci
+            -device virtio-balloon-pci,deflate-on-oom=on
             -object rng-random,filename=/dev/urandom,id=rng0
-            -device virtio-rng-pci,rng=rng0
+            -device virtio-rng-pci,rng=rng0,max-bytes=1024,period=1000
+            -device intel-iommu,intremap=on,caching-mode=on
+            -device virtio-scsi-pci,id=scsi
+            -blockdev "driver=file,filename=$IMG_FILE,node-name=drive0"
+            -blockdev "driver=qcow2,file=drive0,node-name=disk0"
+            -device scsi-hd,drive=disk0,bootindex=1
+            -rtc base=utc,clock=host,driftfix=slew
+            -global kvm-pit.lost_tick_policy=delay
+            -no-hpet
+            -no-shutdown
+            -global ICH9-LPC.disable_s3=1
+            -global ICH9-LPC.disable_s4=1
         )
 
-        print_status "INFO" "Starting QEMU instance..."
+        # Add CPU and memory optimizations
+        qemu_cmd+=(
+            -overcommit mem-lock=on
+            -mem-prealloc
+            -realtime mlock=on
+        )
+
+        # Add monitoring and management
+        qemu_cmd+=(
+            -chardev socket,id=mon0,path=/tmp/qemu-monitor-$VM_NAME.sock,server=on,wait=off
+            -mon chardev=mon0,mode=control
+            -qmp unix:/tmp/qemu-qmp-$VM_NAME.sock,server=on,wait=off
+        )
+
+        print_status "INFO" "Starting QEMU with advanced boot configuration..."
         echo "$SUBTLE_SEP"
-        "${qemu_cmd[@]}"
         
-        print_status "INFO" "VM $vm_name has been shut down"
+        # Create monitor socket directory
+        mkdir -p /tmp
+        
+        # Start QEMU in background and capture PID
+        "${qemu_cmd[@]}" &
+        local qemu_pid=$!
+        
+        # Wait for QEMU to start
+        sleep 2
+        
+        # Check if QEMU is running
+        if kill -0 $qemu_pid 2>/dev/null; then
+            print_status "SUCCESS" "VM $vm_name started successfully (PID: $qemu_pid)"
+            echo -e "  ${COLOR_GRAY}Monitor: echo 'info status' | sudo socat - UNIX-CONNECT:/tmp/qemu-monitor-$VM_NAME.sock${COLOR_RESET}"
+            echo -e "  ${COLOR_GRAY}QMP:     echo '{\"execute\":\"query-status\"}' | sudo socat - UNIX-CONNECT:/tmp/qemu-qmp-$VM_NAME.sock${COLOR_RESET}"
+            
+            # Wait for QEMU to exit
+            wait $qemu_pid
+            print_status "INFO" "VM $vm_name has been shut down"
+            
+            # Cleanup temporary files
+            rm -f "/tmp/OVMF_VARS_$VM_NAME.fd" "/tmp/qemu-monitor-$VM_NAME.sock" "/tmp/qemu-qmp-$VM_NAME.sock" 2>/dev/null || true
+        else
+            print_status "ERROR" "Failed to start VM $vm_name"
+        fi
     fi
 }
 
@@ -662,11 +737,32 @@ show_vm_info() {
 # Function to check if VM is running
 is_vm_running() {
     local vm_name=$1
+    local img_file=""
+    
+    # Try to get image file from config
+    if [ -f "$VM_DIR/$vm_name.conf" ]; then
+        source "$VM_DIR/$vm_name.conf" 2>/dev/null || true
+        img_file="$IMG_FILE"
+    fi
+    
+    # First check by process name
     if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null; then
         return 0
-    else
-        return 1
+    # Then check by image file if available
+    elif [ -n "$img_file" ] && pgrep -f "qemu-system-x86_64.*$img_file" >/dev/null; then
+        return 0
+    # Finally check any QEMU process
+    elif pgrep -f "qemu-system-x86_64" >/dev/null; then
+        # More detailed check
+        local pids=$(pgrep -f "qemu-system-x86_64")
+        for pid in $pids; do
+            if ps -p $pid -o cmd= | grep -q "$vm_name"; then
+                return 0
+            fi
+        done
     fi
+    
+    return 1
 }
 
 # Function to stop a running VM
@@ -679,14 +775,56 @@ stop_vm() {
         echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET}"
         
         if is_vm_running "$vm_name"; then
-            print_status "INFO" "Stopping VM..."
-            pkill -f "qemu-system-x86_64.*$IMG_FILE"
-            sleep 2
+            print_status "INFO" "Stopping VM gracefully..."
+            
+            # Find the actual QEMU process
+            local qemu_pids=$(pgrep -f "qemu-system-x86_64.*$vm_name")
+            if [ -z "$qemu_pids" ]; then
+                qemu_pids=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE")
+            fi
+            
+            # Try monitor socket shutdown first
+            if [ -S "/tmp/qemu-monitor-$vm_name.sock" ]; then
+                echo "system_powerdown" | socat - UNIX-CONNECT:"/tmp/qemu-monitor-$vm_name.sock" 2>/dev/null && \
+                print_status "INFO" "Sent ACPI shutdown signal"
+                sleep 5
+            fi
+            
+            # Check if still running
             if is_vm_running "$vm_name"; then
                 print_status "WARN" "VM did not stop gracefully, forcing termination..."
-                pkill -9 -f "qemu-system-x86_64.*$IMG_FILE"
+                
+                # Kill by PIDs found
+                for pid in $qemu_pids; do
+                    if kill -0 $pid 2>/dev/null; then
+                        kill -TERM $pid 2>/dev/null
+                    fi
+                done
+                
+                sleep 2
+                
+                # Force kill if still running
+                if is_vm_running "$vm_name"; then
+                    for pid in $qemu_pids; do
+                        if kill -0 $pid 2>/dev/null; then
+                            kill -KILL $pid 2>/dev/null
+                        fi
+                    done
+                fi
             fi
-            print_status "SUCCESS" "VM $vm_name stopped"
+            
+            # Wait a bit for cleanup
+            sleep 1
+            
+            # Cleanup temporary files
+            rm -f "/tmp/OVMF_VARS_$vm_name.fd" "/tmp/qemu-monitor-$vm_name.sock" "/tmp/qemu-qmp-$vm_name.sock" 2>/dev/null || true
+            
+            if is_vm_running "$vm_name"; then
+                print_status "ERROR" "Failed to stop VM $vm_name"
+                return 1
+            else
+                print_status "SUCCESS" "VM $vm_name stopped"
+            fi
         else
             print_status "INFO" "VM $vm_name is not running"
         fi
@@ -976,6 +1114,10 @@ show_vm_performance() {
         if is_vm_running "$vm_name"; then
             # Get QEMU process ID
             local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE")
+            if [ -z "$qemu_pid" ]; then
+                qemu_pid=$(pgrep -f "qemu-system-x86_64.*$vm_name")
+            fi
+            
             if [[ -n "$qemu_pid" ]]; then
                 echo
                 echo -e "${COLOR_WHITE}Process Statistics:${COLOR_RESET}"
@@ -990,6 +1132,13 @@ show_vm_performance() {
                 if [ -f "$IMG_FILE" ]; then
                     local disk_size=$(du -h "$IMG_FILE" 2>/dev/null | cut -f1)
                     echo -e "  VM Disk: $disk_size ($DISK_SIZE allocated)"
+                fi
+                
+                # Check monitor socket for internal VM stats
+                if [ -S "/tmp/qemu-monitor-$vm_name.sock" ]; then
+                    echo
+                    echo -e "${COLOR_WHITE}VM Internal Stats:${COLOR_RESET}"
+                    echo "info status" | socat - UNIX-CONNECT:"/tmp/qemu-monitor-$vm_name.sock" 2>/dev/null | head -5 || true
                 fi
             else
                 print_status "ERROR" "Could not find QEMU process for VM $vm_name"
@@ -1213,6 +1362,10 @@ main_menu() {
                 print_status "ERROR" "Invalid option"
                 ;;
         esac
+        
+        if [ "$choice" != "0" ]; then
+            read -p "$(print_status "INPUT" "Press Enter to continue...")"
+        fi
     done
 }
 
