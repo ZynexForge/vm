@@ -2,84 +2,84 @@
 set -euo pipefail
 
 # =============================
-# ZynexForge Professional VM Manager
+# ZYNEXFORGE™ - Advanced VM Virtualization Platform
 # =============================
+
+# Terminal colors
+COLOR_RESET="\033[0m"
+COLOR_BLUE="\033[1;34m"
+COLOR_CYAN="\033[1;36m"
+COLOR_GREEN="\033[1;32m"
+COLOR_YELLOW="\033[1;33m"
+COLOR_RED="\033[1;31m"
+COLOR_WHITE="\033[1;37m"
+COLOR_MAGENTA="\033[1;35m"
+COLOR_GRAY="\033[90m"
+
+# UI constants
+SEPARATOR="========================================================================="
+SUBTLE_SEP="─────────────────────────────────────────────────────────────────────────"
 
 # Function to display header
 display_header() {
     clear
     cat << "EOF"
- _____                            ______                    
-/__  /  __  ______  ___  _  __   / ____/___  _________ ____ 
-  / /  / / / / __ \/ _ \| |/_/  / /_  / __ \/ ___/ __ `/ _ \
- / /__/ /_/ / / / /  __/>  <   / __/ / /_/ / /  / /_/ /  __/
-/____/\__, /_/ /_/\___/_/|_|  /_/    \____/_/   \__, /\___/ 
-     /____/                                    /____/       
-                                                                
-            ZynexForge Professional VM Manager
-========================================================================
+
+__________                             ___________                         
+\____    /___.__. ____   ____ ___  ___ \_   _____/__________  ____   ____  
+  /     /<   |  |/    \_/ __ \\  \/  /  |    __)/  _ \_  __ \/ ___\_/ __ \ 
+ /     /_ \___  |   |  \  ___/ >    <   |     \(  <_> )  | \/ /_/  >  ___/ 
+/_______ \/ ____|___|  /\___  >__/\_ \  \___  / \____/|__|  \___  / \___  >
+        \/\/         \/     \/      \/      \/             /_____/      \/ 
 EOF
+    echo -e "${COLOR_CYAN}ZYNEXFORGE™${COLOR_RESET}"
+    echo -e "${COLOR_WHITE}Enterprise Virtualization Platform${COLOR_RESET}"
+    echo "$SEPARATOR"
     echo
 }
 
-# Function to display colored output
+# Function to print styled messages
 print_status() {
     local type=$1
     local message=$2
     
     case $type in
-        "INFO") echo -e "\033[1;34m[INFO]\033[0m $message" ;;
-        "WARN") echo -e "\033[1;33m[WARN]\033[0m $message" ;;
-        "ERROR") echo -e "\033[1;31m[ERROR]\033[0m $message" ;;
-        "SUCCESS") echo -e "\033[1;32m[SUCCESS]\033[0m $message" ;;
-        "INPUT") echo -e "\033[1;36m[INPUT]\033[0m $message" ;;
-        "STATUS") echo -e "\033[1;35m[STATUS]\033[0m $message" ;;
-        *) echo "[$type] $message" ;;
+        "INFO") echo -e "${COLOR_BLUE}[INFO]${COLOR_RESET} $message" ;;
+        "WARN") echo -e "${COLOR_YELLOW}[WARN]${COLOR_RESET} $message" ;;
+        "ERROR") echo -e "${COLOR_RED}[ERROR]${COLOR_RESET} $message" ;;
+        "SUCCESS") echo -e "${COLOR_GREEN}[SUCCESS]${COLOR_RESET} $message" ;;
+        "INPUT") echo -e "${COLOR_CYAN}[INPUT]${COLOR_RESET} $message" ;;
+        "LOCATION") echo -e "${COLOR_MAGENTA}[LOCATION]${COLOR_RESET} $message" ;;
+        "NODE") echo -e "${COLOR_GRAY}[NODE]${COLOR_RESET} $message" ;;
+        *) echo -e "${COLOR_WHITE}[$type]${COLOR_RESET} $message" ;;
     esac
 }
 
-# Function to show node overview
-show_node_overview() {
-    print_status "INFO" "Node Overview"
-    echo "=========================================="
+# Function to display section header
+section_header() {
+    local title=$1
+    echo
+    echo -e "${COLOR_WHITE}$title${COLOR_RESET}"
+    echo "$SUBTLE_SEP"
+}
+
+# Function to display location status
+location_status() {
+    local location=$1
+    local node_path=$2
+    local vm_count=$(find "$VM_DIR" -name "*.conf" -exec grep -l "LOCATION=\"$location\"" {} \; 2>/dev/null | wc -l)
+    local node_usage=""
     
-    local total_ram=0
-    local total_cpus=0
-    local running_vms=0
+    if [ -d "$node_path" ]; then
+        local disk_usage=$(du -sh "$node_path" 2>/dev/null | cut -f1)
+        node_usage="${COLOR_GREEN}● ONLINE${COLOR_RESET} | VMs: ${COLOR_CYAN}$vm_count${COLOR_RESET} | Storage: ${COLOR_YELLOW}$disk_usage${COLOR_RESET}"
+    else
+        node_usage="${COLOR_RED}● OFFLINE${COLOR_RESET} | Node path missing"
+    fi
     
-    # Scan all locations
-    for location_dir in /nodes/*/ 2>/dev/null; do
-        if [ -d "$location_dir" ]; then
-            local location_name=$(basename "$location_dir")
-            local vms_in_location=$(find "$location_dir" -name "*.conf" 2>/dev/null | wc -l)
-            
-            if [ $vms_in_location -gt 0 ]; then
-                echo "Location: $location_name"
-                echo "  VMs: $vms_in_location"
-                
-                # Calculate resources for this location
-                for config in "$location_dir"/*.conf; do
-                    if [ -f "$config" ]; then
-                        source "$config" 2>/dev/null
-                        total_ram=$((total_ram + MEMORY))
-                        total_cpus=$((total_cpus + CPUS))
-                        
-                        # Check if VM is running
-                        if pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null 2>&1; then
-                            running_vms=$((running_vms + 1))
-                        fi
-                    fi
-                done
-            fi
-        fi
-    done
-    
-    echo "------------------------------------------"
-    echo "Total VMs: $(find /nodes -name "*.conf" 2>/dev/null | wc -l)"
-    echo "Running VMs: $running_vms"
-    echo "Total RAM allocated: $total_ram MB"
-    echo "Total CPUs allocated: $total_cpus"
-    echo "=========================================="
+    echo -e "  ${COLOR_MAGENTA}📍 $location${COLOR_RESET}"
+    echo -e "    ${COLOR_GRAY}Node: $(basename "$node_path")${COLOR_RESET}"
+    echo -e "    Status: $node_usage"
 }
 
 # Function to validate input
@@ -101,8 +101,8 @@ validate_input() {
             fi
             ;;
         "port")
-            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 23 ] || [ "$value" -gt 65535 ]; then
-                print_status "ERROR" "Must be a valid port number (23-65535)"
+            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 22 ] || [ "$value" -gt 65535 ]; then
+                print_status "ERROR" "Must be a valid port number (22-65535)"
                 return 1
             fi
             ;;
@@ -114,7 +114,7 @@ validate_input() {
             ;;
         "username")
             if ! [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-                print_status "ERROR" "Username must start with a letter or underscore"
+                print_status "ERROR" "Username must start with a letter or underscore, and contain only letters, numbers, hyphens, and underscores"
                 return 1
             fi
             ;;
@@ -135,7 +135,7 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "On Ubuntu/Debian, install with: sudo apt install qemu-system cloud-image-utils wget"
+        print_status "INFO" "On Ubuntu/Debian, try: sudo apt install qemu-system cloud-image-utils wget"
         exit 1
     fi
 }
@@ -146,79 +146,33 @@ cleanup() {
     if [ -f "meta-data" ]; then rm -f "meta-data"; fi
 }
 
-# Location definitions
-declare -A LOCATIONS=(
-    ["in-mumbai"]="India (Mumbai)"
-    ["in-delhi"]="India (Delhi)"
-    ["sg-singapore"]="Singapore"
-    ["pk-karachi"]="Pakistan (Karachi)"
-    ["ae-dubai"]="UAE (Dubai)"
-    ["de-frankfurt"]="Germany (Frankfurt)"
-    ["us-newyork"]="USA (New York)"
-)
-
-# Function to select VM location
-select_location() {
-    print_status "INFO" "Select VM Location"
-    echo "=========================================="
-    
-    local i=1
-    local location_keys=()
-    for key in "${!LOCATIONS[@]}"; do
-        echo "  $i) ${LOCATIONS[$key]}"
-        location_keys[$i]="$key"
-        ((i++))
-    done
-    
-    while true; do
-        read -p "$(print_status "INPUT" "Enter location number (1-${#LOCATIONS[@]}): ")" choice
-        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#LOCATIONS[@]} ]; then
-            LOCATION="${location_keys[$choice]}"
-            LOCATION_NAME="${LOCATIONS[$LOCATION]}"
-            VM_DIR="/nodes/$LOCATION"
-            mkdir -p "$VM_DIR"
-            print_status "SUCCESS" "Selected location: $LOCATION_NAME"
-            echo
-            return 0
-        else
-            print_status "ERROR" "Invalid selection. Try again."
-        fi
-    done
-}
-
-# Function to get all VM configurations across all locations
+# Function to get all VM configurations
 get_vm_list() {
-    local vms=()
-    
-    for location_dir in /nodes/*/ 2>/dev/null; do
-        if [ -d "$location_dir" ]; then
-            local location_name=$(basename "$location_dir")
-            for config in "$location_dir"/*.conf; do
-                if [ -f "$config" ]; then
-                    local vm_name=$(basename "$config" .conf)
-                    vms+=("$location_name:$vm_name")
-                fi
-            done
-        fi
-    done
-    
-    printf '%s\n' "${vms[@]}" | sort
+    find "$VM_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort
 }
 
 # Function to load VM configuration
 load_vm_config() {
-    local location_vm=$1
-    IFS=':' read -r location vm_name <<< "$location_vm"
-    
-    local config_file="/nodes/$location/$vm_name.conf"
+    local vm_name=$1
+    local config_file="$VM_DIR/$vm_name.conf"
     
     if [[ -f "$config_file" ]]; then
         # Clear previous variables
         unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
-        unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED LOCATION
+        unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
+        unset LOCATION NODE_PATH LOCATION_ID NETWORK_RANGE
         
         source "$config_file"
-        VM_DIR="/nodes/$LOCATION"
+        
+        # Update paths based on location
+        if [[ -n "$LOCATION" && -n "${LOCATION_NODES[$LOCATION]}" ]]; then
+            NODE_PATH="${LOCATION_NODES[$LOCATION]}"
+            LOCATION_ID="${LOCATION_IDS[$LOCATION]}"
+            NETWORK_RANGE="${LOCATION_NETWORKS[$LOCATION]}"
+            IMG_FILE="$NODE_PATH/$VM_NAME.img"
+            SEED_FILE="$NODE_PATH/$VM_NAME-seed.iso"
+        fi
+        
         return 0
     else
         print_status "ERROR" "Configuration for VM '$vm_name' not found"
@@ -248,50 +202,122 @@ IMG_FILE="$IMG_FILE"
 SEED_FILE="$SEED_FILE"
 CREATED="$CREATED"
 LOCATION="$LOCATION"
+NODE_PATH="$NODE_PATH"
+LOCATION_ID="$LOCATION_ID"
+NETWORK_RANGE="$NETWORK_RANGE"
 EOF
     
     print_status "SUCCESS" "Configuration saved"
 }
 
+# Function to show location selection with availability check
+select_location() {
+    section_header "DATACENTER LOCATION SELECTION"
+    
+    local locations=()
+    local i=1
+    
+    print_status "INFO" "Available locations:"
+    echo
+    
+    # Create arrays for menu display
+    local location_names=()
+    for loc in "${!LOCATION_NODES[@]}"; do
+        location_names+=("$loc")
+    done
+    
+    # Sort locations alphabetically
+    IFS=$'\n' sorted_locations=($(sort <<<"${location_names[*]}"))
+    unset IFS
+    
+    # Display sorted locations
+    for loc in "${sorted_locations[@]}"; do
+        local node_path="${LOCATION_NODES[$loc]}"
+        
+        # Check location availability
+        if [ -d "$node_path" ]; then
+            echo -e "  ${COLOR_GREEN}$i) $loc${COLOR_RESET}"
+        else
+            echo -e "  ${COLOR_RED}$i) $loc (OFFLINE)${COLOR_RESET}"
+        fi
+        ((i++))
+    done
+    
+    echo
+    while true; do
+        read -p "$(print_status "INPUT" "Select location (1-${#sorted_locations[@]}): ")" choice
+        
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#sorted_locations[@]} ]; then
+            local selected_loc="${sorted_locations[$((choice-1))]}"
+            local node_path="${LOCATION_NODES[$selected_loc]}"
+            
+            if [ -d "$node_path" ]; then
+                LOCATION="$selected_loc"
+                NODE_PATH="$node_path"
+                LOCATION_ID="${LOCATION_IDS[$LOCATION]}"
+                NETWORK_RANGE="${LOCATION_NETWORKS[$LOCATION]}"
+                
+                print_status "LOCATION" "Selected: $LOCATION"
+                print_status "NODE" "Node ID: $LOCATION_ID"
+                print_status "NODE" "Network: $NETWORK_RANGE"
+                break
+            else
+                print_status "ERROR" "Location '$selected_loc' is unavailable. Please select an online location."
+            fi
+        else
+            print_status "ERROR" "Invalid selection. Please enter a number between 1 and ${#sorted_locations[@]}."
+        fi
+    done
+}
+
 # Function to create new VM
 create_new_vm() {
-    print_status "INFO" "Create New Virtual Machine"
-    echo "=========================================="
+    display_header
+    section_header "CREATE NEW VIRTUAL MACHINE"
     
-    # Select location first
+    # Location selection
     select_location
     
+    # Create node directory if it doesn't exist
+    mkdir -p "$NODE_PATH"
+    
     # OS Selection
-    print_status "INFO" "Select Operating System"
-    echo "------------------------------------------"
+    section_header "OPERATING SYSTEM SELECTION"
+    print_status "INFO" "Available operating systems:"
     
     local os_options=()
     local i=1
     for os in "${!OS_OPTIONS[@]}"; do
-        echo "  $i) $os"
+        echo -e "  ${COLOR_CYAN}$i) $os${COLOR_RESET}"
         os_options[$i]="$os"
         ((i++))
     done
     
     while true; do
-        read -p "$(print_status "INPUT" "Enter OS choice (1-${#OS_OPTIONS[@]}): ")" choice
+        echo
+        read -p "$(print_status "INPUT" "Select OS (1-${#OS_OPTIONS[@]}): ")" choice
+        
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#OS_OPTIONS[@]} ]; then
             local os="${os_options[$choice]}"
             IFS='|' read -r OS_TYPE CODENAME IMG_URL DEFAULT_HOSTNAME DEFAULT_USERNAME DEFAULT_PASSWORD <<< "${OS_OPTIONS[$os]}"
+            print_status "INFO" "Selected: $os"
             break
         else
-            print_status "ERROR" "Invalid selection"
+            print_status "ERROR" "Invalid selection. Try again."
         fi
     done
 
-    # Custom Inputs with validation
+    # VM Configuration
+    section_header "VIRTUAL MACHINE CONFIGURATION"
+    
+    # Name and hostname
     while true; do
         read -p "$(print_status "INPUT" "Enter VM name (default: $DEFAULT_HOSTNAME): ")" VM_NAME
         VM_NAME="${VM_NAME:-$DEFAULT_HOSTNAME}"
         if validate_input "name" "$VM_NAME"; then
-            # Check if VM name already exists in this location
+            # Check if VM name already exists
             if [[ -f "$VM_DIR/$VM_NAME.conf" ]]; then
-                print_status "ERROR" "VM with name '$VM_NAME' already exists in $LOCATION_NAME"
+                print_status "ERROR" "VM with name '$VM_NAME' already exists"
             else
                 break
             fi
@@ -306,6 +332,9 @@ create_new_vm() {
         fi
     done
 
+    # Credentials
+    section_header "ACCESS CREDENTIALS"
+    
     while true; do
         read -p "$(print_status "INPUT" "Enter username (default: $DEFAULT_USERNAME): ")" USERNAME
         USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
@@ -315,16 +344,20 @@ create_new_vm() {
     done
 
     while true; do
+        echo -e "${COLOR_YELLOW}Password requirements:${COLOR_RESET} Minimum 8 characters"
         read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
         PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
         echo
-        if [ -n "$PASSWORD" ]; then
+        if [ -n "$PASSWORD" ] && [ ${#PASSWORD} -ge 8 ]; then
             break
         else
-            print_status "ERROR" "Password cannot be empty"
+            print_status "ERROR" "Password must be at least 8 characters"
         fi
     done
 
+    # Resources
+    section_header "RESOURCE ALLOCATION"
+    
     while true; do
         read -p "$(print_status "INPUT" "Disk size (default: 20G): ")" DISK_SIZE
         DISK_SIZE="${DISK_SIZE:-20G}"
@@ -349,6 +382,9 @@ create_new_vm() {
         fi
     done
 
+    # Networking
+    section_header "NETWORK CONFIGURATION"
+    
     while true; do
         read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
         SSH_PORT="${SSH_PORT:-2222}"
@@ -363,7 +399,7 @@ create_new_vm() {
     done
 
     while true; do
-        read -p "$(print_status "INPUT" "Enable GUI display? (y/n, default: n): ")" gui_input
+        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
         GUI_MODE=false
         gui_input="${gui_input:-n}"
         if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
@@ -376,12 +412,28 @@ create_new_vm() {
         fi
     done
 
-    # Additional network options
     read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
 
-    IMG_FILE="$VM_DIR/$VM_NAME.img"
-    SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
+    # Final configuration
+    IMG_FILE="$NODE_PATH/$VM_NAME.img"
+    SEED_FILE="$NODE_PATH/$VM_NAME-seed.iso"
     CREATED="$(date)"
+
+    section_header "DEPLOYMENT SUMMARY"
+    echo -e "${COLOR_WHITE}VM Configuration:${COLOR_RESET}"
+    echo -e "  Name: ${COLOR_CYAN}$VM_NAME${COLOR_RESET}"
+    echo -e "  Location: ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
+    echo -e "  OS: ${COLOR_GREEN}$os${COLOR_RESET}"
+    echo -e "  Resources: ${COLOR_YELLOW}$CPUS vCPU | ${MEMORY}MB RAM | $DISK_SIZE disk${COLOR_RESET}"
+    echo -e "  Network: SSH on port ${COLOR_CYAN}$SSH_PORT${COLOR_RESET} ($NETWORK_RANGE)"
+    echo -e "  Access: ${COLOR_GREEN}$USERNAME${COLOR_RESET} / ********"
+    echo
+    
+    read -p "$(print_status "INPUT" "Proceed with deployment? (y/N): ")" confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_status "INFO" "Deployment cancelled"
+        return
+    fi
 
     # Download and setup VM image
     setup_vm_image
@@ -389,21 +441,28 @@ create_new_vm() {
     # Save configuration
     save_vm_config
     
-    print_status "SUCCESS" "VM created successfully in $LOCATION_NAME"
-    echo "SSH Command: ssh -p $SSH_PORT $USERNAME@localhost"
+    section_header "DEPLOYMENT COMPLETE"
+    print_status "SUCCESS" "VM '$VM_NAME' deployed successfully to $LOCATION"
+    echo -e "  ${COLOR_GRAY}Location: $LOCATION (Node: $LOCATION_ID)${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}SSH Access: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Management: $VM_DIR/$VM_NAME.conf${COLOR_RESET}"
 }
 
 # Function to setup VM image
 setup_vm_image() {
-    print_status "INFO" "Setting up VM image..."
+    print_status "INFO" "Initializing VM storage in $LOCATION..."
+    
+    # Create VM directory if it doesn't exist
+    mkdir -p "$VM_DIR"
+    mkdir -p "$NODE_PATH"
     
     # Check if image already exists
     if [[ -f "$IMG_FILE" ]]; then
-        print_status "INFO" "Image file already exists"
+        print_status "INFO" "Image file already exists. Skipping download."
     else
-        print_status "INFO" "Downloading image..."
+        print_status "INFO" "Downloading OS image..."
         if ! wget --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp"; then
-            print_status "ERROR" "Failed to download image"
+            print_status "ERROR" "Failed to download image from $IMG_URL"
             exit 1
         fi
         mv "$IMG_FILE.tmp" "$IMG_FILE"
@@ -411,7 +470,8 @@ setup_vm_image() {
     
     # Resize the disk image if needed
     if ! qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
-        print_status "WARN" "Creating new disk image..."
+        print_status "WARN" "Failed to resize disk image. Creating new image with specified size..."
+        # Create a new image with the specified size
         rm -f "$IMG_FILE"
         qemu-img create -f qcow2 -F qcow2 -b "$IMG_FILE" "$IMG_FILE.tmp" "$DISK_SIZE" 2>/dev/null || \
         qemu-img create -f qcow2 "$IMG_FILE" "$DISK_SIZE"
@@ -444,32 +504,40 @@ local-hostname: $HOSTNAME
 EOF
 
     if ! cloud-localds "$SEED_FILE" user-data meta-data; then
-        print_status "ERROR" "Failed to create cloud-init image"
+        print_status "ERROR" "Failed to create cloud-init seed image"
         exit 1
     fi
 }
 
 # Function to start a VM
 start_vm() {
-    local location_vm=$1
+    local vm_name=$1
     
-    if load_vm_config "$location_vm"; then
-        print_status "INFO" "Starting VM: $VM_NAME"
-        print_status "INFO" "Location: $LOCATION_NAME"
-        print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
-        print_status "INFO" "Password: $PASSWORD"
+    if load_vm_config "$vm_name"; then
+        section_header "STARTING VIRTUAL MACHINE"
+        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
+        echo -e "${COLOR_WHITE}OS:${COLOR_RESET} $OS_TYPE"
+        echo -e "${COLOR_WHITE}Resources:${COLOR_RESET} ${COLOR_YELLOW}$CPUS vCPU | ${MEMORY}MB RAM${COLOR_RESET}"
+        echo
         
         # Check if image file exists
         if [[ ! -f "$IMG_FILE" ]]; then
-            print_status "ERROR" "VM image file not found"
+            print_status "ERROR" "VM image file not found: $IMG_FILE"
             return 1
         fi
         
         # Check if seed file exists
         if [[ ! -f "$SEED_FILE" ]]; then
-            print_status "WARN" "Recreating cloud-init image..."
+            print_status "WARN" "Seed file not found, recreating..."
             setup_vm_image
         fi
+        
+        # Display access information
+        print_status "INFO" "Access Information:"
+        echo -e "  ${COLOR_GRAY}SSH: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Password: $PASSWORD${COLOR_RESET}"
+        echo
         
         # Base QEMU command
         local qemu_cmd=(
@@ -509,24 +577,36 @@ start_vm() {
             -device virtio-rng-pci,rng=rng0
         )
 
-        print_status "INFO" "Starting QEMU..."
+        print_status "INFO" "Starting QEMU instance..."
+        echo "$SUBTLE_SEP"
         "${qemu_cmd[@]}"
         
-        print_status "INFO" "VM has been shut down"
+        print_status "INFO" "VM $vm_name has been shut down"
     fi
 }
 
 # Function to delete a VM
 delete_vm() {
-    local location_vm=$1
+    local vm_name=$1
     
-    if load_vm_config "$location_vm"; then
-        print_status "WARN" "This will permanently delete VM '$VM_NAME'!"
-        read -p "$(print_status "INPUT" "Are you sure? (y/N): ")" -n 1 -r
+    if load_vm_config "$vm_name"; then
+        section_header "DELETE VIRTUAL MACHINE"
+        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
+        echo -e "${COLOR_WHITE}Created:${COLOR_RESET} $CREATED"
         echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$VM_NAME.conf"
-            print_status "SUCCESS" "VM '$VM_NAME' deleted"
+        
+        print_status "WARN" "⚠️  This will permanently delete the VM and all its data!"
+        print_status "WARN" "The following will be deleted:"
+        echo -e "  ${COLOR_RED}• VM configuration${COLOR_RESET}"
+        echo -e "  ${COLOR_RED}• Disk image ($DISK_SIZE)${COLOR_RESET}"
+        echo -e "  ${COLOR_RED}• Cloud-init seed${COLOR_RESET}"
+        echo
+        
+        read -p "$(print_status "INPUT" "Type 'DELETE' to confirm: ")" confirm
+        if [[ "$confirm" == "DELETE" ]]; then
+            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
+            print_status "SUCCESS" "VM '$vm_name' has been deleted from $LOCATION"
         else
             print_status "INFO" "Deletion cancelled"
         fi
@@ -535,126 +615,180 @@ delete_vm() {
 
 # Function to show VM info
 show_vm_info() {
-    local location_vm=$1
+    local vm_name=$1
     
-    if load_vm_config "$location_vm"; then
+    if load_vm_config "$vm_name"; then
+        section_header "VIRTUAL MACHINE INFORMATION"
+        
+        echo -e "${COLOR_WHITE}Basic Information:${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Name:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
+        echo -e "  ${COLOR_GRAY}Hostname:${COLOR_RESET} $HOSTNAME"
+        echo -e "  ${COLOR_GRAY}OS:${COLOR_RESET} $OS_TYPE $CODENAME"
+        echo -e "  ${COLOR_GRAY}Created:${COLOR_RESET} $CREATED"
+        
         echo
-        print_status "INFO" "VM Information"
-        echo "=========================================="
-        echo "Name: $VM_NAME"
-        echo "Location: $LOCATION_NAME"
-        echo "OS: $OS_TYPE"
-        echo "Hostname: $HOSTNAME"
-        echo "Username: $USERNAME"
-        echo "Password: $PASSWORD"
-        echo "SSH Port: $SSH_PORT"
-        echo "SSH Command: ssh -p $SSH_PORT $USERNAME@localhost"
-        echo "Memory: $MEMORY MB"
-        echo "CPUs: $CPUS"
-        echo "Disk: $DISK_SIZE"
-        echo "GUI Mode: $GUI_MODE"
-        echo "Port Forwards: ${PORT_FORWARDS:-None}"
-        echo "Created: $CREATED"
-        echo "=========================================="
+        echo -e "${COLOR_WHITE}Resources:${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}GUI Mode:${COLOR_RESET} $GUI_MODE"
+        
         echo
+        echo -e "${COLOR_WHITE}Network:${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Network Range:${COLOR_RESET} $NETWORK_RANGE"
+        if [[ -n "$PORT_FORWARDS" ]]; then
+            echo -e "  ${COLOR_GRAY}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
+        fi
+        
+        echo
+        echo -e "${COLOR_WHITE}Access:${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Username:${COLOR_RESET} ${COLOR_GREEN}$USERNAME${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} ********"
+        
+        echo
+        echo -e "${COLOR_WHITE}Storage Paths:${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Configuration:${COLOR_RESET} $VM_DIR/$vm_name.conf"
+        echo -e "  ${COLOR_GRAY}Disk Image:${COLOR_RESET} $IMG_FILE"
+        echo -e "  ${COLOR_GRAY}Seed Image:${COLOR_RESET} $SEED_FILE"
+        
+        echo
+        echo "$SUBTLE_SEP"
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
     fi
 }
 
 # Function to check if VM is running
 is_vm_running() {
-    local location_vm=$1
-    if load_vm_config "$location_vm"; then
-        if pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null; then
-            return 0
-        else
-            return 1
-        fi
+    local vm_name=$1
+    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null; then
+        return 0
+    else
+        return 1
     fi
-    return 1
 }
 
 # Function to stop a running VM
 stop_vm() {
-    local location_vm=$1
+    local vm_name=$1
     
-    if load_vm_config "$location_vm"; then
-        if pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null; then
-            print_status "INFO" "Stopping VM: $VM_NAME"
+    if load_vm_config "$vm_name"; then
+        section_header "STOP VIRTUAL MACHINE"
+        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET}"
+        
+        if is_vm_running "$vm_name"; then
+            print_status "INFO" "Stopping VM..."
             pkill -f "qemu-system-x86_64.*$IMG_FILE"
             sleep 2
-            if pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null; then
-                print_status "WARN" "Forcing termination..."
+            if is_vm_running "$vm_name"; then
+                print_status "WARN" "VM did not stop gracefully, forcing termination..."
                 pkill -9 -f "qemu-system-x86_64.*$IMG_FILE"
             fi
-            print_status "SUCCESS" "VM stopped"
+            print_status "SUCCESS" "VM $vm_name stopped"
         else
-            print_status "INFO" "VM is not running"
+            print_status "INFO" "VM $vm_name is not running"
         fi
     fi
 }
 
 # Function to edit VM configuration
 edit_vm_config() {
-    local location_vm=$1
+    local vm_name=$1
     
-    if load_vm_config "$location_vm"; then
-        print_status "INFO" "Editing VM: $VM_NAME"
+    if load_vm_config "$vm_name"; then
+        section_header "EDIT VIRTUAL MACHINE"
+        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
+        echo
         
         while true; do
             echo "Edit Options:"
-            echo "  1) Hostname"
-            echo "  2) Username"
-            echo "  3) Password"
-            echo "  4) SSH Port"
-            echo "  5) GUI Mode"
-            echo "  6) Port Forwards"
-            echo "  7) Memory (RAM)"
-            echo "  8) CPU Count"
-            echo "  9) Disk Size"
-            echo "  0) Back"
+            echo "  1) Basic Information"
+            echo "  2) Resource Allocation"
+            echo "  3) Network Configuration"
+            echo "  4) Access Credentials"
+            echo "  5) Change Location"
+            echo "  0) Back to main menu"
+            echo
             
-            read -p "$(print_status "INPUT" "Enter choice: ")" edit_choice
+            read -p "$(print_status "INPUT" "Select option: ")" edit_choice
             
             case $edit_choice in
                 1)
+                    section_header "EDIT BASIC INFORMATION"
+                    
                     while true; do
-                        read -p "$(print_status "INPUT" "New hostname (current: $HOSTNAME): ")" new_hostname
+                        read -p "$(print_status "INPUT" "Enter new hostname (current: $HOSTNAME): ")" new_hostname
                         new_hostname="${new_hostname:-$HOSTNAME}"
                         if validate_input "name" "$new_hostname"; then
                             HOSTNAME="$new_hostname"
                             break
                         fi
                     done
+                    
+                    # Recreate seed image
+                    print_status "INFO" "Updating cloud-init configuration..."
+                    setup_vm_image
+                    save_vm_config
+                    print_status "SUCCESS" "Hostname updated"
                     ;;
+                    
                 2)
+                    section_header "EDIT RESOURCE ALLOCATION"
+                    
+                    echo "Current resources:"
+                    echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}$MEMORY MB${COLOR_RESET}"
+                    echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS${COLOR_RESET}"
+                    echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+                    echo
+                    
                     while true; do
-                        read -p "$(print_status "INPUT" "New username (current: $USERNAME): ")" new_username
-                        new_username="${new_username:-$USERNAME}"
-                        if validate_input "username" "$new_username"; then
-                            USERNAME="$new_username"
+                        read -p "$(print_status "INPUT" "Enter new memory in MB (current: $MEMORY): ")" new_memory
+                        new_memory="${new_memory:-$MEMORY}"
+                        if validate_input "number" "$new_memory"; then
+                            MEMORY="$new_memory"
                             break
                         fi
                     done
+                    
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new CPU count (current: $CPUS): ")" new_cpus
+                        new_cpus="${new_cpus:-$CPUS}"
+                        if validate_input "number" "$new_cpus"; then
+                            CPUS="$new_cpus"
+                            break
+                        fi
+                    done
+                    
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new disk size (current: $DISK_SIZE): ")" new_disk_size
+                        new_disk_size="${new_disk_size:-$DISK_SIZE}"
+                        if validate_input "size" "$new_disk_size"; then
+                            DISK_SIZE="$new_disk_size"
+                            break
+                        fi
+                    done
+                    
+                    save_vm_config
+                    print_status "SUCCESS" "Resource allocation updated"
                     ;;
+                    
                 3)
+                    section_header "EDIT NETWORK CONFIGURATION"
+                    
+                    echo "Current network:"
+                    echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+                    echo -e "  ${COLOR_GRAY}Port Forwards:${COLOR_RESET} ${PORT_FORWARDS:-None}"
+                    echo -e "  ${COLOR_GRAY}GUI Mode:${COLOR_RESET} $GUI_MODE"
+                    echo
+                    
                     while true; do
-                        read -s -p "$(print_status "INPUT" "New password: ")" new_password
-                        new_password="${new_password:-$PASSWORD}"
-                        echo
-                        if [ -n "$new_password" ]; then
-                            PASSWORD="$new_password"
-                            break
-                        else
-                            print_status "ERROR" "Password cannot be empty"
-                        fi
-                    done
-                    ;;
-                4)
-                    while true; do
-                        read -p "$(print_status "INPUT" "New SSH port (current: $SSH_PORT): ")" new_ssh_port
+                        read -p "$(print_status "INPUT" "Enter new SSH port (current: $SSH_PORT): ")" new_ssh_port
                         new_ssh_port="${new_ssh_port:-$SSH_PORT}"
                         if validate_input "port" "$new_ssh_port"; then
+                            # Check if port is already in use
                             if [ "$new_ssh_port" != "$SSH_PORT" ] && ss -tln 2>/dev/null | grep -q ":$new_ssh_port "; then
                                 print_status "ERROR" "Port $new_ssh_port is already in use"
                             else
@@ -663,10 +797,12 @@ edit_vm_config() {
                             fi
                         fi
                     done
-                    ;;
-                5)
+                    
+                    read -p "$(print_status "INPUT" "Additional port forwards (current: ${PORT_FORWARDS:-None}): ")" new_port_forwards
+                    PORT_FORWARDS="${new_port_forwards:-$PORT_FORWARDS}"
+                    
                     while true; do
-                        read -p "$(print_status "INPUT" "Enable GUI? (y/n, current: $GUI_MODE): ")" gui_input
+                        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, current: $GUI_MODE): ")" gui_input
                         gui_input="${gui_input:-}"
                         if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
                             GUI_MODE=true
@@ -675,88 +811,121 @@ edit_vm_config() {
                             GUI_MODE=false
                             break
                         elif [ -z "$gui_input" ]; then
+                            # Keep current value if user just pressed Enter
                             break
                         else
                             print_status "ERROR" "Please answer y or n"
                         fi
                     done
+                    
+                    save_vm_config
+                    print_status "SUCCESS" "Network configuration updated"
                     ;;
-                6)
-                    read -p "$(print_status "INPUT" "Port forwards (current: ${PORT_FORWARDS:-None}): ")" new_port_forwards
-                    PORT_FORWARDS="${new_port_forwards:-$PORT_FORWARDS}"
-                    ;;
-                7)
+                    
+                4)
+                    section_header "EDIT ACCESS CREDENTIALS"
+                    
                     while true; do
-                        read -p "$(print_status "INPUT" "New memory in MB (current: $MEMORY): ")" new_memory
-                        new_memory="${new_memory:-$MEMORY}"
-                        if validate_input "number" "$new_memory"; then
-                            MEMORY="$new_memory"
+                        read -p "$(print_status "INPUT" "Enter new username (current: $USERNAME): ")" new_username
+                        new_username="${new_username:-$USERNAME}"
+                        if validate_input "username" "$new_username"; then
+                            USERNAME="$new_username"
                             break
                         fi
                     done
-                    ;;
-                8)
+                    
                     while true; do
-                        read -p "$(print_status "INPUT" "New CPU count (current: $CPUS): ")" new_cpus
-                        new_cpus="${new_cpus:-$CPUS}"
-                        if validate_input "number" "$new_cpus"; then
-                            CPUS="$new_cpus"
+                        read -s -p "$(print_status "INPUT" "Enter new password (current: ****): ")" new_password
+                        new_password="${new_password:-$PASSWORD}"
+                        echo
+                        if [ -n "$new_password" ] && [ ${#new_password} -ge 8 ]; then
+                            PASSWORD="$new_password"
                             break
+                        else
+                            print_status "ERROR" "Password must be at least 8 characters"
                         fi
                     done
+                    
+                    # Recreate seed image
+                    print_status "INFO" "Updating cloud-init configuration..."
+                    setup_vm_image
+                    save_vm_config
+                    print_status "SUCCESS" "Access credentials updated"
                     ;;
-                9)
-                    while true; do
-                        read -p "$(print_status "INPUT" "New disk size (current: $DISK_SIZE): ")" new_disk_size
-                        new_disk_size="${new_disk_size:-$DISK_SIZE}"
-                        if validate_input "size" "$new_disk_size"; then
-                            DISK_SIZE="$new_disk_size"
-                            break
-                        fi
-                    done
+                    
+                5)
+                    section_header "CHANGE VM LOCATION"
+                    
+                    echo "Current location:"
+                    echo -e "  ${COLOR_GRAY}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET}"
+                    echo -e "  ${COLOR_GRAY}Node ID:${COLOR_RESET} $LOCATION_ID"
+                    echo -e "  ${COLOR_GRAY}Storage Path:${COLOR_RESET} $NODE_PATH"
+                    echo
+                    
+                    print_status "INFO" "Select new location:"
+                    select_location
+                    
+                    # Move VM files to new location
+                    local old_img_file="$IMG_FILE"
+                    local old_seed_file="$SEED_FILE"
+                    
+                    IMG_FILE="$NODE_PATH/$VM_NAME.img"
+                    SEED_FILE="$NODE_PATH/$VM_NAME-seed.iso"
+                    
+                    mkdir -p "$NODE_PATH"
+                    if [[ -f "$old_img_file" ]]; then
+                        print_status "INFO" "Moving disk image to new location..."
+                        mv "$old_img_file" "$IMG_FILE" 2>/dev/null || true
+                    fi
+                    if [[ -f "$old_seed_file" ]]; then
+                        print_status "INFO" "Moving seed image to new location..."
+                        mv "$old_seed_file" "$SEED_FILE" 2>/dev/null || true
+                    fi
+                    
+                    save_vm_config
+                    print_status "SUCCESS" "VM location changed to $LOCATION"
                     ;;
+                    
                 0)
                     return 0
                     ;;
+                    
                 *)
                     print_status "ERROR" "Invalid selection"
                     continue
                     ;;
             esac
             
-            # Recreate seed image if user/password/hostname changed
-            if [[ "$edit_choice" -eq 1 || "$edit_choice" -eq 2 || "$edit_choice" -eq 3 ]]; then
-                print_status "INFO" "Updating cloud-init configuration..."
-                setup_vm_image
-            fi
-            
-            # Save configuration
-            save_vm_config
-            
-            read -p "$(print_status "INPUT" "Continue editing? (y/N): ")" continue_editing
+            echo
+            read -p "$(print_status "INPUT" "Edit another setting? (y/N): ")" continue_editing
             if [[ ! "$continue_editing" =~ ^[Yy]$ ]]; then
                 break
             fi
+            echo
         done
     fi
 }
 
 # Function to resize VM disk
 resize_vm_disk() {
-    local location_vm=$1
+    local vm_name=$1
     
-    if load_vm_config "$location_vm"; then
-        print_status "INFO" "Current disk size: $DISK_SIZE"
+    if load_vm_config "$vm_name"; then
+        section_header "RESIZE VM DISK"
+        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Current disk size:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+        echo
         
         while true; do
             read -p "$(print_status "INPUT" "Enter new disk size (e.g., 50G): ")" new_disk_size
             if validate_input "size" "$new_disk_size"; then
                 if [[ "$new_disk_size" == "$DISK_SIZE" ]]; then
-                    print_status "INFO" "No changes made"
+                    print_status "INFO" "New disk size is the same as current size. No changes made."
                     return 0
                 fi
                 
-                # Check if new size is smaller than current
+                # Check if new size is smaller than current (not recommended)
                 local current_size_num=${DISK_SIZE%[GgMm]}
                 local new_size_num=${new_disk_size%[GgMm]}
                 local current_unit=${DISK_SIZE: -1}
@@ -771,20 +940,20 @@ resize_vm_disk() {
                 fi
                 
                 if [[ $new_size_num -lt $current_size_num ]]; then
-                    print_status "WARN" "Shrinking disk may cause data loss!"
-                    read -p "$(print_status "INPUT" "Continue? (y/N): ")" confirm_shrink
+                    print_status "WARN" "⚠️  Shrinking disk size is not recommended and may cause data loss!"
+                    read -p "$(print_status "INPUT" "Are you sure you want to continue? (y/N): ")" confirm_shrink
                     if [[ ! "$confirm_shrink" =~ ^[Yy]$ ]]; then
-                        print_status "INFO" "Disk resize cancelled"
+                        print_status "INFO" "Disk resize cancelled."
                         return 0
                     fi
                 fi
                 
                 # Resize the disk
-                print_status "INFO" "Resizing disk..."
+                print_status "INFO" "Resizing disk to $new_disk_size..."
                 if qemu-img resize "$IMG_FILE" "$new_disk_size"; then
                     DISK_SIZE="$new_disk_size"
                     save_vm_config
-                    print_status "SUCCESS" "Disk resized to $new_disk_size"
+                    print_status "SUCCESS" "Disk resized successfully to $new_disk_size"
                 else
                     print_status "ERROR" "Failed to resize disk"
                     return 1
@@ -797,34 +966,109 @@ resize_vm_disk() {
 
 # Function to show VM performance metrics
 show_vm_performance() {
-    local location_vm=$1
+    local vm_name=$1
     
-    if load_vm_config "$location_vm"; then
-        print_status "INFO" "Performance Metrics"
-        echo "=========================================="
+    if load_vm_config "$vm_name"; then
+        section_header "VM PERFORMANCE METRICS"
+        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
         
-        if pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null; then
+        if is_vm_running "$vm_name"; then
             # Get QEMU process ID
             local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE")
-            
-            echo "VM Status: Running"
-            echo "Process ID: $qemu_pid"
-            echo
-            echo "Resource Usage:"
-            ps -p "$qemu_pid" -o pid,%cpu,%mem,sz,rss,vsz --no-headers | \
-                while read pid cpu mem sz rss vsz; do
-                    echo "  CPU: $cpu%  Memory: $mem%  RAM: $((rss/1024))MB"
-                done
+            if [[ -n "$qemu_pid" ]]; then
+                echo
+                echo -e "${COLOR_WHITE}Process Statistics:${COLOR_RESET}"
+                ps -p "$qemu_pid" -o pid,%cpu,%mem,sz,rss,vsz,cmd --no-headers | awk '{printf "  PID: %s | CPU: %s%% | MEM: %s%% | Size: %sMB\n", $1, $2, $3, $4/1024}'
+                
+                echo
+                echo -e "${COLOR_WHITE}System Resources:${COLOR_RESET}"
+                free -h | head -2 | tail -1 | awk '{print "  Memory: " $3 " / " $2 " used (" $4 " free)"}'
+                
+                echo
+                echo -e "${COLOR_WHITE}Disk Usage:${COLOR_RESET}"
+                if [ -f "$IMG_FILE" ]; then
+                    local disk_size=$(du -h "$IMG_FILE" 2>/dev/null | cut -f1)
+                    echo -e "  VM Disk: $disk_size ($DISK_SIZE allocated)"
+                fi
+            else
+                print_status "ERROR" "Could not find QEMU process for VM $vm_name"
+            fi
         else
-            echo "VM Status: Stopped"
-            echo "Allocated Resources:"
-            echo "  Memory: $MEMORY MB"
-            echo "  CPUs: $CPUS"
-            echo "  Disk: $DISK_SIZE"
+            print_status "INFO" "VM $vm_name is not running"
+            echo
+            echo -e "${COLOR_WHITE}Configured Resources:${COLOR_RESET}"
+            echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS${COLOR_RESET}"
+            echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
+            echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
         fi
-        echo "=========================================="
+        
+        echo
+        echo "$SUBTLE_SEP"
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
     fi
+}
+
+# Function to show system overview
+show_system_overview() {
+    display_header
+    section_header "SYSTEM OVERVIEW"
+    
+    # Show total VMs
+    local total_vms=$(get_vm_list | wc -l)
+    local running_vms=0
+    local vms=($(get_vm_list))
+    
+    for vm in "${vms[@]}"; do
+        if is_vm_running "$vm"; then
+            ((running_vms++))
+        fi
+    done
+    
+    echo -e "${COLOR_WHITE}Platform Statistics:${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Total VMs:${COLOR_RESET} ${COLOR_CYAN}$total_vms${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Running VMs:${COLOR_RESET} ${COLOR_GREEN}$running_vms${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Stopped VMs:${COLOR_RESET} ${COLOR_YELLOW}$((total_vms - running_vms))${COLOR_RESET}"
+    echo
+    
+    # Show storage usage
+    echo -e "${COLOR_WHITE}Storage Overview:${COLOR_RESET}"
+    if [ -d "$VM_BASE_DIR" ]; then
+        local total_storage=$(du -sh "$VM_BASE_DIR" 2>/dev/null | cut -f1)
+        echo -e "  ${COLOR_GRAY}Total Storage:${COLOR_RESET} $total_storage"
+    else
+        echo -e "  ${COLOR_GRAY}Total Storage:${COLOR_RESET} Not available"
+    fi
+    echo
+    
+    # Show location distribution
+    echo -e "${COLOR_WHITE}VM Distribution by Location:${COLOR_RESET}"
+    for loc in "${!LOCATION_NODES[@]}"; do
+        local node_vms=$(grep -l "LOCATION=\"$loc\"" "$VM_DIR"/*.conf 2>/dev/null | wc -l)
+        if [ "$node_vms" -gt 0 ]; then
+            local node_path="${LOCATION_NODES[$loc]}"
+            local node_usage=""
+            if [ -d "$node_path" ]; then
+                node_usage="($(du -sh "$node_path" 2>/dev/null | cut -f1))"
+            fi
+            echo -e "  ${COLOR_MAGENTA}📍 $loc:${COLOR_RESET} ${COLOR_CYAN}$node_vms${COLOR_RESET} VM(s) $node_usage"
+        fi
+    done
+    
+    echo
+    echo -e "${COLOR_WHITE}Location Status:${COLOR_RESET}"
+    for loc in "${!LOCATION_NODES[@]}"; do
+        local node_path="${LOCATION_NODES[$loc]}"
+        if [ -d "$node_path" ]; then
+            echo -e "  ${COLOR_GREEN}● $loc${COLOR_RESET} (Online)"
+        else
+            echo -e "  ${COLOR_RED}● $loc${COLOR_RESET} (Offline)"
+        fi
+    done
+    
+    echo
+    echo "$SEPARATOR"
+    read -p "$(print_status "INPUT" "Press Enter to continue...")"
 }
 
 # Main menu function
@@ -832,42 +1076,57 @@ main_menu() {
     while true; do
         display_header
         
-        # Show node overview
-        show_node_overview
-        echo
-        
-        # Get VM list
         local vms=($(get_vm_list))
         local vm_count=${#vms[@]}
         
         if [ $vm_count -gt 0 ]; then
-            print_status "INFO" "Available Virtual Machines:"
+            section_header "VIRTUAL MACHINES"
+            print_status "INFO" "Found $vm_count VM(s):"
+            echo
+            
             for i in "${!vms[@]}"; do
-                IFS=':' read -r location vm_name <<< "${vms[$i]}"
+                local vm_name="${vms[$i]}"
+                local config_file="$VM_DIR/$vm_name.conf"
+                local location="Unknown"
                 local status="Stopped"
-                if is_vm_running "${vms[$i]}"; then
-                    status="Running"
+                
+                if [ -f "$config_file" ]; then
+                    source "$config_file" 2>/dev/null || true
+                    location="${LOCATION:-Unknown}"
                 fi
-                printf "  %2d) %s [%s] - %s\n" $((i+1)) "$vm_name" "${LOCATIONS[$location]}" "$status"
+                
+                if is_vm_running "$vm_name"; then
+                    status="${COLOR_GREEN}● Running${COLOR_RESET}"
+                else
+                    status="${COLOR_YELLOW}● Stopped${COLOR_RESET}"
+                fi
+                
+                printf "  %2d) %-20s %-25s %s\n" $((i+1)) "$vm_name" "[$location]" "$status"
             done
+            echo
+        else
+            section_header "WELCOME"
+            echo -e "  ${COLOR_GRAY}No virtual machines found.${COLOR_RESET}"
+            echo -e "  ${COLOR_GRAY}Create your first VM to get started.${COLOR_RESET}"
             echo
         fi
         
-        echo "Main Menu:"
-        echo "  1) Create New VM"
+        section_header "MAIN MENU"
+        echo "  1) Create a new VM"
         if [ $vm_count -gt 0 ]; then
-            echo "  2) Start VM"
-            echo "  3) Stop VM"
-            echo "  4) View VM Info"
-            echo "  5) Edit VM"
-            echo "  6) Delete VM"
-            echo "  7) Resize VM Disk"
-            echo "  8) View Performance"
+            echo "  2) Start a VM"
+            echo "  3) Stop a VM"
+            echo "  4) Show VM info"
+            echo "  5) Edit VM configuration"
+            echo "  6) Delete a VM"
+            echo "  7) Resize VM disk"
+            echo "  8) Show VM performance"
+            echo "  9) System overview"
         fi
         echo "  0) Exit"
         echo
         
-        read -p "$(print_status "INPUT" "Enter choice: ")" choice
+        read -p "$(print_status "INPUT" "Enter your choice: ")" choice
         
         case $choice in
             1)
@@ -875,7 +1134,7 @@ main_menu() {
                 ;;
             2)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to start: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         start_vm "${vms[$((vm_num-1))]}"
                     else
@@ -885,7 +1144,7 @@ main_menu() {
                 ;;
             3)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to stop: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         stop_vm "${vms[$((vm_num-1))]}"
                     else
@@ -895,7 +1154,7 @@ main_menu() {
                 ;;
             4)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to show info: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         show_vm_info "${vms[$((vm_num-1))]}"
                     else
@@ -905,7 +1164,7 @@ main_menu() {
                 ;;
             5)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to edit: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         edit_vm_config "${vms[$((vm_num-1))]}"
                     else
@@ -915,7 +1174,7 @@ main_menu() {
                 ;;
             6)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         delete_vm "${vms[$((vm_num-1))]}"
                     else
@@ -925,7 +1184,7 @@ main_menu() {
                 ;;
             7)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to resize disk: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         resize_vm_disk "${vms[$((vm_num-1))]}"
                     else
@@ -935,13 +1194,16 @@ main_menu() {
                 ;;
             8)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to show performance: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         show_vm_performance "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
                 fi
+                ;;
+            9)
+                show_system_overview
                 ;;
             0)
                 print_status "INFO" "Goodbye!"
@@ -951,8 +1213,6 @@ main_menu() {
                 print_status "ERROR" "Invalid option"
                 ;;
         esac
-        
-        read -p "$(print_status "INPUT" "Press Enter to continue...")"
     done
 }
 
@@ -962,8 +1222,73 @@ trap cleanup EXIT
 # Check dependencies
 check_dependencies
 
-# Initialize nodes directory
-mkdir -p /nodes
+# Initialize paths
+VM_DIR="${VM_DIR:-$HOME/vms}"
+VM_BASE_DIR="$HOME/.zynexforge"
+mkdir -p "$VM_DIR"
+
+# Enterprise Location System
+# Format: LOCATION_NODES["Location Name"]="node_storage_path"
+declare -A LOCATION_NODES=(
+    ["Mumbai"]="$VM_BASE_DIR/nodes/IN-MUM"
+    ["Singapore"]="$VM_BASE_DIR/nodes/SG-SIN"
+    ["Frankfurt"]="$VM_BASE_DIR/nodes/DE-FRA"
+    ["Ashburn"]="$VM_BASE_DIR/nodes/US-ASH"
+    ["London"]="$VM_BASE_DIR/nodes/UK-LON"
+    ["Paris"]="$VM_BASE_DIR/nodes/FR-PAR"
+    ["Amsterdam"]="$VM_BASE_DIR/nodes/NL-AMS"
+    ["Tokyo"]="$VM_BASE_DIR/nodes/JP-TYO"
+    ["Sydney"]="$VM_BASE_DIR/nodes/AU-SYD"
+    ["Dubai"]="$VM_BASE_DIR/nodes/AE-DXB"
+    ["Toronto"]="$VM_BASE_DIR/nodes/CA-TOR"
+    ["São Paulo"]="$VM_BASE_DIR/nodes/BR-SAO"
+    ["Stockholm"]="$VM_BASE_DIR/nodes/SE-STO"
+    ["Zurich"]="$VM_BASE_DIR/nodes/CH-ZRH"
+    ["Seoul"]="$VM_BASE_DIR/nodes/KR-SEL"
+)
+
+# Location metadata
+declare -A LOCATION_IDS=(
+    ["Mumbai"]="IN-MUM-01"
+    ["Singapore"]="SG-SIN-01"
+    ["Frankfurt"]="DE-FRA-01"
+    ["Ashburn"]="US-ASH-01"
+    ["London"]="UK-LON-01"
+    ["Paris"]="FR-PAR-01"
+    ["Amsterdam"]="NL-AMS-01"
+    ["Tokyo"]="JP-TYO-01"
+    ["Sydney"]="AU-SYD-01"
+    ["Dubai"]="AE-DXB-01"
+    ["Toronto"]="CA-TOR-01"
+    ["São Paulo"]="BR-SAO-01"
+    ["Stockholm"]="SE-STO-01"
+    ["Zurich"]="CH-ZRH-01"
+    ["Seoul"]="KR-SEL-01"
+)
+
+# Location network ranges
+declare -A LOCATION_NETWORKS=(
+    ["Mumbai"]="10.10.0.0/16"
+    ["Singapore"]="10.20.0.0/16"
+    ["Frankfurt"]="10.30.0.0/16"
+    ["Ashburn"]="10.40.0.0/16"
+    ["London"]="10.50.0.0/16"
+    ["Paris"]="10.60.0.0/16"
+    ["Amsterdam"]="10.70.0.0/16"
+    ["Tokyo"]="10.80.0.0/16"
+    ["Sydney"]="10.90.0.0/16"
+    ["Dubai"]="10.100.0.0/16"
+    ["Toronto"]="10.110.0.0/16"
+    ["São Paulo"]="10.120.0.0/16"
+    ["Stockholm"]="10.130.0.0/16"
+    ["Zurich"]="10.140.0.0/16"
+    ["Seoul"]="10.150.0.0/16"
+)
+
+# Create node directories
+for node_path in "${LOCATION_NODES[@]}"; do
+    mkdir -p "$node_path"
+done
 
 # Supported OS list
 declare -A OS_OPTIONS=(
