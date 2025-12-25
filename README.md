@@ -87,38 +87,4 @@ All images are **official cloud images**.
 Run the platform using a single command:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ZynexForge/vm/main/vm.sh)```
-
-
-**🎯 Who Is This For?**
-Developers
-Homelab users
-VPS builders
-Cloud learners
-Automation enthusiasts
-Anyone who wants real VM control without panels
-
-**🛡️ Stability & Safety**
-Strict Bash mode enabled
-Input validation everywhere
-Safe cleanup on exit
-Dependency checks before execution
-No silent failures
-
-**🧩 Customization**
-You can easily:
-Add new locations
-Add new OS images
-Integrate billing / APIs
-Build a web or Discord panel on top
-Convert it into a full cloud platform
-
-**📜 License**
-This project is intended for educational, development, and infrastructure experimentation purposes.
-
-**⭐ Branding**
-ZynexForge™
-Advanced VM Virtualization Platform
-Built for power, clarity, and control.
-
-If you like this project, consider ⭐ starring the repository
+bash <(curl -fsSL https://raw.githubusercontent.com/ZynexForge/vm/main/vm.sh)
