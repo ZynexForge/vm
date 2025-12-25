@@ -33,7 +33,7 @@ __________                             ___________
         \/\/         \/     \/      \/      \/             /_____/      \/ 
 EOF
     echo -e "${COLOR_CYAN}ZYNEXFORGE™${COLOR_RESET}"
-    echo -e "${COLOR_WHITE}Enterprise Virtualization Platform${COLOR_RESET}"
+    echo -e "${COLOR_WHITE}Enterprise Virtualization Platform v3.0${COLOR_RESET}"
     echo "$SEPARATOR"
     echo
 }
