@@ -90,22 +90,6 @@ Run the platform using a single command:
 bash <(curl -fsSL https://raw.githubusercontent.com/ZynexForge/vm/main/vm.sh)```
 
 
-```📁 File Structure
-~/.zynexforge/
- └── nodes/
-     ├── india/
-     ├── singapore/
-     ├── usa/
-     ├── germany/
-     └── ```
-~/vms/
- └── *.conf   # VM configuration files
-Each VM has:
-Dedicated disk image
-Cloud-init seed ISO
-Persistent config file
-
-
 **🎯 Who Is This For?**
 Developers
 Homelab users
@@ -137,4 +121,4 @@ ZynexForge™
 Advanced VM Virtualization Platform
 Built for power, clarity, and control.
 
-If you like this project, consider ⭐ starring the repository.
+If you like this project, consider ⭐ starring the repository
