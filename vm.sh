@@ -325,14 +325,14 @@ create_new_vm() {
     done
 
     while true; do
-        echo -e "${COLOR_YELLOW}Password requirements:${COLOR_RESET} Minimum 8 characters"
+        echo -e "${COLOR_YELLOW}Password requirements:${COLOR_RESET} Minimum 4 characters"
         read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
         PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
         echo
-        if [ -n "$PASSWORD" ] && [ ${#PASSWORD} -ge 8 ]; then
+        if [ -n "$PASSWORD" ] && [ ${#PASSWORD} -ge 4 ]; then
             break
         else
-            print_status "ERROR" "Password must be at least 8 characters"
+            print_status "ERROR" "Password must be at least 4 characters"
         fi
     done
 
@@ -471,7 +471,7 @@ users:
   - name: $USERNAME
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
-    password: $(openssl passwd -6 "$PASSWORD" 2>/dev/null || echo "$PASSWORD" | mkpasswd -m sha-512 -s | tr -d '\n')
+    password: $(openssl passwd -6 "$PASSWORD" 2>/dev/null || echo "$PASSWORD" | mkpasswd -m sha-512 -s 2>/dev/null || echo "$PASSWORD")
 chpasswd:
   list: |
     root:$PASSWORD
@@ -881,14 +881,15 @@ edit_vm_config() {
                     done
                     
                     while true; do
+                        echo -e "${COLOR_YELLOW}Password requirements:${COLOR_RESET} Minimum 4 characters"
                         read -s -p "$(print_status "INPUT" "Enter new password (current: ****): ")" new_password
                         new_password="${new_password:-$PASSWORD}"
                         echo
-                        if [ -n "$new_password" ] && [ ${#new_password} -ge 8 ]; then
+                        if [ -n "$new_password" ] && [ ${#new_password} -ge 4 ]; then
                             PASSWORD="$new_password"
                             break
                         else
-                            print_status "ERROR" "Password must be at least 8 characters"
+                            print_status "ERROR" "Password must be at least 4 characters"
                         fi
                     done
                     
@@ -959,7 +960,7 @@ resize_vm_disk() {
     if load_vm_config "$vm_name"; then
         section_header "RESIZE VM DISK"
         echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
-        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTa}$LOCATION${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET}"
         echo -e "${COLOR_WHITE}Current disk size:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
         echo
         
