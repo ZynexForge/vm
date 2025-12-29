@@ -49,7 +49,8 @@ print_status() {
         "ERROR") echo -e "${COLOR_RED}[ERROR]${COLOR_RESET} $message" ;;
         "SUCCESS") echo -e "${COLOR_GREEN}[SUCCESS]${COLOR_RESET} $message" ;;
         "INPUT") echo -e "${COLOR_CYAN}[INPUT]${COLOR_RESET} $message" ;;
-        "NETWORK") echo -e "${COLOR_MAGENTA}[NETWORK]${COLOR_RESET} $message" ;;
+        "LOCATION") echo -e "${COLOR_MAGENTA}[LOCATION]${COLOR_RESET} $message" ;;
+        "NODE") echo -e "${COLOR_GRAY}[NODE]${COLOR_RESET} $message" ;;
         *) echo -e "${COLOR_WHITE}[$type]${COLOR_RESET} $message" ;;
     esac
 }
@@ -60,6 +61,25 @@ section_header() {
     echo
     echo -e "${COLOR_WHITE}$title${COLOR_RESET}"
     echo "$SUBTLE_SEP"
+}
+
+# Function to display location status
+location_status() {
+    local location=$1
+    local node_path=$2
+    local vm_count=$(find "$VM_DIR" -name "*.conf" -exec grep -l "LOCATION=\"$location\"" {} \; 2>/dev/null | wc -l)
+    local node_usage=""
+    
+    if [ -d "$node_path" ]; then
+        local disk_usage=$(du -sh "$node_path" 2>/dev/null | cut -f1)
+        node_usage="${COLOR_GREEN}● ONLINE${COLOR_RESET} | VMs: ${COLOR_CYAN}$vm_count${COLOR_RESET} | Storage: ${COLOR_YELLOW}$disk_usage${COLOR_RESET}"
+    else
+        node_usage="${COLOR_RED}● OFFLINE${COLOR_RESET} | Node path missing"
+    fi
+    
+    echo -e "  ${COLOR_MAGENTA}📍 $location${COLOR_RESET}"
+    echo -e "    ${COLOR_GRAY}Node: $(basename "$node_path")${COLOR_RESET}"
+    echo -e "    Status: $node_usage"
 }
 
 # Function to validate input
@@ -98,31 +118,14 @@ validate_input() {
                 return 1
             fi
             ;;
-        "ip")
-            if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                print_status "ERROR" "Must be a valid IP address (e.g., 10.0.0.1)"
-                return 1
-            fi
-            ;;
-        "network")
-            if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
-                print_status "ERROR" "Must be a valid CIDR notation (e.g., 10.0.0.0/24)"
-                return 1
-            fi
-            ;;
     esac
     return 0
 }
 
-# Function to check dependencies - NIXOS VERSION
+# Function to check dependencies
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "ip")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img")
     local missing_deps=()
-    
-    # Special handling for brctl (bridge-utils) - check if ip command has bridge functionality
-    if ! command -v ip &> /dev/null || ! ip link help 2>&1 | grep -q "bridge"; then
-        missing_deps+=("bridge-utils (or iproute2 with bridge support)")
-    fi
     
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
@@ -132,23 +135,8 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "On NixOS, ensure packages are in your dev.nix:"
-        print_status "INFO" "  - qemu_kvm (provides qemu-system-x86_64, qemu-img)"
-        print_status "INFO" "  - wget"
-        print_status "INFO" "  - cloud-utils (provides cloud-localds)"
-        print_status "INFO" "  - iproute2 (provides ip with bridge support)"
-        print_status "INFO" "Add missing packages to your dev.nix file and restart the workspace"
+        print_status "INFO" "On Ubuntu/Debian, try: sudo apt install qemu-system cloud-image-utils wget"
         exit 1
-    fi
-    
-    # Check if we can use ip command for bridge operations
-    if command -v ip &> /dev/null; then
-        # Test if ip has bridge support
-        if ip link help 2>&1 | grep -q "bridge"; then
-            print_status "INFO" "Using ip command for bridge operations (modern replacement for bridge-utils)"
-        else
-            print_status "WARN" "ip command doesn't have full bridge support. Bridge mode may not work correctly."
-        fi
     fi
 }
 
@@ -172,20 +160,18 @@ load_vm_config() {
         # Clear previous variables
         unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
-        unset NETWORK_MODE BRIDGE_NAME IP_ADDRESS GATEWAY DNS_SERVERS
+        unset LOCATION NODE_PATH LOCATION_ID NETWORK_RANGE
         
         source "$config_file"
         
-        # Set default network values if not set
-        NETWORK_MODE="${NETWORK_MODE:-user}"
-        BRIDGE_NAME="${BRIDGE_NAME:-virbr0}"
-        IP_ADDRESS="${IP_ADDRESS:-}"
-        GATEWAY="${GATEWAY:-}"
-        DNS_SERVERS="${DNS_SERVERS:-8.8.8.8,8.8.4.4}"
-        
-        # Update paths
-        IMG_FILE="$VM_DIR/$VM_NAME.img"
-        SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
+        # Update paths based on location
+        if [[ -n "$LOCATION" && -n "${LOCATION_NODES[$LOCATION]}" ]]; then
+            NODE_PATH="${LOCATION_NODES[$LOCATION]}"
+            LOCATION_ID="${LOCATION_IDS[$LOCATION]}"
+            NETWORK_RANGE="${LOCATION_NETWORKS[$LOCATION]}"
+            IMG_FILE="$NODE_PATH/$VM_NAME.img"
+            SEED_FILE="$NODE_PATH/$VM_NAME-seed.iso"
+        fi
         
         return 0
     else
@@ -215,14 +201,73 @@ PORT_FORWARDS="$PORT_FORWARDS"
 IMG_FILE="$IMG_FILE"
 SEED_FILE="$SEED_FILE"
 CREATED="$CREATED"
-NETWORK_MODE="$NETWORK_MODE"
-BRIDGE_NAME="$BRIDGE_NAME"
-IP_ADDRESS="$IP_ADDRESS"
-GATEWAY="$GATEWAY"
-DNS_SERVERS="$DNS_SERVERS"
+LOCATION="$LOCATION"
+NODE_PATH="$NODE_PATH"
+LOCATION_ID="$LOCATION_ID"
+NETWORK_RANGE="$NETWORK_RANGE"
 EOF
     
     print_status "SUCCESS" "Configuration saved"
+}
+
+# Function to show location selection with availability check
+select_location() {
+    section_header "DATACENTER LOCATION SELECTION"
+    
+    local locations=()
+    local i=1
+    
+    print_status "INFO" "Available locations:"
+    echo
+    
+    # Create arrays for menu display
+    local location_names=()
+    for loc in "${!LOCATION_NODES[@]}"; do
+        location_names+=("$loc")
+    done
+    
+    # Sort locations alphabetically
+    IFS=$'\n' sorted_locations=($(sort <<<"${location_names[*]}"))
+    unset IFS
+    
+    # Display sorted locations
+    for loc in "${sorted_locations[@]}"; do
+        local node_path="${LOCATION_NODES[$loc]}"
+        
+        # Check location availability
+        if [ -d "$node_path" ]; then
+            echo -e "  ${COLOR_GREEN}$i) $loc${COLOR_RESET}"
+        else
+            echo -e "  ${COLOR_RED}$i) $loc (OFFLINE)${COLOR_RESET}"
+        fi
+        ((i++))
+    done
+    
+    echo
+    while true; do
+        read -p "$(print_status "INPUT" "Select location (1-${#sorted_locations[@]}): ")" choice
+        
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#sorted_locations[@]} ]; then
+            local selected_loc="${sorted_locations[$((choice-1))]}"
+            local node_path="${LOCATION_NODES[$selected_loc]}"
+            
+            if [ -d "$node_path" ]; then
+                LOCATION="$selected_loc"
+                NODE_PATH="$node_path"
+                LOCATION_ID="${LOCATION_IDS[$LOCATION]}"
+                NETWORK_RANGE="${LOCATION_NETWORKS[$LOCATION]}"
+                
+                print_status "LOCATION" "Selected: $LOCATION"
+                print_status "NODE" "Node ID: $LOCATION_ID"
+                print_status "NODE" "Network: $NETWORK_RANGE"
+                break
+            else
+                print_status "ERROR" "Location '$selected_loc' is unavailable. Please select an online location."
+            fi
+        else
+            print_status "ERROR" "Invalid selection. Please enter a number between 1 and ${#sorted_locations[@]}."
+        fi
+    done
 }
 
 # Function to create new VM
@@ -230,8 +275,11 @@ create_new_vm() {
     display_header
     section_header "CREATE NEW VIRTUAL MACHINE"
     
-    # Create VM directory if it doesn't exist
-    mkdir -p "$VM_DIR"
+    # Location selection
+    select_location
+    
+    # Create node directory if it doesn't exist
+    mkdir -p "$NODE_PATH"
     
     # OS Selection
     section_header "OPERATING SYSTEM SELECTION"
@@ -337,92 +385,18 @@ create_new_vm() {
     # Networking
     section_header "NETWORK CONFIGURATION"
     
-    # Network mode selection
     while true; do
-        echo "Network modes:"
-        echo "  1) User mode (NAT with port forwarding)"
-        echo "  2) Bridge mode (Direct network access)"
-        echo
-        read -p "$(print_status "INPUT" "Select network mode (1-2, default: 1): ")" net_choice
-        net_choice="${net_choice:-1}"
-        
-        case $net_choice in
-            1)
-                NETWORK_MODE="user"
-                print_status "NETWORK" "Selected: User mode (NAT)"
+        read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
+        SSH_PORT="${SSH_PORT:-2222}"
+        if validate_input "port" "$SSH_PORT"; then
+            # Check if port is already in use
+            if ss -tln 2>/dev/null | grep -q ":$SSH_PORT "; then
+                print_status "ERROR" "Port $SSH_PORT is already in use"
+            else
                 break
-                ;;
-            2)
-                NETWORK_MODE="bridge"
-                print_status "NETWORK" "Selected: Bridge mode"
-                
-                # Get available bridges using ip command (NixOS compatible)
-                local bridges=($(ip link show type bridge 2>/dev/null | grep -o "^\w\+:" | tr -d ':'))
-                if [ ${#bridges[@]} -eq 0 ]; then
-                    print_status "WARN" "No bridges found. You may need to create one manually."
-                    print_status "INFO" "To create a bridge: sudo ip link add name virbr0 type bridge"
-                    read -p "$(print_status "INPUT" "Enter bridge name (default: virbr0): ")" BRIDGE_NAME
-                    BRIDGE_NAME="${BRIDGE_NAME:-virbr0}"
-                else
-                    echo "Available bridges:"
-                    for i in "${!bridges[@]}"; do
-                        echo "  $((i+1))) ${bridges[$i]}"
-                    done
-                    read -p "$(print_status "INPUT" "Select bridge (1-${#bridges[@]}, default: 1): ")" bridge_choice
-                    bridge_choice="${bridge_choice:-1}"
-                    if [[ "$bridge_choice" =~ ^[0-9]+$ ]] && [ "$bridge_choice" -ge 1 ] && [ "$bridge_choice" -le ${#bridges[@]} ]; then
-                        BRIDGE_NAME="${bridges[$((bridge_choice-1))]}"
-                    else
-                        BRIDGE_NAME="${bridges[0]}"
-                    fi
-                fi
-                
-                # Get IP configuration
-                read -p "$(print_status "INPUT" "Enter IP address (e.g., 192.168.1.100, press Enter for DHCP): ")" IP_ADDRESS
-                if [ -n "$IP_ADDRESS" ]; then
-                    if validate_input "ip" "$IP_ADDRESS"; then
-                        read -p "$(print_status "INPUT" "Enter gateway (e.g., 192.168.1.1): ")" GATEWAY
-                        read -p "$(print_status "INPUT" "Enter DNS servers (comma-separated, default: 8.8.8.8,8.8.4.4): ")" DNS_SERVERS
-                        DNS_SERVERS="${DNS_SERVERS:-8.8.8.8,8.8.4.4}"
-                    else
-                        IP_ADDRESS=""
-                        GATEWAY=""
-                    fi
-                fi
-                break
-                ;;
-            *)
-                print_status "ERROR" "Invalid selection"
-                ;;
-        esac
-    done
-    
-    # SSH port configuration
-    while true; do
-        if [ "$NETWORK_MODE" = "user" ]; then
-            read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
-            SSH_PORT="${SSH_PORT:-2222}"
-            if validate_input "port" "$SSH_PORT"; then
-                # Check if port is already in use
-                if ss -tln 2>/dev/null | grep -q ":$SSH_PORT "; then
-                    print_status "ERROR" "Port $SSH_PORT is already in use"
-                else
-                    break
-                fi
             fi
-        else
-            SSH_PORT="22"
-            print_status "INFO" "SSH will be on standard port 22"
-            break
         fi
     done
-
-    # Additional port forwards (only for user mode)
-    if [ "$NETWORK_MODE" = "user" ]; then
-        read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
-    else
-        PORT_FORWARDS=""
-    fi
 
     while true; do
         read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
@@ -438,25 +412,20 @@ create_new_vm() {
         fi
     done
 
+    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
+
     # Final configuration
-    IMG_FILE="$VM_DIR/$VM_NAME.img"
-    SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
+    IMG_FILE="$NODE_PATH/$VM_NAME.img"
+    SEED_FILE="$NODE_PATH/$VM_NAME-seed.iso"
     CREATED="$(date)"
 
     section_header "DEPLOYMENT SUMMARY"
     echo -e "${COLOR_WHITE}VM Configuration:${COLOR_RESET}"
     echo -e "  Name: ${COLOR_CYAN}$VM_NAME${COLOR_RESET}"
+    echo -e "  Location: ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
     echo -e "  OS: ${COLOR_GREEN}$os${COLOR_RESET}"
     echo -e "  Resources: ${COLOR_YELLOW}$CPUS vCPU | ${MEMORY}MB RAM | $DISK_SIZE disk${COLOR_RESET}"
-    echo -e "  Network: ${COLOR_MAGENTA}$NETWORK_MODE mode${COLOR_RESET}"
-    if [ "$NETWORK_MODE" = "user" ]; then
-        echo -e "    SSH on port ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
-        [ -n "$PORT_FORWARDS" ] && echo -e "    Port forwards: $PORT_FORWARDS"
-    else
-        echo -e "    Bridge: ${COLOR_CYAN}$BRIDGE_NAME${COLOR_RESET}"
-        [ -n "$IP_ADDRESS" ] && echo -e "    IP: $IP_ADDRESS"
-        [ -n "$GATEWAY" ] && echo -e "    Gateway: $GATEWAY"
-    fi
+    echo -e "  Network: SSH on port ${COLOR_CYAN}$SSH_PORT${COLOR_RESET} ($NETWORK_RANGE)"
     echo -e "  Access: ${COLOR_GREEN}$USERNAME${COLOR_RESET} / ********"
     echo
     
@@ -473,21 +442,19 @@ create_new_vm() {
     save_vm_config
     
     section_header "DEPLOYMENT COMPLETE"
-    print_status "SUCCESS" "VM '$VM_NAME' deployed successfully"
-    if [ "$NETWORK_MODE" = "user" ]; then
-        echo -e "  ${COLOR_GRAY}SSH Access: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
-    else
-        echo -e "  ${COLOR_GRAY}SSH Access: ssh $USERNAME@$IP_ADDRESS${COLOR_RESET}"
-    fi
+    print_status "SUCCESS" "VM '$VM_NAME' deployed successfully to $LOCATION"
+    echo -e "  ${COLOR_GRAY}Location: $LOCATION (Node: $LOCATION_ID)${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}SSH Access: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
     echo -e "  ${COLOR_GRAY}Management: $VM_DIR/$VM_NAME.conf${COLOR_RESET}"
 }
 
 # Function to setup VM image
 setup_vm_image() {
-    print_status "INFO" "Initializing VM storage..."
+    print_status "INFO" "Initializing VM storage in $LOCATION..."
     
     # Create VM directory if it doesn't exist
     mkdir -p "$VM_DIR"
+    mkdir -p "$NODE_PATH"
     
     # Check if image already exists
     if [[ -f "$IMG_FILE" ]]; then
@@ -513,7 +480,7 @@ setup_vm_image() {
         fi
     fi
 
-    # cloud-init configuration with network settings
+    # cloud-init configuration
     cat > user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
@@ -530,30 +497,6 @@ chpasswd:
     $USERNAME:$PASSWORD
   expire: false
 EOF
-
-    # Add network configuration for bridge mode with static IP
-    if [ "$NETWORK_MODE" = "bridge" ] && [ -n "$IP_ADDRESS" ] && [ -n "$GATEWAY" ]; then
-        cat >> user-data <<EOF
-network:
-  version: 2
-  ethernets:
-    eth0:
-      dhcp4: false
-      addresses:
-        - $IP_ADDRESS/24
-      gateway4: $GATEWAY
-      nameservers:
-        addresses: [$(echo "$DNS_SERVERS" | tr ',' ' ')]
-EOF
-    elif [ "$NETWORK_MODE" = "bridge" ]; then
-        cat >> user-data <<EOF
-network:
-  version: 2
-  ethernets:
-    eth0:
-      dhcp4: true
-EOF
-    fi
 
     cat > meta-data <<EOF
 instance-id: iid-$VM_NAME
@@ -573,9 +516,9 @@ start_vm() {
     if load_vm_config "$vm_name"; then
         section_header "STARTING VIRTUAL MACHINE"
         echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
         echo -e "${COLOR_WHITE}OS:${COLOR_RESET} $OS_TYPE"
         echo -e "${COLOR_WHITE}Resources:${COLOR_RESET} ${COLOR_YELLOW}$CPUS vCPU | ${MEMORY}MB RAM${COLOR_RESET}"
-        echo -e "${COLOR_WHITE}Network:${COLOR_RESET} ${COLOR_MAGENTA}$NETWORK_MODE mode${COLOR_RESET}"
         echo
         
         # Check if image file exists
@@ -592,15 +535,7 @@ start_vm() {
         
         # Display access information
         print_status "INFO" "Access Information:"
-        if [ "$NETWORK_MODE" = "user" ]; then
-            echo -e "  ${COLOR_GRAY}SSH: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
-        else
-            if [ -n "$IP_ADDRESS" ]; then
-                echo -e "  ${COLOR_GRAY}SSH: ssh $USERNAME@$IP_ADDRESS${COLOR_RESET}"
-            else
-                echo -e "  ${COLOR_GRAY}SSH: Check VM for DHCP address${COLOR_RESET}"
-            fi
-        fi
+        echo -e "  ${COLOR_GRAY}SSH: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}Password: $PASSWORD${COLOR_RESET}"
         echo
         
@@ -614,26 +549,18 @@ start_vm() {
             -drive "file=$IMG_FILE,format=qcow2,if=virtio"
             -drive "file=$SEED_FILE,format=raw,if=virtio"
             -boot order=c
+            -device virtio-net-pci,netdev=n0
+            -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
 
-        # Add network configuration based on mode
-        if [ "$NETWORK_MODE" = "user" ]; then
-            qemu_cmd+=(-device virtio-net-pci,netdev=n0)
-            qemu_cmd+=(-netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22")
-            
-            # Add additional port forwards
-            if [[ -n "$PORT_FORWARDS" ]]; then
-                IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
-                for forward in "${forwards[@]}"; do
-                    IFS=':' read -r host_port guest_port <<< "$forward"
-                    qemu_cmd+=(-device "virtio-net-pci,netdev=n${#qemu_cmd[@]}")
-                    qemu_cmd+=(-netdev "user,id=n${#qemu_cmd[@]},hostfwd=tcp::$host_port-:$guest_port")
-                done
-            fi
-        else
-            # Bridge mode
-            qemu_cmd+=(-device virtio-net-pci,netdev=n0,mac="52:54:00:$(dd if=/dev/urandom bs=3 count=1 2>/dev/null | hexdump -e '/1 "-%02X"' | tr -d '-')")
-            qemu_cmd+=(-netdev "bridge,id=n0,br=$BRIDGE_NAME")
+        # Add port forwards if specified
+        if [[ -n "$PORT_FORWARDS" ]]; then
+            IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
+            for forward in "${forwards[@]}"; do
+                IFS=':' read -r host_port guest_port <<< "$forward"
+                qemu_cmd+=(-device "virtio-net-pci,netdev=n${#qemu_cmd[@]}")
+                qemu_cmd+=(-netdev "user,id=n${#qemu_cmd[@]},hostfwd=tcp::$host_port-:$guest_port")
+            done
         fi
 
         # Add GUI or console mode
@@ -665,6 +592,7 @@ delete_vm() {
     if load_vm_config "$vm_name"; then
         section_header "DELETE VIRTUAL MACHINE"
         echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
         echo -e "${COLOR_WHITE}Created:${COLOR_RESET} $CREATED"
         echo
         
@@ -678,7 +606,7 @@ delete_vm() {
         read -p "$(print_status "INPUT" "Type 'DELETE' to confirm: ")" confirm
         if [[ "$confirm" == "DELETE" ]]; then
             rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
-            print_status "SUCCESS" "VM '$vm_name' has been deleted"
+            print_status "SUCCESS" "VM '$vm_name' has been deleted from $LOCATION"
         else
             print_status "INFO" "Deletion cancelled"
         fi
@@ -694,6 +622,7 @@ show_vm_info() {
         
         echo -e "${COLOR_WHITE}Basic Information:${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}Name:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
         echo -e "  ${COLOR_GRAY}Hostname:${COLOR_RESET} $HOSTNAME"
         echo -e "  ${COLOR_GRAY}OS:${COLOR_RESET} $OS_TYPE $CODENAME"
         echo -e "  ${COLOR_GRAY}Created:${COLOR_RESET} $CREATED"
@@ -707,21 +636,10 @@ show_vm_info() {
         
         echo
         echo -e "${COLOR_WHITE}Network:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Mode:${COLOR_RESET} ${COLOR_MAGENTA}$NETWORK_MODE${COLOR_RESET}"
-        if [ "$NETWORK_MODE" = "user" ]; then
-            echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
-            if [[ -n "$PORT_FORWARDS" ]]; then
-                echo -e "  ${COLOR_GRAY}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
-            fi
-        else
-            echo -e "  ${COLOR_GRAY}Bridge:${COLOR_RESET} $BRIDGE_NAME"
-            if [ -n "$IP_ADDRESS" ]; then
-                echo -e "  ${COLOR_GRAY}IP Address:${COLOR_RESET} $IP_ADDRESS"
-            fi
-            if [ -n "$GATEWAY" ]; then
-                echo -e "  ${COLOR_GRAY}Gateway:${COLOR_RESET} $GATEWAY"
-            fi
-            echo -e "  ${COLOR_GRAY}DNS:${COLOR_RESET} $DNS_SERVERS"
+        echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Network Range:${COLOR_RESET} $NETWORK_RANGE"
+        if [[ -n "$PORT_FORWARDS" ]]; then
+            echo -e "  ${COLOR_GRAY}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
         fi
         
         echo
@@ -758,6 +676,7 @@ stop_vm() {
     if load_vm_config "$vm_name"; then
         section_header "STOP VIRTUAL MACHINE"
         echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET}"
         
         if is_vm_running "$vm_name"; then
             print_status "INFO" "Stopping VM..."
@@ -781,6 +700,7 @@ edit_vm_config() {
     if load_vm_config "$vm_name"; then
         section_header "EDIT VIRTUAL MACHINE"
         echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
         echo
         
         while true; do
@@ -789,6 +709,7 @@ edit_vm_config() {
             echo "  2) Resource Allocation"
             echo "  3) Network Configuration"
             echo "  4) Access Credentials"
+            echo "  5) Change Location"
             echo "  0) Back to main menu"
             echo
             
@@ -858,111 +779,27 @@ edit_vm_config() {
                     section_header "EDIT NETWORK CONFIGURATION"
                     
                     echo "Current network:"
-                    echo -e "  ${COLOR_GRAY}Mode:${COLOR_RESET} ${COLOR_MAGENTA}$NETWORK_MODE${COLOR_RESET}"
-                    if [ "$NETWORK_MODE" = "user" ]; then
-                        echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
-                        echo -e "  ${COLOR_GRAY}Port Forwards:${COLOR_RESET} ${PORT_FORWARDS:-None}"
-                    else
-                        echo -e "  ${COLOR_GRAY}Bridge:${COLOR_RESET} $BRIDGE_NAME"
-                        echo -e "  ${COLOR_GRAY}IP Address:${COLOR_RESET} ${IP_ADDRESS:-DHCP}"
-                        echo -e "  ${COLOR_GRAY}Gateway:${COLOR_RESET} $GATEWAY"
-                    fi
+                    echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+                    echo -e "  ${COLOR_GRAY}Port Forwards:${COLOR_RESET} ${PORT_FORWARDS:-None}"
                     echo -e "  ${COLOR_GRAY}GUI Mode:${COLOR_RESET} $GUI_MODE"
                     echo
                     
-                    # Network mode selection
                     while true; do
-                        echo "Network modes:"
-                        echo "  1) User mode (NAT with port forwarding)"
-                        echo "  2) Bridge mode (Direct network access)"
-                        echo "  3) Keep current mode"
-                        echo
-                        read -p "$(print_status "INPUT" "Select network mode (1-3): ")" net_choice
-                        
-                        case $net_choice in
-                            1)
-                                NETWORK_MODE="user"
-                                print_status "NETWORK" "Changed to: User mode (NAT)"
-                                
-                                while true; do
-                                    read -p "$(print_status "INPUT" "Enter SSH port (current: $SSH_PORT): ")" new_ssh_port
-                                    new_ssh_port="${new_ssh_port:-$SSH_PORT}"
-                                    if validate_input "port" "$new_ssh_port"; then
-                                        # Check if port is already in use
-                                        if [ "$new_ssh_port" != "$SSH_PORT" ] && ss -tln 2>/dev/null | grep -q ":$new_ssh_port "; then
-                                            print_status "ERROR" "Port $new_ssh_port is already in use"
-                                        else
-                                            SSH_PORT="$new_ssh_port"
-                                            break
-                                        fi
-                                    fi
-                                done
-                                
-                                read -p "$(print_status "INPUT" "Additional port forwards (current: ${PORT_FORWARDS:-None}): ")" new_port_forwards
-                                PORT_FORWARDS="${new_port_forwards:-$PORT_FORWARDS}"
-                                
-                                # Clear bridge settings
-                                BRIDGE_NAME="virbr0"
-                                IP_ADDRESS=""
-                                GATEWAY=""
-                                DNS_SERVERS="8.8.8.8,8.8.4.4"
+                        read -p "$(print_status "INPUT" "Enter new SSH port (current: $SSH_PORT): ")" new_ssh_port
+                        new_ssh_port="${new_ssh_port:-$SSH_PORT}"
+                        if validate_input "port" "$new_ssh_port"; then
+                            # Check if port is already in use
+                            if [ "$new_ssh_port" != "$SSH_PORT" ] && ss -tln 2>/dev/null | grep -q ":$new_ssh_port "; then
+                                print_status "ERROR" "Port $new_ssh_port is already in use"
+                            else
+                                SSH_PORT="$new_ssh_port"
                                 break
-                                ;;
-                                
-                            2)
-                                NETWORK_MODE="bridge"
-                                print_status "NETWORK" "Changed to: Bridge mode"
-                                
-                                # Get available bridges using ip command
-                                local bridges=($(ip link show type bridge 2>/dev/null | grep -o "^\w\+:" | tr -d ':'))
-                                if [ ${#bridges[@]} -eq 0 ]; then
-                                    print_status "WARN" "No bridges found. You may need to create one manually."
-                                    read -p "$(print_status "INPUT" "Enter bridge name (default: virbr0): ")" BRIDGE_NAME
-                                    BRIDGE_NAME="${BRIDGE_NAME:-virbr0}"
-                                else
-                                    echo "Available bridges:"
-                                    for i in "${!bridges[@]}"; do
-                                        echo "  $((i+1))) ${bridges[$i]}"
-                                    done
-                                    read -p "$(print_status "INPUT" "Select bridge (1-${#bridges[@]}, default: 1): ")" bridge_choice
-                                    bridge_choice="${bridge_choice:-1}"
-                                    if [[ "$bridge_choice" =~ ^[0-9]+$ ]] && [ "$bridge_choice" -ge 1 ] && [ "$bridge_choice" -le ${#bridges[@]} ]; then
-                                        BRIDGE_NAME="${bridges[$((bridge_choice-1))]}"
-                                    else
-                                        BRIDGE_NAME="${bridges[0]}"
-                                    fi
-                                fi
-                                
-                                # Get IP configuration
-                                read -p "$(print_status "INPUT" "Enter IP address (e.g., 192.168.1.100, press Enter for DHCP): ")" IP_ADDRESS
-                                if [ -n "$IP_ADDRESS" ]; then
-                                    if validate_input "ip" "$IP_ADDRESS"; then
-                                        read -p "$(print_status "INPUT" "Enter gateway (e.g., 192.168.1.1): ")" GATEWAY
-                                        read -p "$(print_status "INPUT" "Enter DNS servers (comma-separated, default: 8.8.8.8,8.8.4.4): ")" DNS_SERVERS
-                                        DNS_SERVERS="${DNS_SERVERS:-8.8.8.8,8.8.4.4}"
-                                    else
-                                        IP_ADDRESS=""
-                                        GATEWAY=""
-                                    fi
-                                fi
-                                
-                                # Clear user mode settings
-                                SSH_PORT="22"
-                                PORT_FORWARDS=""
-                                break
-                                ;;
-                                
-                            3)
-                                print_status "INFO" "Keeping current network mode"
-                                break
-                                ;;
-                                
-                            *)
-                                print_status "ERROR" "Invalid selection"
-                                continue
-                                ;;
-                        esac
+                            fi
+                        fi
                     done
+                    
+                    read -p "$(print_status "INPUT" "Additional port forwards (current: ${PORT_FORWARDS:-None}): ")" new_port_forwards
+                    PORT_FORWARDS="${new_port_forwards:-$PORT_FORWARDS}"
                     
                     while true; do
                         read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, current: $GUI_MODE): ")" gui_input
@@ -980,12 +817,6 @@ edit_vm_config() {
                             print_status "ERROR" "Please answer y or n"
                         fi
                     done
-                    
-                    # Recreate seed image if network mode changed
-                    if [ "$net_choice" = "1" ] || [ "$net_choice" = "2" ]; then
-                        print_status "INFO" "Updating cloud-init configuration..."
-                        setup_vm_image
-                    fi
                     
                     save_vm_config
                     print_status "SUCCESS" "Network configuration updated"
@@ -1022,6 +853,39 @@ edit_vm_config() {
                     print_status "SUCCESS" "Access credentials updated"
                     ;;
                     
+                5)
+                    section_header "CHANGE VM LOCATION"
+                    
+                    echo "Current location:"
+                    echo -e "  ${COLOR_GRAY}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET}"
+                    echo -e "  ${COLOR_GRAY}Node ID:${COLOR_RESET} $LOCATION_ID"
+                    echo -e "  ${COLOR_GRAY}Storage Path:${COLOR_RESET} $NODE_PATH"
+                    echo
+                    
+                    print_status "INFO" "Select new location:"
+                    select_location
+                    
+                    # Move VM files to new location
+                    local old_img_file="$IMG_FILE"
+                    local old_seed_file="$SEED_FILE"
+                    
+                    IMG_FILE="$NODE_PATH/$VM_NAME.img"
+                    SEED_FILE="$NODE_PATH/$VM_NAME-seed.iso"
+                    
+                    mkdir -p "$NODE_PATH"
+                    if [[ -f "$old_img_file" ]]; then
+                        print_status "INFO" "Moving disk image to new location..."
+                        mv "$old_img_file" "$IMG_FILE" 2>/dev/null || true
+                    fi
+                    if [[ -f "$old_seed_file" ]]; then
+                        print_status "INFO" "Moving seed image to new location..."
+                        mv "$old_seed_file" "$SEED_FILE" 2>/dev/null || true
+                    fi
+                    
+                    save_vm_config
+                    print_status "SUCCESS" "VM location changed to $LOCATION"
+                    ;;
+                    
                 0)
                     return 0
                     ;;
@@ -1049,6 +913,7 @@ resize_vm_disk() {
     if load_vm_config "$vm_name"; then
         section_header "RESIZE VM DISK"
         echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET}"
         echo -e "${COLOR_WHITE}Current disk size:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
         echo
         
@@ -1106,6 +971,7 @@ show_vm_performance() {
     if load_vm_config "$vm_name"; then
         section_header "VM PERFORMANCE METRICS"
         echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}Location:${COLOR_RESET} ${COLOR_MAGENTA}$LOCATION${COLOR_RESET} (Node: $LOCATION_ID)"
         
         if is_vm_running "$vm_name"; then
             # Get QEMU process ID
@@ -1124,19 +990,6 @@ show_vm_performance() {
                 if [ -f "$IMG_FILE" ]; then
                     local disk_size=$(du -h "$IMG_FILE" 2>/dev/null | cut -f1)
                     echo -e "  VM Disk: $disk_size ($DISK_SIZE allocated)"
-                fi
-                
-                # Network statistics for bridge mode
-                if [ "$NETWORK_MODE" = "bridge" ]; then
-                    echo
-                    echo -e "${COLOR_WHITE}Network Interface:${COLOR_RESET}"
-                    # Try to find the tap interface associated with the VM
-                    local tap_if=$(ip link show | grep -o "tap[0-9]\+[^:]" | head -1 | tr -d ' ')
-                    if [ -n "$tap_if" ]; then
-                        echo -e "  Interface: $tap_if"
-                        # Show basic interface info
-                        ip addr show dev "$tap_if" 2>/dev/null | grep -E "inet|state" | sed 's/^/    /'
-                    fi
                 fi
             else
                 print_status "ERROR" "Could not find QEMU process for VM $vm_name"
@@ -1180,36 +1033,38 @@ show_system_overview() {
     
     # Show storage usage
     echo -e "${COLOR_WHITE}Storage Overview:${COLOR_RESET}"
-    if [ -d "$VM_DIR" ]; then
-        local total_storage=$(du -sh "$VM_DIR" 2>/dev/null | cut -f1)
+    if [ -d "$VM_BASE_DIR" ]; then
+        local total_storage=$(du -sh "$VM_BASE_DIR" 2>/dev/null | cut -f1)
         echo -e "  ${COLOR_GRAY}Total Storage:${COLOR_RESET} $total_storage"
     else
         echo -e "  ${COLOR_GRAY}Total Storage:${COLOR_RESET} Not available"
     fi
     echo
     
-    # Show network overview
-    echo -e "${COLOR_WHITE}Network Overview:${COLOR_RESET}"
+    # Show location distribution
+    echo -e "${COLOR_WHITE}VM Distribution by Location:${COLOR_RESET}"
+    for loc in "${!LOCATION_NODES[@]}"; do
+        local node_vms=$(grep -l "LOCATION=\"$loc\"" "$VM_DIR"/*.conf 2>/dev/null | wc -l)
+        if [ "$node_vms" -gt 0 ]; then
+            local node_path="${LOCATION_NODES[$loc]}"
+            local node_usage=""
+            if [ -d "$node_path" ]; then
+                node_usage="($(du -sh "$node_path" 2>/dev/null | cut -f1))"
+            fi
+            echo -e "  ${COLOR_MAGENTA}📍 $loc:${COLOR_RESET} ${COLOR_CYAN}$node_vms${COLOR_RESET} VM(s) $node_usage"
+        fi
+    done
     
-    # Show available bridges using ip command
-    local bridges=($(ip link show type bridge 2>/dev/null | grep -o "^\w\+:" | tr -d ':'))
-    if [ ${#bridges[@]} -gt 0 ]; then
-        echo "  Available bridges:"
-        for bridge in "${bridges[@]}"; do
-            local bridge_ips=$(ip addr show dev "$bridge" 2>/dev/null | grep -E "inet " | awk '{print $2}' | tr '\n' ' ')
-            echo -e "    ${COLOR_CYAN}$bridge${COLOR_RESET}: $bridge_ips"
-        done
-    else
-        echo "  No bridges found. Use 'sudo ip link add name virbr0 type bridge' to create one."
-    fi
-    
-    # Show port usage
     echo
-    echo -e "${COLOR_WHITE}Port Usage:${COLOR_RESET}"
-    local used_ports=$(ss -tln 2>/dev/null | grep -E ":(22|2222|8080|80|443)" | awk '{print $4}' | cut -d: -f2 | sort -un | tr '\n' ' ')
-    if [ -n "$used_ports" ]; then
-        echo "  Commonly used ports: $used_ports"
-    fi
+    echo -e "${COLOR_WHITE}Location Status:${COLOR_RESET}"
+    for loc in "${!LOCATION_NODES[@]}"; do
+        local node_path="${LOCATION_NODES[$loc]}"
+        if [ -d "$node_path" ]; then
+            echo -e "  ${COLOR_GREEN}● $loc${COLOR_RESET} (Online)"
+        else
+            echo -e "  ${COLOR_RED}● $loc${COLOR_RESET} (Offline)"
+        fi
+    done
     
     echo
     echo "$SEPARATOR"
@@ -1231,7 +1086,14 @@ main_menu() {
             
             for i in "${!vms[@]}"; do
                 local vm_name="${vms[$i]}"
+                local config_file="$VM_DIR/$vm_name.conf"
+                local location="Unknown"
                 local status="Stopped"
+                
+                if [ -f "$config_file" ]; then
+                    source "$config_file" 2>/dev/null || true
+                    location="${LOCATION:-Unknown}"
+                fi
                 
                 if is_vm_running "$vm_name"; then
                     status="${COLOR_GREEN}● Running${COLOR_RESET}"
@@ -1239,7 +1101,7 @@ main_menu() {
                     status="${COLOR_YELLOW}● Stopped${COLOR_RESET}"
                 fi
                 
-                printf "  %2d) %-20s %s\n" $((i+1)) "$vm_name" "$status"
+                printf "  %2d) %-20s %-25s %s\n" $((i+1)) "$vm_name" "[$location]" "$status"
             done
             echo
         else
@@ -1357,12 +1219,76 @@ main_menu() {
 # Set trap to cleanup on exit
 trap cleanup EXIT
 
-# Check dependencies - NIXOS version
+# Check dependencies
 check_dependencies
 
 # Initialize paths
 VM_DIR="${VM_DIR:-$HOME/vms}"
+VM_BASE_DIR="$HOME/.zynexforge"
 mkdir -p "$VM_DIR"
+
+# Enterprise Location System
+# Format: LOCATION_NODES["Location Name"]="node_storage_path"
+declare -A LOCATION_NODES=(
+    ["Mumbai"]="$VM_BASE_DIR/nodes/IN-MUM"
+    ["Singapore"]="$VM_BASE_DIR/nodes/SG-SIN"
+    ["Frankfurt"]="$VM_BASE_DIR/nodes/DE-FRA"
+    ["Ashburn"]="$VM_BASE_DIR/nodes/US-ASH"
+    ["London"]="$VM_BASE_DIR/nodes/UK-LON"
+    ["Paris"]="$VM_BASE_DIR/nodes/FR-PAR"
+    ["Amsterdam"]="$VM_BASE_DIR/nodes/NL-AMS"
+    ["Tokyo"]="$VM_BASE_DIR/nodes/JP-TYO"
+    ["Sydney"]="$VM_BASE_DIR/nodes/AU-SYD"
+    ["Dubai"]="$VM_BASE_DIR/nodes/AE-DXB"
+    ["Toronto"]="$VM_BASE_DIR/nodes/CA-TOR"
+    ["São Paulo"]="$VM_BASE_DIR/nodes/BR-SAO"
+    ["Stockholm"]="$VM_BASE_DIR/nodes/SE-STO"
+    ["Zurich"]="$VM_BASE_DIR/nodes/CH-ZRH"
+    ["Seoul"]="$VM_BASE_DIR/nodes/KR-SEL"
+)
+
+# Location metadata
+declare -A LOCATION_IDS=(
+    ["Mumbai"]="IN-MUM-01"
+    ["Singapore"]="SG-SIN-01"
+    ["Frankfurt"]="DE-FRA-01"
+    ["Ashburn"]="US-ASH-01"
+    ["London"]="UK-LON-01"
+    ["Paris"]="FR-PAR-01"
+    ["Amsterdam"]="NL-AMS-01"
+    ["Tokyo"]="JP-TYO-01"
+    ["Sydney"]="AU-SYD-01"
+    ["Dubai"]="AE-DXB-01"
+    ["Toronto"]="CA-TOR-01"
+    ["São Paulo"]="BR-SAO-01"
+    ["Stockholm"]="SE-STO-01"
+    ["Zurich"]="CH-ZRH-01"
+    ["Seoul"]="KR-SEL-01"
+)
+
+# Location network ranges
+declare -A LOCATION_NETWORKS=(
+    ["Mumbai"]="10.10.0.0/16"
+    ["Singapore"]="10.20.0.0/16"
+    ["Frankfurt"]="10.30.0.0/16"
+    ["Ashburn"]="10.40.0.0/16"
+    ["London"]="10.50.0.0/16"
+    ["Paris"]="10.60.0.0/16"
+    ["Amsterdam"]="10.70.0.0/16"
+    ["Tokyo"]="10.80.0.0/16"
+    ["Sydney"]="10.90.0.0/16"
+    ["Dubai"]="10.100.0.0/16"
+    ["Toronto"]="10.110.0.0/16"
+    ["São Paulo"]="10.120.0.0/16"
+    ["Stockholm"]="10.130.0.0/16"
+    ["Zurich"]="10.140.0.0/16"
+    ["Seoul"]="10.150.0.0/16"
+)
+
+# Create node directories
+for node_path in "${LOCATION_NODES[@]}"; do
+    mkdir -p "$node_path"
+done
 
 # Supported OS list
 declare -A OS_OPTIONS=(
