@@ -421,14 +421,14 @@ create_new_vm() {
     done
 
     while true; do
-        echo -e "${COLOR_YELLOW}Password requirements:${COLOR_RESET} Minimum 8 characters with uppercase, lowercase, and number"
+        echo -e "${COLOR_YELLOW}Password requirements:${COLOR_RESET} Minimum 4 characters"
         read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
         PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
         echo
-        if [ ${#PASSWORD} -ge 8 ] && [[ "$PASSWORD" =~ [A-Z] ]] && [[ "$PASSWORD" =~ [a-z] ]] && [[ "$PASSWORD" =~ [0-9] ]]; then
+        if [ ${#PASSWORD} -ge 4 ]; then
             break
         else
-            print_status "ERROR" "Password must be at least 8 characters with uppercase, lowercase, and number"
+            print_status "ERROR" "Password must be at least 4 characters"
         fi
     done
 
@@ -861,7 +861,7 @@ show_vm_info() {
         echo
         echo -e "${COLOR_WHITE}Network:${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}Type:${COLOR_RESET} $NETWORK_CONFIG"
-        echo -e "  ${COLOR_GRAY}MAC:${COLOR_RESET} $MAC_ADDRESS"
+        echo -e "  ${COLOR_Gray}MAC:${COLOR_RESET} $MAC_ADDRESS"
         [[ -n "$STATIC_IP" ]] && echo -e "  ${COLOR_GRAY}Static IP:${COLOR_RESET} $STATIC_IP"
         echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
         if [[ -n "$PORT_FORWARDS" ]]; then
@@ -883,9 +883,9 @@ show_vm_info() {
         # Storage
         echo
         echo -e "${COLOR_WHITE}Storage Paths:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Configuration:${COLOR_RESET} $VM_DIR/$vm_name.conf"
-        echo -e "  ${COLOR_GRAY}Disk Image:${COLOR_RESET} $IMG_FILE"
-        echo -e "  ${COLOR_GRAY}Seed Image:${COLOR_RESET} $SEED_FILE"
+        echo -e "  ${COLOR_Gray}Configuration:${COLOR_RESET} $VM_DIR/$vm_name.conf"
+        echo -e "  ${COLOR_Gray}Disk Image:${COLOR_RESET} $IMG_FILE"
+        echo -e "  ${COLOR_Gray}Seed Image:${COLOR_RESET} $SEED_FILE"
         
         # Disk usage
         if [[ -f "$IMG_FILE" ]]; then
@@ -1146,7 +1146,7 @@ list_snapshots() {
         
         local snapshots=$(qemu-img snapshot -l "$IMG_FILE" 2>/dev/null | tail -n +3)
         
-        if [[ -z "$snshots" ]]; then
+        if [[ -z "$snapshots" ]]; then
             print_status "INFO" "No snapshots found"
         else
             echo "$snapshots" | while read -r line; do
@@ -1225,7 +1225,7 @@ show_system_overview() {
     echo -e "${COLOR_WHITE}Platform Statistics:${COLOR_RESET}"
     echo -e "  ${COLOR_GRAY}Total VMs:${COLOR_RESET} ${COLOR_CYAN}$total_vms${COLOR_RESET} / $MAX_VMS"
     echo -e "  ${COLOR_GRAY}Running VMs:${COLOR_RESET} ${COLOR_GREEN}$running_vms${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}Stopped VMs:${COLOR_RESET} ${COLOR_YELLOW}$((total_vms - running_vms))${COLOR_RESET}"
+    echo -e "  ${COLOR_Gray}Stopped VMs:${COLOR_RESET} ${COLOR_YELLOW}$((total_vms - running_vms))${COLOR_RESET}"
     
     # Storage usage
     echo
@@ -1298,7 +1298,7 @@ show_vm_performance() {
             echo -e "${COLOR_WHITE}Configured Resources:${COLOR_RESET}"
             echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
             echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
-            echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+            echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
         fi
         
         # Disk usage
@@ -1309,7 +1309,7 @@ show_vm_performance() {
             local disk_info=$(qemu-img info "$IMG_FILE" 2>/dev/null | grep -E "(virtual size|disk size)")
             echo -e "  ${COLOR_GRAY}File:${COLOR_RESET} $disk_size"
             echo "$disk_info" | while read -r line; do
-                echo -e "  ${COLOR_GRAY}${line%%:*}:${COLOR_RESET} ${line#*:}"
+                echo -e "  ${COLOR_Gray}${line%%:*}:${COLOR_RESET} ${line#*:}"
             done
         fi
         
@@ -1390,7 +1390,7 @@ EOF
         rm -rf "$temp_dir"
         
         print_status "SUCCESS" "VM exported to: $export_path"
-        echo -e "  ${COLOR_GRAY}Export size: $(du -h "$export_path" | cut -f1)${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Export size: $(du -h "$export_path" | cut -f1)${COLOR_RESET}"
         log_action "EXPORT_VM" "$vm_name" "Exported to $export_path"
     fi
 }
@@ -1666,7 +1666,7 @@ main_menu() {
             15)
                 if [ $vm_count -gt 0 ]; then
                     read -p "$(print_status "INPUT" "Enter VM number for logs: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_name" -le $vm_count ]; then
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         show_vm_logs "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
