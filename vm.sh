@@ -114,10 +114,15 @@ validate_input() {
     return 0
 }
 
-# Function to check dependencies
+# Function to check dependencies - NIXOS VERSION
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "ip" "bridge-utils")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "ip")
     local missing_deps=()
+    
+    # Special handling for brctl (bridge-utils) - check if ip command has bridge functionality
+    if ! command -v ip &> /dev/null || ! ip link help 2>&1 | grep -q "bridge"; then
+        missing_deps+=("bridge-utils (or iproute2 with bridge support)")
+    fi
     
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
@@ -127,8 +132,23 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "On Ubuntu/Debian, try: sudo apt install qemu-system cloud-image-utils wget bridge-utils"
+        print_status "INFO" "On NixOS, ensure packages are in your dev.nix:"
+        print_status "INFO" "  - qemu_kvm (provides qemu-system-x86_64, qemu-img)"
+        print_status "INFO" "  - wget"
+        print_status "INFO" "  - cloud-utils (provides cloud-localds)"
+        print_status "INFO" "  - iproute2 (provides ip with bridge support)"
+        print_status "INFO" "Add missing packages to your dev.nix file and restart the workspace"
         exit 1
+    fi
+    
+    # Check if we can use ip command for bridge operations
+    if command -v ip &> /dev/null; then
+        # Test if ip has bridge support
+        if ip link help 2>&1 | grep -q "bridge"; then
+            print_status "INFO" "Using ip command for bridge operations (modern replacement for bridge-utils)"
+        else
+            print_status "WARN" "ip command doesn't have full bridge support. Bridge mode may not work correctly."
+        fi
     fi
 }
 
@@ -336,10 +356,11 @@ create_new_vm() {
                 NETWORK_MODE="bridge"
                 print_status "NETWORK" "Selected: Bridge mode"
                 
-                # Get available bridges
-                local bridges=($(brctl show 2>/dev/null | awk 'NR>1 {print $1}' | grep -v '^$'))
+                # Get available bridges using ip command (NixOS compatible)
+                local bridges=($(ip link show type bridge 2>/dev/null | grep -o "^\w\+:" | tr -d ':'))
                 if [ ${#bridges[@]} -eq 0 ]; then
                     print_status "WARN" "No bridges found. You may need to create one manually."
+                    print_status "INFO" "To create a bridge: sudo ip link add name virbr0 type bridge"
                     read -p "$(print_status "INPUT" "Enter bridge name (default: virbr0): ")" BRIDGE_NAME
                     BRIDGE_NAME="${BRIDGE_NAME:-virbr0}"
                 else
@@ -892,8 +913,8 @@ edit_vm_config() {
                                 NETWORK_MODE="bridge"
                                 print_status "NETWORK" "Changed to: Bridge mode"
                                 
-                                # Get available bridges
-                                local bridges=($(brctl show 2>/dev/null | awk 'NR>1 {print $1}' | grep -v '^$'))
+                                # Get available bridges using ip command
+                                local bridges=($(ip link show type bridge 2>/dev/null | grep -o "^\w\+:" | tr -d ':'))
                                 if [ ${#bridges[@]} -eq 0 ]; then
                                     print_status "WARN" "No bridges found. You may need to create one manually."
                                     read -p "$(print_status "INPUT" "Enter bridge name (default: virbr0): ")" BRIDGE_NAME
@@ -1170,8 +1191,8 @@ show_system_overview() {
     # Show network overview
     echo -e "${COLOR_WHITE}Network Overview:${COLOR_RESET}"
     
-    # Show available bridges
-    local bridges=($(brctl show 2>/dev/null | awk 'NR>1 {print $1}' | grep -v '^$'))
+    # Show available bridges using ip command
+    local bridges=($(ip link show type bridge 2>/dev/null | grep -o "^\w\+:" | tr -d ':'))
     if [ ${#bridges[@]} -gt 0 ]; then
         echo "  Available bridges:"
         for bridge in "${bridges[@]}"; do
@@ -1179,7 +1200,7 @@ show_system_overview() {
             echo -e "    ${COLOR_CYAN}$bridge${COLOR_RESET}: $bridge_ips"
         done
     else
-        echo "  No bridges found. Use 'sudo brctl addbr virbr0' to create one."
+        echo "  No bridges found. Use 'sudo ip link add name virbr0 type bridge' to create one."
     fi
     
     # Show port usage
@@ -1282,7 +1303,7 @@ main_menu() {
             5)
                 if [ $vm_count -gt 0 ]; then
                     read -p "$(print_status "INPUT" "Enter VM number to edit: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_name" -le $vm_count ]; then
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         edit_vm_config "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
@@ -1336,7 +1357,7 @@ main_menu() {
 # Set trap to cleanup on exit
 trap cleanup EXIT
 
-# Check dependencies
+# Check dependencies - NIXOS version
 check_dependencies
 
 # Initialize paths
