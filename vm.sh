@@ -20,10 +20,7 @@ readonly EPYC_CPU_FLAGS="host,migratable=no,host-cache-info=on,topoext=on,pmu=on
 readonly EPYC_CPU_TOPOLOGY="sockets=1,dies=1,cores=8,threads=2"
 
 # Performance tuning defaults
-readonly HUGEPAGES_SIZE="1G"
-readonly HUGEPAGES_COUNT="32"
 readonly DISK_CACHE="directsync"
-readonly DISK_IO="threads"
 readonly NET_TYPE="virtio-net-pci"
 readonly NET_QUEUES="4"
 
@@ -52,7 +49,7 @@ display_banner() {
     clear
     cat << "EOF"
 __________                             ___________                         
-\____    /___.__. ____   ____ ___  ___ \_   _____/__________  ____   ____  
+\____    /__>.__. ____   ____ ___  ___ \_   _____/__________  ____   ____  
   /     /<   |  |/    \_/ __ \\  \/  /  |    __)/  _ \_  __ \/ ___\_/ __ \ 
  /     /_ \___  |   |  \  ___/ >    <   |     \(  <_> )  | \/ /_/  >  ___/ 
 /_______ \/ ____|___|  /\___  >__/\_ \  \___  / \____/|__|  \___  / \___  >
@@ -84,6 +81,7 @@ log_message() {
     local level="$1"
     local message="$2"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    mkdir -p "$LOG_DIR"
     echo "[$timestamp] [$level] $message" >> "$LOG_DIR/zynexforge.log"
 }
 
@@ -92,7 +90,7 @@ log_message() {
 # ================================================
 
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "mkpasswd")
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
@@ -103,7 +101,7 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "Install with: sudo apt install qemu-system cloud-image-utils wget"
+        print_status "INFO" "Install with: sudo apt install qemu-system cloud-image-utils wget whois"
         exit 1
     fi
 }
@@ -161,12 +159,6 @@ validate_input() {
                 return 1
             fi
             ;;
-        "ip")
-            if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                print_status "ERROR" "Must be a valid IP address"
-                return 1
-            fi
-            ;;
     esac
     return 0
 }
@@ -196,7 +188,7 @@ load_vm_config() {
         # Clear previous variables
         unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
-        unset ENABLE_HUGEPAGES ENABLE_NUMA CPU_PINNING VIRTIO_OPTIONS
+        unset ENABLE_HUGEPAGES ENABLE_NUMA VIRTIO_OPTIONS
         
         source "$config_file"
         return 0
@@ -232,7 +224,6 @@ SEED_FILE="$SEED_FILE"
 CREATED="$CREATED"
 ENABLE_HUGEPAGES="$ENABLE_HUGEPAGES"
 ENABLE_NUMA="$ENABLE_NUMA"
-CPU_PINNING="$CPU_PINNING"
 VIRTIO_OPTIONS="$VIRTIO_OPTIONS"
 EOF
     
@@ -395,7 +386,6 @@ create_new_vm() {
     CREATED="$(date '+%Y-%m-%d %H:%M:%S')"
     
     # Set optimization flags
-    CPU_PINNING=""
     VIRTIO_OPTIONS="iothread=on,discard=unmap"
     
     # Setup VM image
@@ -429,12 +419,25 @@ setup_vm_image() {
         qemu-img create -f qcow2 -o preallocation=metadata "$IMG_FILE" "$DISK_SIZE"
     fi
     
+    # Generate password hash using mkpasswd (from whois package)
+    local password_hash
+    if command -v mkpasswd &> /dev/null; then
+        password_hash=$(mkpasswd -m sha-512 "$PASSWORD" | tr -d '\n')
+    else
+        # Fallback to simple hash if mkpasswd not available
+        password_hash=$(echo -n "$PASSWORD" | openssl passwd -6 -stdin 2>/dev/null | tr -d '\n' || echo "")
+    fi
+    
+    if [ -z "$password_hash" ]; then
+        print_status "WARN" "Could not generate password hash, using plain text (install 'whois' for secure hashing)"
+        password_hash="$PASSWORD"
+    fi
+    
     # Create cloud-init configuration with ZynexForge branding
     cat > /tmp/user-data <<EOF
 #cloud-config
 # ZynexForge VM Engine - Cloud Init Configuration
 hostname: $HOSTNAME
-fqdn: $HOSTNAME.zynexforge.local
 manage_etc_hosts: true
 ssh_pwauth: true
 disable_root: false
@@ -446,7 +449,7 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
     lock_passwd: false
-    passwd: $(openssl passwd -6 "$PASSWORD" | tr -d '\n')
+    passwd: $password_hash
     ssh_authorized_keys: []
     groups: [sudo, docker, admin]
 chpasswd:
@@ -469,7 +472,6 @@ write_files:
     permissions: '0644'
 packages:
   - qemu-guest-agent
-  - cloud-utils
 runcmd:
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
@@ -485,12 +487,11 @@ EOF
     cat > /tmp/meta-data <<EOF
 instance-id: zynexforge-$VM_NAME
 local-hostname: $HOSTNAME
-cloud-name: zynexforge
 EOF
 
     # Create seed image
     print_status "INFO" "Creating cloud-init seed image..."
-    if ! cloud-localds -f vfat -H "$HOSTNAME" "$SEED_FILE" /tmp/user-data /tmp/meta-data; then
+    if ! cloud-localds "$SEED_FILE" /tmp/user-data /tmp/meta-data; then
         print_status "ERROR" "Failed to create cloud-init seed image"
         exit 1
     fi
@@ -546,6 +547,11 @@ start_vm() {
             -nodefaults
             -sandbox on
         )
+        
+        # Add hugepages if enabled
+        if [[ "$ENABLE_HUGEPAGES" == true ]] && [ -d /sys/kernel/mm/hugepages ]; then
+            qemu_cmd+=(-mem-path /dev/hugepages)
+        fi
         
         # Storage configuration
         qemu_cmd+=(
@@ -1095,7 +1101,7 @@ main_menu() {
             6)
                 if [ $vm_count -gt 0 ]; then
                     read -p "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                    if [[ "$vm_name" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         delete_vm "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
