@@ -189,17 +189,26 @@ list_vms() {
     find "$CONFIG_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort
 }
 
-# Load VM config
+# Load VM config with default values for missing variables
 load_config() {
     local vm="$1"
     local config="$CONFIG_DIR/$vm.conf"
     
     if [[ -f "$config" ]]; then
-        unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
-        unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
-        unset VM_IP VM_GATEWAY VM_DNS
+        # Clear all variables first
+        unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD 2>/dev/null
+        unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED 2>/dev/null
+        unset VM_IP VM_GATEWAY VM_DNS 2>/dev/null
         
         source "$config"
+        
+        # Set default values for missing variables (for backward compatibility)
+        VM_IP="${VM_IP:-$DEFAULT_IP}"
+        VM_GATEWAY="${VM_GATEWAY:-$DEFAULT_GATEWAY}"
+        VM_DNS="${VM_DNS:-$DEFAULT_DNS}"
+        GUI_MODE="${GUI_MODE:-false}"
+        PORT_FORWARDS="${PORT_FORWARDS:-}"
+        
         return 0
     else
         print_error "Config not found: $vm"
@@ -501,7 +510,6 @@ packages:
   - dnsutils
   - curl
   - wget
-  - neofetch
 write_files:
   - path: /etc/netplan/50-cloud-init.yaml
     content: |
@@ -1044,6 +1052,39 @@ show_vm_performance() {
     fi
 }
 
+# Upgrade existing VM configuration with network settings
+upgrade_vm_config() {
+    local vm="$1"
+    local config="$CONFIG_DIR/$vm.conf"
+    
+    if [[ -f "$config" ]]; then
+        print_info "Upgrading configuration for VM: $vm"
+        
+        # Load existing config
+        load_config "$vm"
+        
+        # Update with new network settings if missing
+        if [[ -z "${VM_IP:-}" ]]; then
+            VM_IP="$DEFAULT_IP"
+            print_info "Added default IP: $VM_IP"
+        fi
+        
+        if [[ -z "${VM_GATEWAY:-}" ]]; then
+            VM_GATEWAY="$DEFAULT_GATEWAY"
+            print_info "Added default Gateway: $VM_GATEWAY"
+        fi
+        
+        if [[ -z "${VM_DNS:-}" ]]; then
+            VM_DNS="$DEFAULT_DNS"
+            print_info "Added default DNS: $VM_DNS"
+        fi
+        
+        # Save updated config
+        save_config
+        print_success "VM configuration upgraded successfully"
+    fi
+}
+
 # Main menu (improved)
 main_menu() {
     while true; do
@@ -1074,6 +1115,20 @@ main_menu() {
             done
             echo "└────┴──────────────────────────────┴──────────────┘"
             echo ""
+            
+            # Offer to upgrade existing VMs
+            for vm in "${vms[@]}"; do
+                if grep -q "VM_IP=" "$CONFIG_DIR/$vm.conf" 2>/dev/null; then
+                    continue
+                else
+                    print_warn "VM '$vm' needs configuration upgrade for network support"
+                    read -p "$(print_input "Upgrade now? (y/N): ")" upgrade_choice
+                    if [[ "$upgrade_choice" =~ ^[Yy]$ ]]; then
+                        upgrade_vm_config "$vm"
+                    fi
+                    break
+                fi
+            done
         else
             print_info "No VMs found. Create your first VM to get started."
             echo ""
