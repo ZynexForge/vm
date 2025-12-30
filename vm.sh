@@ -17,15 +17,15 @@ readonly BRAND_PREFIX="ZynexForge-"
 
 # EPYC CPU optimization flags
 readonly EPYC_CPU_FLAGS="host,migratable=no,host-cache-info=on,topoext=on,pmu=on,x2apic=on,acpi=on,ssbd=required,pdpe1gb=on"
-readonly EPYC_CPU_TOPOLOGY="sockets=1,dies=1,cores=${CORES_PER_SOCKET:-8},threads=2"
+readonly EPYC_CPU_TOPOLOGY="sockets=1,dies=1,cores=8,threads=2"
 
 # Performance tuning defaults
 readonly HUGEPAGES_SIZE="1G"
-readonly HUGEPAGES_COUNT="${HUGEPAGES_COUNT:-32}"
+readonly HUGEPAGES_COUNT="32"
 readonly DISK_CACHE="directsync"
 readonly DISK_IO="threads"
 readonly NET_TYPE="virtio-net-pci"
-readonly NET_QUEUES="${NET_QUEUES:-4}"
+readonly NET_QUEUES="4"
 
 # Supported OS images
 declare -A OS_OPTIONS=(
@@ -92,7 +92,7 @@ log_message() {
 # ================================================
 
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "numactl" "bridge-utils")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img")
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
@@ -103,7 +103,7 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "Install with: sudo apt install qemu-system cloud-image-utils wget numactl bridge-utils"
+        print_status "INFO" "Install with: sudo apt install qemu-system cloud-image-utils wget"
         exit 1
     fi
 }
@@ -112,21 +112,13 @@ check_epyc_optimizations() {
     # Check for AMD EPYC CPU
     if grep -qi "AMD EPYC" /proc/cpuinfo; then
         print_status "INFO" "AMD EPYC processor detected - applying optimizations"
-        
-        # Enable hugepages if not already enabled
-        if [ ! -f /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages ]; then
-            print_status "INFO" "Setting up 1GB hugepages"
-            echo $HUGEPAGES_COUNT | sudo tee /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages >/dev/null 2>&1 || \
-            print_status "WARN" "Failed to enable 1GB hugepages (requires root)"
-        fi
-        
-        # Check for KVM support
-        if [ ! -e /dev/kvm ]; then
-            print_status "ERROR" "KVM not available. Ensure virtualization is enabled in BIOS and kvm-amd module is loaded"
-            exit 1
-        fi
     else
         print_status "WARN" "Non-EPYC processor detected. Some optimizations may be limited."
+    fi
+    
+    # Check for KVM support
+    if [ ! -e /dev/kvm ]; then
+        print_status "WARN" "KVM not available. Ensure virtualization is enabled in BIOS"
     fi
 }
 
@@ -345,8 +337,9 @@ create_new_vm() {
         read -p "$(print_status "INPUT" "Number of vCPUs (default: 4): ")" CPUS
         CPUS="${CPUS:-4}"
         if validate_input "number" "$CPUS"; then
-            if [ "$CPUS" -gt "$(nproc)" ]; then
-                print_status "WARN" "Warning: Requested $CPUS vCPUs but host only has $(nproc) cores"
+            local core_count=$(nproc 2>/dev/null || echo 4)
+            if [ "$CPUS" -gt "$core_count" ]; then
+                print_status "WARN" "Warning: Requested $CPUS vCPUs but host only has $core_count cores"
             fi
             break
         fi
@@ -378,26 +371,14 @@ create_new_vm() {
 
     # Performance optimizations
     while true; do
-        read -p "$(print_status "INPUT" "Enable 1GB HugePages? (y/n, default: y): ")" hp_input
-        hp_input="${hp_input:-y}"
-        if [[ "$hp_input" =~ ^[Yy]$ ]]; then
+        read -p "$(print_status "INPUT" "Enable performance optimizations? (y/n, default: y): ")" perf_input
+        perf_input="${perf_input:-y}"
+        if [[ "$perf_input" =~ ^[Yy]$ ]]; then
             ENABLE_HUGEPAGES=true
-            break
-        elif [[ "$hp_input" =~ ^[Nn]$ ]]; then
-            ENABLE_HUGEPAGES=false
-            break
-        else
-            print_status "ERROR" "Please answer y or n"
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "Enable NUMA awareness? (y/n, default: y): ")" numa_input
-        numa_input="${numa_input:-y}"
-        if [[ "$numa_input" =~ ^[Yy]$ ]]; then
             ENABLE_NUMA=true
             break
-        elif [[ "$numa_input" =~ ^[Nn]$ ]]; then
+        elif [[ "$perf_input" =~ ^[Nn]$ ]]; then
+            ENABLE_HUGEPAGES=false
             ENABLE_NUMA=false
             break
         else
@@ -434,7 +415,7 @@ setup_vm_image() {
     # Download image if not exists
     if [[ ! -f "$IMG_FILE" ]]; then
         print_status "INFO" "Downloading OS image from $IMG_URL..."
-        if ! wget --progress=bar:force --tries=3 --timeout=30 "$IMG_URL" -O "$IMG_FILE.tmp"; then
+        if ! wget --progress=bar:force --tries=3 --timeout=30 "$IMG_URL" -O "$IMG_FILE.tmp" 2>/dev/null; then
             print_status "ERROR" "Failed to download image from $IMG_URL"
             exit 1
         fi
@@ -442,16 +423,11 @@ setup_vm_image() {
     fi
     
     # Resize disk using qcow2 with fast allocation
-    print_status "INFO" "Configuring disk to $DISK_SIZE with NVMe optimizations..."
+    print_status "INFO" "Configuring disk to $DISK_SIZE..."
     if ! qemu-img resize -f qcow2 "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
-        print_status "WARN" "Failed to resize existing image, creating optimized base..."
-        qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=1M,lazy_refcounts=on "$IMG_FILE" "$DISK_SIZE"
+        print_status "WARN" "Creating new disk image..."
+        qemu-img create -f qcow2 -o preallocation=metadata "$IMG_FILE" "$DISK_SIZE"
     fi
-    
-    # Optimize qcow2 image
-    print_status "INFO" "Optimizing disk image for performance..."
-    qemu-img check "$IMG_FILE" && \
-    qemu-img amend -f qcow2 -o compat=1.1,lazy_refcounts=on "$IMG_FILE" 2>/dev/null || true
     
     # Create cloud-init configuration with ZynexForge branding
     cat > /tmp/user-data <<EOF
@@ -473,8 +449,6 @@ users:
     passwd: $(openssl passwd -6 "$PASSWORD" | tr -d '\n')
     ssh_authorized_keys: []
     groups: [sudo, docker, admin]
-    no_user_group: true
-    create_groups: true
 chpasswd:
   list: |
     root:$PASSWORD
@@ -496,12 +470,9 @@ write_files:
 packages:
   - qemu-guest-agent
   - cloud-utils
-  - cloud-initramfs-growroot
 runcmd:
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
-  - growpart /dev/vda 1 || true
-  - resize2fs /dev/vda1 || true
   - cloud-init clean --logs
 final_message: |
   ZynexForge VM Setup Complete!
@@ -515,10 +486,6 @@ EOF
 instance-id: zynexforge-$VM_NAME
 local-hostname: $HOSTNAME
 cloud-name: zynexforge
-network-interfaces: |
-  auto eth0
-  iface eth0 inet dhcp
-  mtu 1500
 EOF
 
     # Create seed image
@@ -567,52 +534,29 @@ start_vm() {
         
         # Build QEMU command with EPYC optimizations
         local qemu_cmd=(
-            taskset -c 0-$((CPUS-1))
             qemu-system-x86_64
-            -name "zynexforge-$VM_NAME,debug-threads=on"
+            -name "zynexforge-$VM_NAME"
             -enable-kvm
-            -machine "q35,accel=kvm,kernel_irqchip=split"
+            -machine "q35,accel=kvm"
             -cpu "$EPYC_CPU_FLAGS"
             -smp "$CPUS,$EPYC_CPU_TOPOLOGY"
             -m "$MEMORY"
-            -overcommit mem-lock=on
-            -rtc base=utc,clock=host,driftfix=slew
-            -global kvm-pit.lost_tick_policy=delay
-            -no-hpet
+            -rtc base=utc,clock=host
             -serial mon:stdio
             -nodefaults
-            -no-user-config
-            -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny
+            -sandbox on
         )
         
-        # Add hugepages if enabled
-        if [[ "$ENABLE_HUGEPAGES" == true ]]; then
-            qemu_cmd+=(
-                -mem-prealloc
-                -mem-path "/dev/hugepages"
-            )
-        fi
-        
-        # Add NUMA configuration if enabled
-        if [[ "$ENABLE_NUMA" == true ]] && [ "$CPUS" -gt 1 ]; then
-            qemu_cmd+=(
-                -numa "node,nodeid=0,cpus=0-$((CPUS-1)),mem=$MEMORY"
-            )
-        fi
-        
-        # Storage configuration with VirtIO optimizations
+        # Storage configuration
         qemu_cmd+=(
-            -drive "file=$IMG_FILE,if=none,id=drive0,cache=$DISK_CACHE,discard=unmap,aio=$DISK_IO,format=qcow2"
-            -device "virtio-blk-pci,drive=drive0,iothread=iothread0,scsi=off,config-wce=off"
-            -drive "file=$SEED_FILE,if=none,id=drive1,format=raw,readonly=on"
-            -device "virtio-blk-pci,drive=drive1"
-            -object "iothread,id=iothread0"
+            -drive "file=$IMG_FILE,if=virtio,format=qcow2,cache=$DISK_CACHE"
+            -drive "file=$SEED_FILE,if=virtio,format=raw,readonly=on"
         )
         
-        # Network configuration with multi-queue VirtIO
+        # Network configuration
         qemu_cmd+=(
-            -netdev "user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=8.8.8.8,hostfwd=tcp::$SSH_PORT-:22,restrict=on"
-            -device "$NET_TYPE,netdev=net0,mac=52:54:00:$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))),vectors=$((NET_QUEUES*2+2))"
+            -netdev "user,id=net0,hostfwd=tcp::$SSH_PORT-:22"
+            -device "virtio-net-pci,netdev=net0,mac=52:54:00:$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256)))"
         )
         
         # Add additional port forwards
@@ -621,7 +565,7 @@ start_vm() {
             local net_id=1
             for forward in "${forwards[@]}"; do
                 IFS=':' read -r host_port guest_port <<< "$forward"
-                if validate_input "port" "$host_port" && validate_input "port" "$guest_port"; then
+                if [[ -n "$host_port" && -n "$guest_port" ]]; then
                     qemu_cmd+=(
                         -netdev "user,id=net$net_id,hostfwd=tcp::$host_port-:$guest_port"
                         -device "virtio-net-pci,netdev=net$net_id"
@@ -635,9 +579,9 @@ start_vm() {
         if [[ "$GUI_MODE" == true ]]; then
             qemu_cmd+=(
                 -vga virtio
-                -display "gtk,gl=on,show-cursor=on"
+                -display gtk
                 -usb
-                -device "usb-tablet"
+                -device usb-tablet
             )
         else
             qemu_cmd+=(
@@ -646,17 +590,14 @@ start_vm() {
             )
         fi
         
-        # Additional performance devices
+        # Additional devices
         qemu_cmd+=(
-            -device "virtio-balloon-pci,deflate-on-oom=on"
+            -device virtio-balloon-pci
             -object "rng-random,id=rng0,filename=/dev/urandom"
-            -device "virtio-rng-pci,rng=rng0,max-bytes=1024,period=1000"
-            -device "vfio-pci,host=0000:00:00.0" 2>/dev/null || true
-            -audiodev "none,id=audio0"
-            -device "AC97,audiodev=audio0"
+            -device virtio-rng-pci,rng=rng0
         )
         
-        # Start VM in background with logging
+        # Start VM
         local log_file="$LOG_DIR/$VM_NAME-$(date '+%Y%m%d-%H%M%S').log"
         print_status "INFO" "Starting QEMU with EPYC optimizations..."
         print_status "DEBUG" "Log file: $log_file"
@@ -692,7 +633,7 @@ stop_vm() {
         if is_vm_running "$vm_name"; then
             print_status "INFO" "Stopping VM: $vm_name"
             
-            # Try graceful shutdown via ACPI
+            # Try graceful shutdown
             if [[ -f "$VM_DIR/$vm_name.pid" ]]; then
                 local pid=$(cat "$VM_DIR/$vm_name.pid")
                 kill -SIGTERM "$pid" 2>/dev/null
@@ -844,7 +785,6 @@ edit_vm_config() {
             echo "  6) vCPUs (Current: $CPUS)"
             echo "  7) GUI Mode (Current: $GUI_MODE)"
             echo "  8) Port Forwards (Current: ${PORT_FORWARDS:-None})"
-            echo "  9) Performance Settings"
             echo "  0) Save and Return"
             echo ""
             
@@ -931,46 +871,6 @@ edit_vm_config() {
                 8)
                     read -p "$(print_status "INPUT" "New port forwards [$PORT_FORWARDS]: ")" new_forwards
                     PORT_FORWARDS="${new_forwards:-$PORT_FORWARDS}"
-                    ;;
-                9)
-                    echo ""
-                    echo "Performance Settings:"
-                    echo "  1) HugePages: $ENABLE_HUGEPAGES"
-                    echo "  2) NUMA: $ENABLE_NUMA"
-                    read -p "$(print_status "INPUT" "Select performance setting: ")" perf_choice
-                    
-                    case $perf_choice in
-                        1)
-                            while true; do
-                                read -p "$(print_status "INPUT" "Enable HugePages? (y/n) [$ENABLE_HUGEPAGES]: ")" hp_input
-                                hp_input="${hp_input:-}"
-                                if [[ "$hp_input" =~ ^[Yy]$ ]]; then
-                                    ENABLE_HUGEPAGES=true
-                                    break
-                                elif [[ "$hp_input" =~ ^[Nn]$ ]]; then
-                                    ENABLE_HUGEPAGES=false
-                                    break
-                                elif [ -z "$hp_input" ]; then
-                                    break
-                                fi
-                            done
-                            ;;
-                        2)
-                            while true; do
-                                read -p "$(print_status "INPUT" "Enable NUMA? (y/n) [$ENABLE_NUMA]: ")" numa_input
-                                numa_input="${numa_input:-}"
-                                if [[ "$numa_input" =~ ^[Yy]$ ]]; then
-                                    ENABLE_NUMA=true
-                                    break
-                                elif [[ "$numa_input" =~ ^[Nn]$ ]]; then
-                                    ENABLE_NUMA=false
-                                    break
-                                elif [ -z "$numa_input" ]; then
-                                    break
-                                fi
-                            done
-                            ;;
-                    esac
                     ;;
                 0)
                     # Recreate seed image if user/password/hostname changed
@@ -1069,22 +969,9 @@ show_vm_performance() {
                 # Show system resources
                 echo "│ System Resources:                                  │"
                 echo "├─────────────────────────────────────────────────────┤"
-                free -h | while read line; do
+                free -h | head -2 | while read line; do
                     printf "│ %-55s │\n" "$line"
                 done
-                echo "├─────────────────────────────────────────────────────┤"
-                
-                # Show disk usage
-                echo "│ Disk Usage:                                        │"
-                echo "├─────────────────────────────────────────────────────┤"
-                df -h "$IMG_FILE" 2>/dev/null | while read line; do
-                    printf "│ %-55s │\n" "$line"
-                done
-                if ! df -h "$IMG_FILE" >/dev/null 2>&1; then
-                    du -h "$IMG_FILE" | while read line; do
-                        printf "│ %-55s │\n" "$line"
-                    done
-                fi
             fi
         else
             echo "│ VM is not running                                    │"
@@ -1124,15 +1011,15 @@ main_menu() {
             for i in "${!vms[@]}"; do
                 local vm="${vms[$i]}"
                 local status="Stopped"
-                local color="31"  # Red
+                local color="31"
                 
                 if is_vm_running "$vm"; then
                     status="Running"
-                    color="32"  # Green
+                    color="32"
                 fi
                 
-                printf "│ \033[1;%sm%2d\033[0m │ \033[1;%sm%-28s\033[0m │ \033[1;%sm%-12s\033[0m │\n" \
-                       "33" "$((i+1))" "37" "$vm" "$color" "$status"
+                printf "│ \033[1;33m%2d\033[0m │ \033[1;37m%-28s\033[0m │ \033[1;%sm%-12s\033[0m │\n" \
+                       "$((i+1))" "$vm" "$color" "$status"
             done
             echo "└────┴──────────────────────────────┴──────────────┘"
             echo ""
@@ -1154,7 +1041,6 @@ main_menu() {
             echo "  6) Delete VM"
             echo "  7) Resize VM disk"
             echo "  8) Show VM performance"
-            echo "  9) System diagnostics"
         fi
         
         echo "  0) Exit"
@@ -1236,9 +1122,6 @@ main_menu() {
                     fi
                 fi
                 ;;
-            9)
-                system_diagnostics
-                ;;
             0)
                 print_status "INFO" "Thank you for using ZynexForge VM Engine!"
                 exit 0
@@ -1251,101 +1134,6 @@ main_menu() {
         echo ""
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
     done
-}
-
-system_diagnostics() {
-    display_banner
-    print_status "INFO" "System Diagnostics"
-    echo ""
-    
-    echo "┌─────────────────────────────────────────────────────┐"
-    echo "│              SYSTEM DIAGNOSTICS                     │"
-    echo "├─────────────────────────────────────────────────────┤"
-    
-    # CPU Information
-    echo "│ CPU Information:                                    │"
-    echo "├─────────────────────────────────────────────────────┤"
-    lscpu | grep -E "(Architecture|CPU\(s\)|Model name|Virtualization|Hypervisor)" | while read line; do
-        printf "│ %-55s │\n" "$line"
-    done
-    
-    # Memory Information
-    echo "├─────────────────────────────────────────────────────┤"
-    echo "│ Memory Information:                                 │"
-    echo "├─────────────────────────────────────────────────────┤"
-    free -h | while read line; do
-        printf "│ %-55s │\n" "$line"
-    done
-    
-    # HugePages Information
-    echo "├─────────────────────────────────────────────────────┤"
-    echo "│ HugePages:                                          │"
-    echo "├─────────────────────────────────────────────────────┤"
-    if [ -d /sys/kernel/mm/hugepages ]; then
-        for size in /sys/kernel/mm/hugepages/hugepages-*kB; do
-            local size_kb=${size##*-}
-            size_kb=${size_kb%kB}
-            local nr=$(cat "$size/nr_hugepages" 2>/dev/null)
-            local free=$(cat "$size/free_hugepages" 2>/dev/null)
-            if [[ -n "$nr" ]]; then
-                local size_mb=$((size_kb / 1024))
-                printf "│ %-55s │\n" "$size_mb MB pages: $nr total, $free free"
-            fi
-        done
-    else
-        printf "│ %-55s │\n" "HugePages not configured"
-    fi
-    
-    # KVM Status
-    echo "├─────────────────────────────────────────────────────┤"
-    echo "│ KVM Status:                                         │"
-    echo "├─────────────────────────────────────────────────────┤"
-    if lsmod | grep -q kvm; then
-        printf "│ %-55s │\n" "KVM module loaded: ✓"
-        if [ -e /dev/kvm ]; then
-            printf "│ %-55s │\n" "/dev/kvm accessible: ✓"
-        else
-            printf "│ %-55s │\n" "/dev/kvm NOT accessible: ✗"
-        fi
-    else
-        printf "│ %-55s │\n" "KVM module not loaded: ✗"
-    fi
-    
-    # QEMU Version
-    echo "├─────────────────────────────────────────────────────┤"
-    echo "│ QEMU Version:                                       │"
-    echo "├─────────────────────────────────────────────────────┤"
-    qemu-system-x86_64 --version | head -1 | while read line; do
-        printf "│ %-55s │\n" "$line"
-    done
-    
-    # Disk Space
-    echo "├─────────────────────────────────────────────────────┤"
-    echo "│ Disk Space:                                         │"
-    echo "├─────────────────────────────────────────────────────┤"
-    df -h "$VM_DIR" | while read line; do
-        printf "│ %-55s │\n" "$line"
-    done
-    
-    # Active VMs
-    echo "├─────────────────────────────────────────────────────┤"
-    echo "│ Active VMs:                                         │"
-    echo "├─────────────────────────────────────────────────────┤"
-    local active_count=0
-    for vm in $(get_vm_list); do
-        if is_vm_running "$vm"; then
-            ((active_count++))
-            printf "│ %-55s │\n" "$vm (Running)"
-        fi
-    done
-    if [ $active_count -eq 0 ]; then
-        printf "│ %-55s │\n" "No active VMs"
-    fi
-    
-    echo "└─────────────────────────────────────────────────────┘"
-    echo ""
-    
-    read -p "$(print_status "INPUT" "Press Enter to return to main menu...")"
 }
 
 # ================================================
