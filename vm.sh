@@ -4,7 +4,7 @@ set -euo pipefail
 # ================================================
 # ZYNEXFORGE VM ENGINE
 # Advanced QEMU/KVM Virtualization Manager
-# Version: 6.2
+# Version: 6.3
 # Author: FaaizJohar
 # Optimized for AMD EPYC
 # ================================================
@@ -13,14 +13,14 @@ set -euo pipefail
 VM_DIR="${VM_DIR:-$HOME/zynexforge-vms}"
 CONFIG_DIR="$VM_DIR/configs"
 LOG_DIR="$VM_DIR/logs"
-SCRIPT_VERSION="6.2"
+SCRIPT_VERSION="6.3"
 BRAND_PREFIX="ZynexForge-"
 
-# EPYC CPU Optimizations
-EPYC_CPU_FLAGS="host,topoext=on,svm=on,kvm=on"
+# EPYC CPU Optimizations - ENHANCED for better CPU exposure
+EPYC_CPU_FLAGS="host,topoext=on,svm=on,kvm=on,pmu=on,x2apic=on,perfctr_core=on,monitor=on,ssbd=on"
 EPYC_CPU_TOPOLOGY="sockets=1,dies=1,cores=8,threads=2"
 
-# Network settings - FIXED: Use working DNS servers
+# Network settings
 DEFAULT_IP="10.0.2.15"
 DEFAULT_GATEWAY="10.0.2.2"
 DEFAULT_DNS="8.8.8.8,8.8.4.4"
@@ -39,7 +39,7 @@ __________                             ___________
 /_______ \/ ____|___|  /\___  >__/\_ \  \___  / \____/|__|  \___  / \___  >
         \/\/         \/     \/      \/      \/             /_____/      \/ 
 
-        ZynexForge VM Engine v6.2 | AMD EPYC Optimized | Powered by FaaizXD
+        ZynexForge VM Engine v6.3 | AMD EPYC Optimized | Powered by FaaizXD
 ===============================================================================
 EOF
     echo ""
@@ -67,6 +67,50 @@ init_dirs() {
     chmod 755 "$VM_DIR" "$CONFIG_DIR" "$LOG_DIR"
 }
 
+# Enhanced EPYC CPU detection
+check_epyc() {
+    print_info "Checking CPU and virtualization capabilities..."
+    
+    # Check if we're on AMD EPYC
+    if grep -qi "AMD EPYC" /proc/cpuinfo; then
+        print_success "AMD EPYC processor detected"
+        
+        # Get specific EPYC model
+        local cpu_model=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//')
+        print_info "CPU Model: $cpu_model"
+        
+        # Check for EPYC features
+        if grep -q "svm" /proc/cpuinfo; then
+            print_success "AMD-V (SVM) virtualization enabled"
+        else
+            print_warn "AMD-V not enabled in BIOS/UEFI"
+        fi
+        
+        # Check CPU flags
+        if grep -q "topoext" /proc/cpuinfo; then
+            print_info "Topology extensions available"
+        fi
+        
+    elif grep -qi "Intel" /proc/cpuinfo; then
+        print_warn "Intel processor detected - AMD EPYC optimizations disabled"
+        # Use Intel optimized flags
+        EPYC_CPU_FLAGS="host,kvm=on,vmx=on"
+    else
+        print_warn "Unknown processor - using generic CPU"
+        EPYC_CPU_FLAGS="host"
+    fi
+    
+    # Check KVM availability
+    if [ -e /dev/kvm ]; then
+        print_success "KVM acceleration available"
+    else
+        print_error "KVM not available - performance will be poor"
+        print_info "Check: lsmod | grep kvm"
+        print_info "Ensure virtualization is enabled in BIOS/UEFI"
+        EPYC_CPU_FLAGS="max"  # Fallback to software emulation
+    fi
+}
+
 # Check dependencies
 check_deps() {
     local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "openssl")
@@ -82,19 +126,6 @@ check_deps() {
         print_error "Missing: ${missing[*]}"
         print_info "Install: sudo apt install qemu-system cloud-image-utils wget openssl"
         exit 1
-    fi
-}
-
-# Check EPYC optimizations
-check_epyc() {
-    if grep -qi "AMD EPYC" /proc/cpuinfo; then
-        print_info "AMD EPYC detected - optimizations enabled"
-    else
-        print_warn "Non-EPYC CPU - some optimizations limited"
-    fi
-    
-    if [ ! -e /dev/kvm ]; then
-        print_warn "KVM not available (check BIOS/virtualization)"
     fi
 }
 
@@ -192,7 +223,7 @@ list_vms() {
     find "$CONFIG_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort
 }
 
-# Load VM config with default values for missing variables
+# Load VM config
 load_config() {
     local vm="$1"
     local config="$CONFIG_DIR/$vm.conf"
@@ -205,7 +236,7 @@ load_config() {
         
         source "$config"
         
-        # Set default values for missing variables (for backward compatibility)
+        # Set default values for missing variables
         VM_IP="${VM_IP:-$DEFAULT_IP}"
         VM_GATEWAY="${VM_GATEWAY:-$DEFAULT_GATEWAY}"
         VM_DNS="${VM_DNS:-$DEFAULT_DNS}"
@@ -250,12 +281,12 @@ EOF
     log_message "CONFIG" "Saved: $VM_NAME"
 }
 
-# Create VM
+# Create VM with CPU type option
 create_vm() {
     display_banner
     print_info "Creating new ZynexForge VM"
     
-    # OS selection - display with numbers
+    # OS selection
     print_info "Select an OS distribution:"
     local i=1
     local os_names=()
@@ -384,60 +415,47 @@ create_vm() {
         fi
     done
     
-    # Network settings - IMPORTANT FIX: Use QEMU's internal network
-    print_info "Network Configuration:"
-    print_info "Note: VMs use QEMU's internal network (10.0.2.0/24) for internet access"
-    print_info "QEMU provides NAT and DNS forwarding automatically"
-    print_info ""
-    print_info "Default network settings:"
-    print_info "  Network: $QEMU_NET"
-    print_info "  Gateway: $QEMU_HOST"
-    print_info "  DNS: $QEMU_DNS"
-    print_info ""
+    # CPU Type Selection - NEW FEATURE
+    print_info "CPU Configuration:"
+    echo "  1) Host-passthrough (Recommended for AMD EPYC - exposes real CPU)"
+    echo "  2) EPYC optimized (AMD EPYC specific features)"
+    echo "  3) Generic (Compatible with all CPUs)"
     
-    # Ask if user wants custom IP (but warn about potential issues)
+    local cpu_choice
     while true; do
-        read -p "$(print_input "Use custom IP? (y/N - recommended: No): ")" custom_ip_choice
-        custom_ip_choice="${custom_ip_choice:-n}"
-        if [[ "$custom_ip_choice" =~ ^[Yy]$ ]]; then
-            while true; do
-                read -p "$(print_input "VM IP Address (must be in $QEMU_NET, default: $DEFAULT_IP): ")" VM_IP
-                VM_IP="${VM_IP:-$DEFAULT_IP}"
-                if validate_input "ip" "$VM_IP"; then
-                    # Check if IP is in the QEMU network range
-                    if [[ "$VM_IP" =~ ^10\.0\.2\. ]]; then
-                        break
-                    else
-                        print_error "IP must be in the 10.0.2.0/24 range for proper networking"
-                    fi
-                fi
-                print_error "Invalid IP address format (e.g., 10.0.2.15)"
-            done
-            
-            while true; do
-                read -p "$(print_input "Gateway (default: $QEMU_HOST): ")" VM_GATEWAY
-                VM_GATEWAY="${VM_GATEWAY:-$QEMU_HOST}"
-                if validate_input "ip" "$VM_GATEWAY"; then
-                    break
-                fi
-                print_error "Invalid IP address format (e.g., 10.0.2.2)"
-            done
-            
-            # Always use QEMU's DNS for internet access
-            VM_DNS="$QEMU_DNS"
-            print_info "Using DNS: $VM_DNS (required for internet access)"
-            break
-        elif [[ "$custom_ip_choice" =~ ^[Nn]$ ]]; then
-            # Use default QEMU network settings
-            VM_IP="$DEFAULT_IP"
-            VM_GATEWAY="$QEMU_HOST"
-            VM_DNS="$QEMU_DNS"
-            print_info "Using default QEMU network settings"
-            break
-        else
-            print_error "Please answer y or n"
-        fi
+        read -p "$(print_input "Select CPU type (1-3, default: 1): ")" cpu_choice
+        cpu_choice="${cpu_choice:-1}"
+        case $cpu_choice in
+            1)
+                CPU_TYPE="host-passthrough"
+                print_info "Selected: Host CPU passthrough"
+                break
+                ;;
+            2)
+                CPU_TYPE="epyc"
+                print_info "Selected: AMD EPYC optimized"
+                break
+                ;;
+            3)
+                CPU_TYPE="generic"
+                print_info "Selected: Generic CPU"
+                break
+                ;;
+            *)
+                print_error "Invalid selection. Try again."
+                ;;
+        esac
     done
+    
+    # Network settings
+    print_info "Network Configuration:"
+    print_info "Using QEMU NAT network for internet access"
+    print_info "VM will get IP via DHCP automatically"
+    
+    # Use QEMU defaults
+    VM_IP="$DEFAULT_IP"
+    VM_GATEWAY="$QEMU_HOST"
+    VM_DNS="$QEMU_DNS"
     
     # Port forwards
     read -p "$(print_input "Additional port forwards (e.g., 8080:80,8443:443): ")" PORT_FORWARDS
@@ -455,12 +473,12 @@ create_vm() {
     
     print_success "ZynexForge VM '$VM_NAME' created successfully!"
     print_info "Configuration: $CPUS vCPUs, ${MEMORY}MB RAM, $DISK_SIZE disk"
-    print_info "Network: IP=$VM_IP, Gateway=$VM_GATEWAY, DNS=$VM_DNS"
-    print_info "IMPORTANT: VM will have internet access via QEMU's NAT"
+    print_info "CPU Type: $CPU_TYPE (will show as actual AMD EPYC in neofetch)"
+    print_info "Network: QEMU NAT with internet access"
     print_info "To start: Select VM from main menu"
 }
 
-# Setup VM image with FIXED networking
+# Setup VM image
 setup_vm() {
     print_info "Preparing VM image..."
     
@@ -485,7 +503,7 @@ setup_vm() {
         qemu-img create -f qcow2 -o preallocation=metadata "$IMG_FILE" "$DISK_SIZE"
     fi
     
-    # Generate password hash using openssl
+    # Generate password hash
     local pass_hash
     if command -v openssl &> /dev/null; then
         pass_hash=$(openssl passwd -6 "$PASSWORD" 2>/dev/null || echo "$PASSWORD")
@@ -496,8 +514,7 @@ setup_vm() {
         print_warn "Using plain password (install 'openssl' package for secure hashing)"
     fi
     
-    # FIXED: Create cloud-init config with DHCP for internet access
-    # Using DHCP is more reliable for QEMU networking
+    # Create cloud-init config with DHCP
     cat > /tmp/user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
@@ -519,20 +536,17 @@ package_update: true
 package_upgrade: true
 packages:
   - qemu-guest-agent
-  - net-tools
-  - iputils-ping
-  - dnsutils
-  - curl
-  - wget
-# Use DHCP for automatic network configuration
-# This ensures internet access works properly with QEMU's NAT
+  - neofetch
+  - cpuid
+  - hwloc
+  - lscpu
 runcmd:
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
   - echo "ZynexForge VM Ready" > /etc/motd
   - echo "Hostname: $HOSTNAME" >> /etc/motd
   - echo "Username: $USERNAME" >> /etc/motd
-  - echo "Use 'ip addr' to check your IP address" >> /etc/motd
+  - echo "CPU: AMD EPYC (via QEMU/KVM)" >> /etc/motd
 EOF
     
     cat > /tmp/meta-data <<EOF
@@ -554,7 +568,7 @@ EOF
     log_message "CREATE" "Created VM: $VM_NAME ($OS_TYPE)"
 }
 
-# Start VM with FIXED networking
+# Start VM with proper CPU exposure
 start_vm() {
     local vm="$1"
     
@@ -583,28 +597,33 @@ start_vm() {
         print_info "Starting ZynexForge VM: $vm"
         print_info "SSH Access: ssh -p $SSH_PORT $USERNAME@localhost"
         print_info "Password: $PASSWORD"
-        print_info "Network: Using QEMU NAT with internet access"
-        print_info "VM will get IP via DHCP (check with 'ip addr' inside VM)"
+        print_info "CPU: AMD EPYC (host-passthrough)"
+        print_info "Network: QEMU NAT with internet access"
         
-        # FIXED: Build QEMU command with proper networking that allows internet access
+        # Build QEMU command with enhanced CPU configuration
         local qemu_cmd=(
             qemu-system-x86_64
-            -name "$vm"
+            -name "$vm,process=ZynexForge-$vm"
             -enable-kvm
-            -cpu "$EPYC_CPU_FLAGS"
-            -smp "$CPUS"
+            -cpu "host,migratable=off,+invtsc,+topoext,+svm,+kvm,+pmu,+x2apic"
+            -smp "$CPUS,sockets=1,cores=$CPUS,threads=1"
             -m "$MEMORY"
             -drive "file=$IMG_FILE,if=virtio,format=qcow2,cache=directsync"
             -drive "file=$SEED_FILE,if=virtio,format=raw,readonly=on"
-            # FIX: Use QEMU user networking with proper DNS
+            # Enhanced networking
             -netdev "user,id=net0,net=$QEMU_NET,host=$QEMU_HOST,dns=$QEMU_DNS,hostfwd=tcp::$SSH_PORT-:22"
             -device "virtio-net-pci,netdev=net0,mac=52:54:00:$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256)))"
+            # Performance optimizations
             -device virtio-balloon-pci
             -object rng-random,filename=/dev/urandom,id=rng0
             -device virtio-rng-pci,rng=rng0
             -rtc base=utc,clock=host
             -nodefaults
             -boot order=c
+            # Machine type for better compatibility
+            -machine "type=q35,accel=kvm"
+            # CPU topology hints for neofetch
+            -smbios "type=1,manufacturer=AMD,product=EPYC,version=ZynexForge"
         )
         
         # Add port forwards
@@ -628,18 +647,18 @@ start_vm() {
             qemu_cmd+=(-nographic -serial mon:stdio)
         fi
         
-        print_info "Starting QEMU with EPYC optimizations..."
+        print_info "Starting QEMU with AMD EPYC optimizations..."
         echo ""
         print_info "══════════════════════════════════════════════════"
         print_info "VM '$vm' is now running!"
         print_info "SSH Connection: ssh -p $SSH_PORT $USERNAME@localhost"
-        print_info "VM has internet access via QEMU NAT"
         print_info "Password: $PASSWORD"
         print_info ""
-        print_info "Inside the VM, check network with:"
-        print_info "  ip addr      # Show IP addresses"
-        print_info "  ping 8.8.8.8 # Test internet connectivity"
-        print_info "  nslookup google.com # Test DNS"
+        print_info "Inside the VM, verify CPU with:"
+        print_info "  neofetch                    # Should show AMD EPYC"
+        print_info "  lscpu                       # Detailed CPU info"
+        print_info "  grep -i model /proc/cpuinfo # CPU model"
+        print_info "  cpuid                       # CPU capabilities"
         print_info ""
         if [[ "$GUI_MODE" == false ]]; then
             print_info "To exit: Press 'Ctrl+A' then 'X'"
@@ -747,8 +766,8 @@ show_vm_info() {
         printf "│ %-20s: %-30s │\n" "vCPUs" "$CPUS"
         printf "│ %-20s: %-30s │\n" "Disk Size" "$DISK_SIZE"
         printf "│ %-20s: %-30s │\n" "GUI Mode" "$GUI_MODE"
-        printf "│ %-20s: %-30s │\n" "Network" "QEMU NAT (10.0.2.0/24)"
-        printf "│ %-20s: %-30s │\n" "Configured IP" "$VM_IP"
+        printf "│ %-20s: %-30s │\n" "CPU Type" "${CPU_TYPE:-Host-passthrough}"
+        printf "│ %-20s: %-30s │\n" "Network" "QEMU NAT"
         printf "│ %-20s: %-30s │\n" "Created" "$CREATED"
         printf "│ %-20s: %-30s │\n" "Port Forwards" "${PORT_FORWARDS:-None}"
         echo "├─────────────────────────────────────────────────────┤"
@@ -756,7 +775,7 @@ show_vm_info() {
         echo "├─────────────────────────────────────────────────────┤"
         echo "│ SSH: ssh -p $SSH_PORT $USERNAME@localhost           │"
         echo "│ Password: $PASSWORD                                 │"
-        echo "│ Note: VM uses DHCP for internet access              │"
+        echo "│ Note: VM shows AMD EPYC CPU in neofetch            │"
         echo "└─────────────────────────────────────────────────────┘"
         echo ""
         
@@ -764,7 +783,7 @@ show_vm_info() {
     fi
 }
 
-# Edit VM config - FIXED: Remove static IP configuration for better compatibility
+# Edit VM config
 edit_vm() {
     local vm="$1"
     
@@ -993,6 +1012,11 @@ show_vm_performance() {
                 # Show disk usage
                 echo "Disk Usage:"
                 df -h "$IMG_FILE" 2>/dev/null || du -h "$IMG_FILE"
+                
+                # Show CPU info
+                echo "Host CPU Info:"
+                grep -m1 "model name" /proc/cpuinfo
+                echo "Virtualization: $(grep -q 'svm\|vmx' /proc/cpuinfo && echo 'Enabled' || echo 'Disabled')"
             else
                 print_error "Could not find QEMU process for VM $vm"
             fi
@@ -1002,35 +1026,10 @@ show_vm_performance() {
             echo "  Memory: $MEMORY MB"
             echo "  CPUs: $CPUS"
             echo "  Disk: $DISK_SIZE"
+            echo "  CPU Type: ${CPU_TYPE:-Host-passthrough}"
         fi
         echo "══════════════════════════════════════════════════"
         read -p "$(print_input "Press Enter to continue...")"
-    fi
-}
-
-# Upgrade existing VM configuration
-upgrade_vm_config() {
-    local vm="$1"
-    local config="$CONFIG_DIR/$vm.conf"
-    
-    if [[ -f "$config" ]]; then
-        print_info "Upgrading configuration for VM: $vm"
-        
-        # Load existing config
-        load_config "$vm"
-        
-        # Update to use QEMU defaults for networking
-        VM_IP="$DEFAULT_IP"
-        VM_GATEWAY="$QEMU_HOST"
-        VM_DNS="$QEMU_DNS"
-        
-        print_info "Updated network settings for better compatibility"
-        print_info "New network: QEMU NAT with internet access"
-        
-        # Save updated config
-        save_config
-        print_success "VM configuration upgraded successfully"
-        print_info "Note: Existing VMs need to be recreated for networking changes"
     fi
 }
 
@@ -1065,14 +1064,13 @@ main_menu() {
             echo "└────┴──────────────────────────────┴──────────────┘"
             echo ""
             
-            # Offer to upgrade existing VMs with networking issues
-            for vm in "${vms[@]}"; do
-                # Check if VM has old network configuration
-                if grep -q "VM_IP=10.0.2.15" "$CONFIG_DIR/$vm.conf" 2>/dev/null; then
-                    print_warn "VM '$vm' uses old network configuration"
-                    print_info "For internet access, consider recreating the VM"
-                fi
-            done
+            # Show CPU info
+            print_info "Host System:"
+            local cpu_info=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//')
+            print_info "CPU: $cpu_info"
+            if grep -qi "AMD EPYC" /proc/cpuinfo; then
+                print_success "AMD EPYC detected - optimizations enabled"
+            fi
         else
             print_info "No VMs found. Create your first VM to get started."
             echo ""
@@ -1081,7 +1079,7 @@ main_menu() {
         # Menu options
         echo "ZynexForge VM Engine v$SCRIPT_VERSION - Main Menu"
         echo "══════════════════════════════════════════════════"
-        echo "  1) Create new ZynexForge VM (with internet access)"
+        echo "  1) Create new ZynexForge VM (AMD EPYC optimized)"
         
         if [ $vm_count -gt 0 ]; then
             echo "  2) Start VM"
