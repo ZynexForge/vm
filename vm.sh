@@ -115,17 +115,97 @@ check_port_free() {
     ! ss -tln 2>/dev/null | grep -q ":$1 "
 }
 
-# OS Options
+# OS Options with fallback URLs
 declare -A OS_IMAGES=(
     ["ubuntu22"]="Ubuntu 22.04|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu|ubuntu"
     ["ubuntu24"]="Ubuntu 24.04|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu|ubuntu"
-    ["debian11"]="Debian 11|bullseye|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|debian|debian"
+    ["debian11"]="Debian 11|bullseye|https://cloud.debian.org/images/cloud/bullseye/20240210-1620/debian-11-generic-amd64-20240210-1620.qcow2|debian|debian"
     ["debian12"]="Debian 12|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian|debian"
     ["kali"]="Kali Linux|rolling|https://cloud.kali.org/kali/images/kali-2024.4/kali-linux-2024.4-genericcloud-amd64.qcow2|kali|kali"
     ["arch"]="Arch Linux|latest|https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2|arch|arch"
     ["fedora40"]="Fedora 40|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora|fedora"
     ["centos9"]="CentOS Stream 9|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos|centos"
 )
+
+# Fallback URLs if primary fails
+declare -A FALLBACK_URLS=(
+    ["debian11"]="https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-genericcloud-amd64.qcow2"
+    ["debian12"]="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+)
+
+# Download image with retry
+download_image() {
+    local url="$1"
+    local output="$2"
+    local max_retries=3
+    local retry_count=0
+    
+    while [ $retry_count -lt $max_retries ]; do
+        print_info "Download attempt $((retry_count + 1))/$max_retries..."
+        
+        if wget --progress=bar:force --timeout=60 --tries=3 "$url" -O "$output.tmp" 2>&1 | tee /tmp/wget.log; then
+            mv "$output.tmp" "$output"
+            print_success "Download completed"
+            return 0
+        fi
+        
+        ((retry_count++))
+        
+        if [ $retry_count -lt $max_retries ]; then
+            print_warn "Download failed, retrying in 5 seconds..."
+            sleep 5
+        fi
+    done
+    
+    return 1
+}
+
+# Try alternative URLs
+try_alternative_urls() {
+    local os_key="$1"
+    local output="$2"
+    
+    # Check for fallback URL
+    if [[ -n "${FALLBACK_URLS[$os_key]}" ]]; then
+        print_info "Trying fallback URL..."
+        if download_image "${FALLBACK_URLS[$os_key]}" "$output"; then
+            return 0
+        fi
+    fi
+    
+    # Generic fallbacks based on OS type
+    case $os_key in
+        debian11)
+            print_info "Trying alternative Debian 11 URL..."
+            local alt_urls=(
+                "https://cloud.debian.org/images/cloud/bullseye/daily/20250101/debian-11-generic-amd64-daily-20250101.qcow2"
+                "https://cloud.debian.org/images/cloud/bullseye/daily/latest/debian-11-generic-amd64-daily.qcow2"
+                "https://cdimage.debian.org/cdimage/cloud/bullseye/latest/debian-11-generic-amd64.qcow2"
+            )
+            for alt_url in "${alt_urls[@]}"; do
+                print_info "Trying: $(basename "$alt_url")"
+                if download_image "$alt_url" "$output"; then
+                    return 0
+                fi
+            done
+            ;;
+        debian12)
+            print_info "Trying alternative Debian 12 URL..."
+            local alt_urls=(
+                "https://cloud.debian.org/images/cloud/bookworm/daily/latest/debian-12-generic-amd64-daily.qcow2"
+                "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
+            )
+            for alt_url in "${alt_urls[@]}"; do
+                print_info "Trying: $(basename "$alt_url")"
+                if download_image "$alt_url" "$output"; then
+                    return 0
+                fi
+            done
+            ;;
+    esac
+    
+    return 1
+}
 
 # Get VM list
 list_vms() {
@@ -227,8 +307,14 @@ create_vm() {
     HOSTNAME="${HOSTNAME:-$VM_NAME}"
     
     # Username
-    read -p "$(print_input "Username (default: $DEFAULT_USER): ")" USERNAME
-    USERNAME="${USERNAME:-$DEFAULT_USER}"
+    while true; do
+        read -p "$(print_input "Username (default: $DEFAULT_USER): ")" USERNAME
+        USERNAME="${USERNAME:-$DEFAULT_USER}"
+        if validate_username "$USERNAME"; then
+            break
+        fi
+        print_error "Invalid username (start with letter, lowercase only)"
+    done
     
     # Password
     read -s -p "$(print_input "Password (default: $DEFAULT_PASS): ")" PASSWORD
@@ -297,30 +383,67 @@ create_vm() {
 setup_vm() {
     print_info "Setting up VM..."
     
-    # Download image
+    # Download image with retry logic
     if [[ ! -f "$IMG_FILE" ]]; then
-        print_info "Downloading: $IMG_URL"
-        wget --progress=bar:force --tries=3 --timeout=30 "$IMG_URL" -O "$IMG_FILE.tmp" 2>/dev/null || {
-            print_error "Download failed"
-            exit 1
-        }
-        mv "$IMG_FILE.tmp" "$IMG_FILE"
+        print_info "Downloading: $(basename "$IMG_URL")"
+        
+        # Try primary URL
+        if ! download_image "$IMG_URL" "$IMG_FILE"; then
+            # Extract OS key from URL or use VM_NAME
+            local os_key=""
+            for key in "${!OS_IMAGES[@]}"; do
+                if [[ "$IMG_URL" == *"$key"* ]] || [[ "$OS_TYPE" == *"$key"* ]]; then
+                    os_key="$key"
+                    break
+                fi
+            done
+            
+            if [[ -z "$os_key" ]]; then
+                # Try to guess from OS_TYPE
+                case $OS_TYPE in
+                    *"Ubuntu 22"*) os_key="ubuntu22" ;;
+                    *"Ubuntu 24"*) os_key="ubuntu24" ;;
+                    *"Debian 11"*) os_key="debian11" ;;
+                    *"Debian 12"*) os_key="debian12" ;;
+                    *"Kali"*) os_key="kali" ;;
+                    *"Arch"*) os_key="arch" ;;
+                    *"Fedora"*) os_key="fedora40" ;;
+                    *"CentOS"*) os_key="centos9" ;;
+                esac
+            fi
+            
+            if [[ -n "$os_key" ]]; then
+                print_info "Trying alternative download methods for $OS_TYPE..."
+                if ! try_alternative_urls "$os_key" "$IMG_FILE"; then
+                    print_error "All download attempts failed for $OS_TYPE"
+                    print_info "Please check your internet connection or try a different OS"
+                    exit 1
+                fi
+            else
+                print_error "Failed to download image and could not determine OS type"
+                exit 1
+            fi
+        fi
+    else
+        print_info "Image already exists, skipping download"
     fi
     
     # Resize disk
     print_info "Resizing to $DISK_SIZE"
-    qemu-img resize -f qcow2 "$IMG_FILE" "$DISK_SIZE" 2>/dev/null || {
+    if ! qemu-img resize -f qcow2 "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
+        print_info "Creating new disk image..."
         qemu-img create -f qcow2 -o preallocation=metadata "$IMG_FILE" "$DISK_SIZE"
-    }
+    fi
     
     # Generate password hash
     local pass_hash
     if command -v mkpasswd &> /dev/null; then
-        pass_hash=$(mkpasswd -m sha-512 "$PASSWORD")
+        pass_hash=$(mkpasswd -m sha-512 "$PASSWORD" 2>/dev/null || echo "$PASSWORD")
     elif command -v openssl &> /dev/null; then
         pass_hash=$(openssl passwd -6 "$PASSWORD" 2>/dev/null || echo "$PASSWORD")
     else
         pass_hash="$PASSWORD"
+        print_warn "Using plain password (install 'whois' for hashing)"
     fi
     
     # Cloud-init config
@@ -340,6 +463,12 @@ chpasswd:
     root:$PASSWORD
     $USERNAME:$PASSWORD
   expire: false
+packages:
+  - qemu-guest-agent
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - cloud-init clean --logs
 EOF
     
     cat > /tmp/meta-data <<EOF
@@ -348,10 +477,13 @@ local-hostname: $HOSTNAME
 EOF
     
     # Create seed image
-    cloud-localds "$SEED_FILE" /tmp/user-data /tmp/meta-data || {
-        print_error "Failed to create seed"
+    print_info "Creating cloud-init seed..."
+    if cloud-localds "$SEED_FILE" /tmp/user-data /tmp/meta-data; then
+        print_success "Seed image created"
+    else
+        print_error "Failed to create seed image"
         exit 1
-    }
+    fi
     
     rm -f /tmp/user-data /tmp/meta-data
     print_success "VM setup complete"
@@ -374,8 +506,16 @@ start_vm() {
         fi
         
         # Verify files
-        [[ -f "$IMG_FILE" ]] || { print_error "Image missing: $IMG_FILE"; return 1; }
-        [[ -f "$SEED_FILE" ]] || { print_warn "Seed missing, recreating..."; setup_vm; }
+        if [[ ! -f "$IMG_FILE" ]]; then
+            print_error "Image missing: $IMG_FILE"
+            print_info "Recreating VM setup..."
+            setup_vm
+        fi
+        
+        if [[ ! -f "$SEED_FILE" ]]; then
+            print_warn "Seed missing, recreating..."
+            setup_vm
+        fi
         
         print_info "Starting $vm"
         print_info "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
@@ -422,12 +562,20 @@ start_vm() {
         
         # Start VM
         local log_file="$LOG_DIR/$vm-$(date '+%Y%m%d-%H%M%S').log"
-        "${qemu_cmd[@]}" 2>&1 | tee "$log_file" &
+        print_info "Starting QEMU... (logs: $log_file)"
+        
+        # Run QEMU in background
+        if [[ "$GUI_MODE" == true ]]; then
+            "${qemu_cmd[@]}" 2>&1 | tee "$log_file" &
+        else
+            "${qemu_cmd[@]}" 2>&1 | tee "$log_file" >/dev/null &
+        fi
         
         local pid=$!
         echo "$pid" > "$VM_DIR/$vm.pid"
         
-        sleep 2
+        # Wait and check
+        sleep 3
         if kill -0 "$pid" 2>/dev/null; then
             print_success "$vm started (PID: $pid)"
             log_message "START" "Started: $vm (PID: $pid)"
@@ -440,9 +588,14 @@ start_vm() {
             print_info "══════════════════════════════════════════════════"
             echo ""
             
-            [[ "$GUI_MODE" == false ]] && print_info "Stop: Ctrl+A then X"
+            if [[ "$GUI_MODE" == false ]]; then
+                print_info "To stop VM: Press 'Ctrl+A' then 'X'"
+                print_info "To SSH into VM: Open another terminal and run:"
+                print_info "  ssh -p $SSH_PORT $USERNAME@localhost"
+            fi
         else
-            print_error "Failed to start"
+            print_error "Failed to start QEMU"
+            print_info "Check log file: $log_file"
             rm -f "$VM_DIR/$vm.pid"
             return 1
         fi
@@ -819,7 +972,7 @@ main_menu() {
         esac
         
         echo ""
-        read -p "$(print_input "Continue...")"
+        read -p "$(print_input "Press Enter to continue...")"
     done
 }
 
