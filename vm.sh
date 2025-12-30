@@ -55,7 +55,7 @@ __________                             ___________
 /_______ \/ ____|___|  /\___  >__/\_ \  \___  / \____/|__|  \___  / \___  >
         \/\/         \/     \/      \/      \/             /_____/      \/ 
 
-        ZynexForge VM Engine v6.0 | AMD EPYC Optimized | Powered by HopingBoyz
+        ZynexForge VM Engine v6.0 | AMD EPYC Optimized | Powered by FaaizXD
 ===============================================================================
 EOF
     echo ""
@@ -90,7 +90,7 @@ log_message() {
 # ================================================
 
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "mkpasswd")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img")
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
@@ -101,7 +101,7 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "Install with: sudo apt install qemu-system cloud-image-utils wget whois"
+        print_status "INFO" "Install with: sudo apt install qemu-system cloud-image-utils wget"
         exit 1
     fi
 }
@@ -419,16 +419,13 @@ setup_vm_image() {
         qemu-img create -f qcow2 -o preallocation=metadata "$IMG_FILE" "$DISK_SIZE"
     fi
     
-    # Generate password hash using mkpasswd (from whois package)
+    # Generate password hash
     local password_hash
     if command -v mkpasswd &> /dev/null; then
         password_hash=$(mkpasswd -m sha-512 "$PASSWORD" | tr -d '\n')
-    else
-        # Fallback to simple hash if mkpasswd not available
+    elif command -v openssl &> /dev/null; then
         password_hash=$(echo -n "$PASSWORD" | openssl passwd -6 -stdin 2>/dev/null | tr -d '\n' || echo "")
-    fi
-    
-    if [ -z "$password_hash" ]; then
+    else
         print_status "WARN" "Could not generate password hash, using plain text (install 'whois' for secure hashing)"
         password_hash="$PASSWORD"
     fi
@@ -536,22 +533,15 @@ start_vm() {
         # Build QEMU command with EPYC optimizations
         local qemu_cmd=(
             qemu-system-x86_64
-            -name "zynexforge-$VM_NAME"
+            -name "$VM_NAME"
             -enable-kvm
             -machine "q35,accel=kvm"
             -cpu "$EPYC_CPU_FLAGS"
-            -smp "$CPUS,$EPYC_CPU_TOPOLOGY"
+            -smp "$CPUS"
             -m "$MEMORY"
             -rtc base=utc,clock=host
-            -serial mon:stdio
             -nodefaults
-            -sandbox on
         )
-        
-        # Add hugepages if enabled
-        if [[ "$ENABLE_HUGEPAGES" == true ]] && [ -d /sys/kernel/mm/hugepages ]; then
-            qemu_cmd+=(-mem-path /dev/hugepages)
-        fi
         
         # Storage configuration
         qemu_cmd+=(
@@ -586,33 +576,31 @@ start_vm() {
             qemu_cmd+=(
                 -vga virtio
                 -display gtk
-                -usb
-                -device usb-tablet
             )
         else
             qemu_cmd+=(
                 -nographic
-                -vga none
+                -serial mon:stdio
             )
         fi
         
         # Additional devices
         qemu_cmd+=(
             -device virtio-balloon-pci
-            -object "rng-random,id=rng0,filename=/dev/urandom"
-            -device virtio-rng-pci,rng=rng0
+            -device virtio-rng-pci
         )
         
         # Start VM
         local log_file="$LOG_DIR/$VM_NAME-$(date '+%Y%m%d-%H%M%S').log"
         print_status "INFO" "Starting QEMU with EPYC optimizations..."
+        print_status "DEBUG" "Command: ${qemu_cmd[*]}"
         print_status "DEBUG" "Log file: $log_file"
         
         # Execute QEMU
         if [[ "$GUI_MODE" == true ]]; then
             "${qemu_cmd[@]}" 2>&1 | tee "$log_file" &
         else
-            "${qemu_cmd[@]}" 2>&1 | tee "$log_file" > /dev/null &
+            "${qemu_cmd[@]}" 2>&1 | tee "$log_file" &
         fi
         
         local qemu_pid=$!
@@ -620,13 +608,30 @@ start_vm() {
         
         # Wait for VM to boot
         print_status "INFO" "VM starting (PID: $qemu_pid)..."
-        sleep 3
         
-        if is_vm_running "$vm_name"; then
-            print_status "SUCCESS" "VM '$vm_name' started successfully"
+        # Check if QEMU process is still running after 2 seconds
+        sleep 2
+        if kill -0 "$qemu_pid" 2>/dev/null; then
+            print_status "SUCCESS" "VM '$vm_name' started successfully (PID: $qemu_pid)"
             log_message "START" "Started VM: $vm_name (PID: $qemu_pid)"
+            
+            # Show connection info
+            echo ""
+            print_status "INFO" "═══════════════════════════════════════════════════════"
+            print_status "INFO" "VM '$vm_name' is now running!"
+            print_status "INFO" "SSH Connection: ssh -p $SSH_PORT $USERNAME@localhost"
+            print_status "INFO" "Password: $PASSWORD"
+            print_status "INFO" "═══════════════════════════════════════════════════════"
+            echo ""
+            
+            # If not in GUI mode, explain how to exit
+            if [[ "$GUI_MODE" == false ]]; then
+                print_status "INFO" "Press 'Ctrl+A' then 'X' to stop the VM"
+            fi
         else
-            print_status "ERROR" "Failed to start VM"
+            print_status "ERROR" "QEMU process failed to start"
+            print_status "INFO" "Check log file for details: $log_file"
+            rm -f "$VM_DIR/$VM_NAME.pid"
             return 1
         fi
     fi
@@ -714,7 +719,7 @@ is_vm_running() {
     local vm_name=$1
     if [[ -f "$VM_DIR/$vm_name.pid" ]]; then
         local pid=$(cat "$VM_DIR/$vm_name.pid" 2>/dev/null)
-        if ps -p "$pid" > /dev/null 2>&1; then
+        if kill -0 "$pid" 2>/dev/null; then
             return 0
         fi
         rm -f "$VM_DIR/$vm_name.pid"
@@ -1101,7 +1106,7 @@ main_menu() {
             6)
                 if [ $vm_count -gt 0 ]; then
                     read -p "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
-                    if [[ "$vm_name" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         delete_vm "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
