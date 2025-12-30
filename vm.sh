@@ -4,21 +4,21 @@ set -euo pipefail
 # ================================================
 # ZYNEXFORGE VM ENGINE
 # Advanced QEMU/KVM Virtualization Manager
-# Version: 6.4
+# Version: 6.5
 # Author: FaaizJohar
-# Optimized for AMD EPYC
+# Optimized for AMD EPYC with TCG fallback
 # ================================================
 
 # Global Variables
 VM_DIR="${VM_DIR:-$HOME/zynexforge-vms}"
 CONFIG_DIR="$VM_DIR/configs"
 LOG_DIR="$VM_DIR/logs"
-SCRIPT_VERSION="6.4"
+SCRIPT_VERSION="6.5"
 BRAND_PREFIX="ZynexForge-"
 
-# EPYC CPU Model (try different AMD CPU models for better compatibility)
-EPYC_CPU_MODELS=("EPYC" "EPYC-Rome" "EPYC-Milan" "EPYC-Genoa" "host")
-EPYC_CPU_FLAGS="+invtsc,+topoext,+svm,+kvm,+pmu,+x2apic,+ibpb,+virt-ssbd,+amd-ssbd,+amd-no-ssb"
+# CPU Models (with TCG fallback)
+EPYC_CPU_MODELS=("EPYC" "EPYC-Rome" "EPYC-Milan" "EPYC-Genoa" "host" "max" "qemu64")
+EPYC_CPU_FLAGS="+invtsc,+topoext,+svm,+kvm,+pmu,+x2apic"
 
 # Network settings
 DEFAULT_IP="10.0.2.15"
@@ -27,6 +27,9 @@ DEFAULT_DNS="8.8.8.8,8.8.4.4"
 QEMU_DNS="8.8.8.8"
 QEMU_NET="10.0.2.0/24"
 QEMU_HOST="10.0.2.2"
+
+# KVM status
+KVM_AVAILABLE=false
 
 # Display banner
 display_banner() {
@@ -39,7 +42,7 @@ __________                             ___________
 /_______ \/ ____|___|  /\___  >__/\_ \  \___  / \____/|__|  \___  / \___  >
         \/\/         \/     \/      \/      \/             /_____/      \/ 
 
-        ZynexForge VM Engine v6.4 | AMD EPYC Optimized | Powered by FaaizXD
+        ZynexForge VM Engine v6.5 | AMD EPYC Optimized | Powered by FaaizXD
 ===============================================================================
 EOF
     echo ""
@@ -67,11 +70,46 @@ init_dirs() {
     chmod 755 "$VM_DIR" "$CONFIG_DIR" "$LOG_DIR"
 }
 
-# Enhanced AMD EPYC CPU detection and configuration
-check_epyc() {
-    print_info "Checking CPU and virtualization capabilities..."
+# Check KVM availability
+check_kvm() {
+    print_info "Checking virtualization capabilities..."
     
-    # Get detailed CPU information
+    # Check if we're in a container/cloud VM
+    if [[ -f /.dockerenv ]] || grep -q "docker\|lxc" /proc/1/cgroup; then
+        print_warn "Running in container - KVM acceleration unavailable"
+        KVM_AVAILABLE=false
+        return
+    fi
+    
+    # Check KVM device
+    if [ -e /dev/kvm ]; then
+        KVM_AVAILABLE=true
+        print_success "KVM acceleration available"
+        
+        # Check which KVM module is loaded
+        if lsmod | grep -q "kvm_amd"; then
+            print_info "AMD KVM module loaded"
+            EPYC_CPU_FLAGS="+invtsc,+topoext,+svm,+kvm,+pmu,+x2apic"
+        elif lsmod | grep -q "kvm_intel"; then
+            print_info "Intel KVM module loaded"
+            EPYC_CPU_FLAGS="+vmx,+kvm,+invtsc"
+        else
+            print_warn "KVM device exists but no module loaded"
+            print_info "Try: sudo modprobe kvm_amd (AMD) or sudo modprobe kvm_intel (Intel)"
+            KVM_AVAILABLE=false
+        fi
+    else
+        print_warn "KVM acceleration not available"
+        print_info "This could be because:"
+        print_info "  1. Running in a cloud VM/container"
+        print_info "  2. Virtualization not enabled in BIOS"
+        print_info "  3. KVM kernel modules not loaded"
+        print_info ""
+        print_info "VM will run in TCG (software) mode (slower but works)"
+        KVM_AVAILABLE=false
+    fi
+    
+    # Check CPU vendor
     local cpu_vendor=$(grep -m1 "vendor_id" /proc/cpuinfo | cut -d: -f2 | xargs)
     local cpu_model=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//')
     
@@ -81,75 +119,19 @@ check_epyc() {
     if [[ "$cpu_vendor" == "AuthenticAMD" ]]; then
         if echo "$cpu_model" | grep -qi "EPYC"; then
             print_success "AMD EPYC processor detected!"
-            
-            # Determine EPYC generation
-            if echo "$cpu_model" | grep -qi "Genoa"; then
-                SELECTED_CPU_MODEL="EPYC-Genoa"
-                print_info "EPYC Generation: Genoa (Zen 4)"
-            elif echo "$cpu_model" | grep -qi "Milan"; then
-                SELECTED_CPU_MODEL="EPYC-Milan"
-                print_info "EPYC Generation: Milan (Zen 3)"
-            elif echo "$cpu_model" | grep -qi "Rome"; then
-                SELECTED_CPU_MODEL="EPYC-Rome"
-                print_info "EPYC Generation: Rome (Zen 2)"
-            else
-                SELECTED_CPU_MODEL="EPYC"
-                print_info "EPYC Generation: Generic"
-            fi
-            
-            # Check AMD-V (SVM)
-            if grep -q "svm" /proc/cpuinfo; then
-                print_success "AMD-V (SVM) virtualization enabled"
-            else
-                print_warn "AMD-V not enabled in BIOS/UEFI - virtualization will be slow"
-            fi
-            
-            # Check CPU flags
-            local cpu_flags=$(grep -m1 "flags" /proc/cpuinfo)
-            if echo "$cpu_flags" | grep -q "topoext"; then
-                print_info "✓ Topology extensions available"
-            fi
-            if echo "$cpu_flags" | grep -q "svm"; then
-                print_info "✓ SVM (AMD-V) available"
-            fi
-            if echo "$cpu_flags" | grep -q "x2apic"; then
-                print_info "✓ x2APIC available"
-            fi
-            
         else
-            print_warn "AMD processor detected but not EPYC - using generic AMD optimizations"
-            SELECTED_CPU_MODEL="host"
+            print_info "AMD processor detected (not EPYC)"
         fi
     elif [[ "$cpu_vendor" == "GenuineIntel" ]]; then
-        print_warn "Intel processor detected - AMD EPYC optimizations limited"
-        SELECTED_CPU_MODEL="host"
-        EPYC_CPU_FLAGS="+vmx,+kvm,+invtsc"
+        print_info "Intel processor detected"
     else
-        print_warn "Unknown processor - using generic CPU"
-        SELECTED_CPU_MODEL="max"
-    fi
-    
-    # Check KVM availability
-    if [ -e /dev/kvm ]; then
-        print_success "KVM acceleration available"
-        if lsmod | grep -q "kvm_amd"; then
-            print_info "KVM AMD module loaded"
-        elif lsmod | grep -q "kvm_intel"; then
-            print_info "KVM Intel module loaded"
-        fi
-    else
-        print_error "KVM not available - performance will be poor"
-        print_info "Check: lsmod | grep kvm"
-        print_info "Ensure virtualization is enabled in BIOS/UEFI"
-        print_info "For AMD: sudo modprobe kvm_amd"
-        print_info "For Intel: sudo modprobe kvm_intel"
-        SELECTED_CPU_MODEL="max"  # Fallback to software emulation
+        print_warn "Unknown processor type"
     fi
 }
 
 # Check dependencies
 check_deps() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "openssl" "cpuid")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "openssl")
     local missing=()
     
     for dep in "${deps[@]}"; do
@@ -159,8 +141,8 @@ check_deps() {
     done
     
     if [ ${#missing[@]} -ne 0 ]; then
-        print_error "Missing: ${missing[*]}"
-        print_info "Install: sudo apt install qemu-system cloud-image-utils wget openssl cpuid"
+        print_error "Missing dependencies: ${missing[*]}"
+        print_info "Install: sudo apt install qemu-system cloud-image-utils wget openssl"
         exit 1
     fi
 }
@@ -275,7 +257,7 @@ load_config() {
         VM_DNS="${VM_DNS:-$DEFAULT_DNS}"
         GUI_MODE="${GUI_MODE:-false}"
         PORT_FORWARDS="${PORT_FORWARDS:-}"
-        CPU_TYPE="${CPU_TYPE:-$SELECTED_CPU_MODEL}"
+        CPU_TYPE="${CPU_TYPE:-qemu64}"
         
         return 0
     else
@@ -316,10 +298,16 @@ EOF
     log_message "CONFIG" "Saved: $VM_NAME"
 }
 
-# Create VM with enhanced CPU options
+# Create VM with KVM/TCG awareness
 create_vm() {
     display_banner
     print_info "Creating new ZynexForge VM"
+    
+    # Show KVM status
+    if [ "$KVM_AVAILABLE" = false ]; then
+        print_warn "KVM acceleration not available - VM will run in software mode"
+        print_info "Performance will be limited but it will work"
+    fi
     
     # OS selection
     print_info "Select an OS distribution:"
@@ -400,21 +388,41 @@ create_vm() {
         print_error "Must be a size with unit (e.g., 50G, 100G)"
     done
     
-    # Memory
+    # Memory - reduced defaults for TCG mode
+    local default_memory=2048
+    if [ "$KVM_AVAILABLE" = true ]; then
+        default_memory=4096
+    fi
+    
     while true; do
-        read -p "$(print_input "Memory in MB (default: 4096): ")" MEMORY
-        MEMORY="${MEMORY:-4096}"
+        read -p "$(print_input "Memory in MB (default: $default_memory): ")" MEMORY
+        MEMORY="${MEMORY:-$default_memory}"
         if validate_input "number" "$MEMORY"; then
+            # Warn about large memory in TCG mode
+            if [ "$KVM_AVAILABLE" = false ] && [ "$MEMORY" -gt 4096 ]; then
+                print_warn "Large memory allocation in software mode may be slow"
+                print_info "Consider reducing to 2048MB or less for better performance"
+            fi
             break
         fi
         print_error "Must be a positive number"
     done
     
-    # vCPUs
+    # vCPUs - reduced defaults for TCG mode
+    local default_cpus=2
+    if [ "$KVM_AVAILABLE" = true ]; then
+        default_cpus=4
+    fi
+    
     while true; do
-        read -p "$(print_input "Number of vCPUs (default: 4): ")" CPUS
-        CPUS="${CPUS:-4}"
+        read -p "$(print_input "Number of vCPUs (default: $default_cpus): ")" CPUS
+        CPUS="${CPUS:-$default_cpus}"
         if validate_input "number" "$CPUS"; then
+            # Warn about many CPUs in TCG mode
+            if [ "$KVM_AVAILABLE" = false ] && [ "$CPUS" -gt 2 ]; then
+                print_warn "Multiple CPUs in software mode may be slow"
+                print_info "Consider using 1-2 vCPUs for better performance"
+            fi
             break
         fi
         print_error "Must be a positive number"
@@ -435,7 +443,12 @@ create_vm() {
         fi
     done
     
-    # GUI mode
+    # GUI mode - warn about performance in TCG
+    if [ "$KVM_AVAILABLE" = false ]; then
+        print_warn "GUI mode in software emulation will be very slow"
+        print_info "Recommend using console mode (nographic) for better performance"
+    fi
+    
     while true; do
         read -p "$(print_input "Enable GUI mode? (y/N): ")" gui_choice
         gui_choice="${gui_choice:-n}"
@@ -450,55 +463,85 @@ create_vm() {
         fi
     done
     
-    # CPU Type Selection - ENHANCED
-    print_info "CPU Configuration for AMD EPYC:"
-    echo "  1) Host CPU Passthrough (Best performance, shows actual CPU)"
-    echo "  2) EPYC-Genoa (Zen 4 - Most recent EPYC)"
-    echo "  3) EPYC-Milan (Zen 3)"
-    echo "  4) EPYC-Rome (Zen 2)"
-    echo "  5) EPYC (Generic AMD EPYC)"
-    echo "  6) Custom CPU model"
+    # CPU Type Selection - adjusted for TCG mode
+    print_info "CPU Configuration:"
+    
+    if [ "$KVM_AVAILABLE" = true ]; then
+        echo "  1) Host CPU Passthrough (Best performance, requires KVM)"
+        echo "  2) EPYC-Genoa (AMD EPYC Zen 4)"
+        echo "  3) EPYC-Milan (AMD EPYC Zen 3)"
+        echo "  4) EPYC-Rome (AMD EPYC Zen 2)"
+        echo "  5) EPYC (Generic AMD EPYC)"
+        echo "  6) qemu64 (Most compatible)"
+    else
+        echo "  1) qemu64 (Most compatible, software emulation)"
+        echo "  2) EPYC (AMD EPYC emulation - slower)"
+        echo "  3) host (Attempt host CPU - may fail without KVM)"
+    fi
     
     local cpu_choice
     while true; do
-        read -p "$(print_input "Select CPU type (1-6, default: 1): ")" cpu_choice
+        read -p "$(print_input "Select CPU type (1-${$KVM_AVAILABLE = true ? 6 : 3}, default: 1): ")" cpu_choice
         cpu_choice="${cpu_choice:-1}"
-        case $cpu_choice in
-            1)
-                CPU_TYPE="host"
-                print_info "Selected: Host CPU passthrough"
-                break
-                ;;
-            2)
-                CPU_TYPE="EPYC-Genoa"
-                print_info "Selected: AMD EPYC-Genoa (Zen 4)"
-                break
-                ;;
-            3)
-                CPU_TYPE="EPYC-Milan"
-                print_info "Selected: AMD EPYC-Milan (Zen 3)"
-                break
-                ;;
-            4)
-                CPU_TYPE="EPYC-Rome"
-                print_info "Selected: AMD EPYC-Rome (Zen 2)"
-                break
-                ;;
-            5)
-                CPU_TYPE="EPYC"
-                print_info "Selected: Generic AMD EPYC"
-                break
-                ;;
-            6)
-                read -p "$(print_input "Enter custom CPU model (e.g., EPYC, host, max): ")" custom_cpu
-                CPU_TYPE="${custom_cpu:-host}"
-                print_info "Selected: Custom CPU model '$CPU_TYPE'"
-                break
-                ;;
-            *)
-                print_error "Invalid selection. Try again."
-                ;;
-        esac
+        
+        if [ "$KVM_AVAILABLE" = true ]; then
+            case $cpu_choice in
+                1)
+                    CPU_TYPE="host"
+                    print_info "Selected: Host CPU passthrough (KVM accelerated)"
+                    break
+                    ;;
+                2)
+                    CPU_TYPE="EPYC-Genoa"
+                    print_info "Selected: AMD EPYC-Genoa (Zen 4)"
+                    break
+                    ;;
+                3)
+                    CPU_TYPE="EPYC-Milan"
+                    print_info "Selected: AMD EPYC-Milan (Zen 3)"
+                    break
+                    ;;
+                4)
+                    CPU_TYPE="EPYC-Rome"
+                    print_info "Selected: AMD EPYC-Rome (Zen 2)"
+                    break
+                    ;;
+                5)
+                    CPU_TYPE="EPYC"
+                    print_info "Selected: Generic AMD EPYC"
+                    break
+                    ;;
+                6)
+                    CPU_TYPE="qemu64"
+                    print_info "Selected: qemu64 (compatible)"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection. Try again."
+                    ;;
+            esac
+        else
+            case $cpu_choice in
+                1)
+                    CPU_TYPE="qemu64"
+                    print_info "Selected: qemu64 (software emulation)"
+                    break
+                    ;;
+                2)
+                    CPU_TYPE="EPYC"
+                    print_info "Selected: AMD EPYC (software emulation)"
+                    break
+                    ;;
+                3)
+                    CPU_TYPE="host"
+                    print_info "Selected: Host CPU (may fail without KVM)"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection. Try again."
+                    ;;
+            esac
+        fi
     done
     
     # Network settings
@@ -524,13 +567,19 @@ create_vm() {
     
     print_success "ZynexForge VM '$VM_NAME' created successfully!"
     print_info "Configuration: $CPUS vCPUs, ${MEMORY}MB RAM, $DISK_SIZE disk"
-    print_info "CPU Model: $CPU_TYPE (will be exposed to guest)"
+    print_info "CPU Model: $CPU_TYPE"
+    if [ "$KVM_AVAILABLE" = true ]; then
+        print_info "Mode: KVM accelerated"
+    else
+        print_info "Mode: Software emulation (TCG)"
+        print_warn "Performance will be limited - recommend enabling KVM if possible"
+    fi
     print_info "To start: Select VM from main menu"
 }
 
-# Setup VM image with AMD CPU optimizations
+# Setup VM image
 setup_vm() {
-    print_info "Preparing VM image with AMD EPYC optimizations..."
+    print_info "Preparing VM image..."
     
     mkdir -p "$(dirname "$IMG_FILE")" "$(dirname "$SEED_FILE")"
     
@@ -563,7 +612,7 @@ setup_vm() {
         print_warn "Using plain password (install 'openssl' for secure hashing)"
     fi
     
-    # Create cloud-init config with AMD CPU optimizations
+    # Create cloud-init config
     cat > /tmp/user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
@@ -588,57 +637,16 @@ packages:
   - neofetch
   - cpuid
   - lscpu
-  - inxi
-  - hwinfo
-  - dmidecode
-  - msr-tools
 runcmd:
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
-  # Create custom CPU info for neofetch
-  - echo "Creating AMD EPYC CPU information..."
-  - echo "vendor_id       : AuthenticAMD" > /tmp/cpuinfo_amd
-  - echo "cpu family      : 23" >> /tmp/cpuinfo_amd
-  - echo "model           : 49" >> /tmp/cpuinfo_amd
-  - echo "model name      : AMD EPYC Processor (with IBPB)" >> /tmp/cpuinfo_amd
-  - echo "stepping        : 0" >> /tmp/cpuinfo_amd
-  - echo "microcode       : 0x8301036" >> /tmp/cpuinfo_amd
-  - echo "cpu MHz         : 2800.000" >> /tmp/cpuinfo_amd
-  - echo "cache size      : 512 KB" >> /tmp/cpuinfo_amd
-  - echo "physical id     : 0" >> /tmp/cpuinfo_amd
-  - echo "siblings        : $CPUS" >> /tmp/cpuinfo_amd
-  - echo "core id         : 0" >> /tmp/cpuinfo_amd
-  - echo "cpu cores       : $CPUS" >> /tmp/cpuinfo_amd
-  - echo "apicid          : 0" >> /tmp/cpuinfo_amd
-  - echo "initial apicid  : 0" >> /tmp/cpuinfo_amd
-  - echo "fpu             : yes" >> /tmp/cpuinfo_amd
-  - echo "fpu_exception   : yes" >> /tmp/cpuinfo_amd
-  - echo "cpuid level     : 16" >> /tmp/cpuinfo_amd
-  - echo "wp              : yes" >> /tmp/cpuinfo_amd
-  - echo "flags           : fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb hw_pstate ssbd ibpb vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr rdpru wbnoinvd arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip rdpid overflow_recov succor smca" >> /tmp/cpuinfo_amd
-  - echo "bugs            : sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass retbleed" >> /tmp/cpuinfo_amd
-  - echo "bogomips        : 5600.00" >> /tmp/cpuinfo_amd
-  - echo "TLB size        : 2560 4K pages" >> /tmp/cpuinfo_amd
-  - echo "clflush size    : 64" >> /tmp/cpuinfo_amd
-  - echo "cache_alignment : 64" >> /tmp/cpuinfo_amd
-  - echo "address sizes   : 48 bits physical, 48 bits virtual" >> /tmp/cpuinfo_amd
-  - echo "power management: ts ttp tm hwpstate cpb eff_freq_ro [13] [14]" >> /tmp/cpuinfo_amd
-  # Create custom neofetch config
-  - mkdir -p /etc/neofetch
-  - echo '--cpu_brand="AMD"' > /etc/neofetch/config.conf
-  - echo '--cpu_cores="$CPUS"' >> /etc/neofetch/config.conf
-  - echo '--cpu_speed="2800"' >> /etc/neofetch/config.conf
-  - echo '--cpu_temp="C"' >> /etc/neofetch/config.conf
-  - echo '--cpu_display="on"' >> /etc/neofetch/config.conf
-  - echo '--cpu_model="AMD EPYC"' >> /etc/neofetch/config.conf
-  # Create motd
+  # Create custom motd
   - echo "╔══════════════════════════════════════════════════════════════╗" > /etc/motd
   - echo "║                    ZynexForge VM Engine                      ║" >> /etc/motd
-  - echo "║                    Powered by AMD EPYC                       ║" >> /etc/motd
   - echo "╠══════════════════════════════════════════════════════════════╣" >> /etc/motd
   - echo "║ Hostname: $HOSTNAME                                         ║" >> /etc/motd
   - echo "║ Username: $USERNAME                                         ║" >> /etc/motd
-  - echo "║ CPU: AMD EPYC (${CPUS} cores @ 2.8GHz)                      ║" >> /etc/motd
+  - echo "║ CPU: $CPU_TYPE (${CPUS} cores)                              ║" >> /etc/motd
   - echo "║ Memory: ${MEMORY}MB RAM                                      ║" >> /etc/motd
   - echo "║ Disk: $DISK_SIZE                                            ║" >> /etc/motd
   - echo "╚══════════════════════════════════════════════════════════════╝" >> /etc/motd
@@ -653,18 +661,18 @@ EOF
     # Create seed image
     print_info "Creating cloud-init seed image..."
     if cloud-localds "$SEED_FILE" /tmp/user-data /tmp/meta-data; then
-        print_success "Cloud-init seed created with AMD CPU optimizations"
+        print_success "Cloud-init seed created"
     else
         print_error "Failed to create cloud-init seed image"
         exit 1
     fi
     
     rm -f /tmp/user-data /tmp/meta-data
-    print_success "VM setup complete with AMD EPYC optimizations"
-    log_message "CREATE" "Created VM: $VM_NAME ($OS_TYPE) with CPU: $CPU_TYPE"
+    print_success "VM setup complete"
+    log_message "CREATE" "Created VM: $VM_NAME ($OS_TYPE)"
 }
 
-# Start VM with AMD CPU exposure
+# Start VM with KVM/TCG fallback
 start_vm() {
     local vm="$1"
     
@@ -692,33 +700,60 @@ start_vm() {
         print_info "Password: $PASSWORD"
         print_info "CPU Model: $CPU_TYPE"
         
-        # Build QEMU command with enhanced AMD CPU exposure
+        # Build QEMU command with KVM/TCG awareness
         local qemu_cmd=(
             qemu-system-x86_64
             -name "$vm,process=ZynexForge-$vm"
-            -enable-kvm
-            # Enhanced CPU configuration for AMD
-            -cpu "$CPU_TYPE,$EPYC_CPU_FLAGS"
-            -smp "$CPUS,sockets=1,cores=$CPUS,threads=1"
+        )
+        
+        # Add KVM acceleration if available
+        if [ "$KVM_AVAILABLE" = true ] && [[ "$CPU_TYPE" != "qemu64" ]]; then
+            qemu_cmd+=(-enable-kvm)
+            print_info "Mode: KVM accelerated"
+            
+            # CPU configuration for KVM
+            if [[ "$CPU_TYPE" == "host" ]]; then
+                qemu_cmd+=(-cpu "host,$EPYC_CPU_FLAGS")
+            else
+                qemu_cmd+=(-cpu "$CPU_TYPE")
+            fi
+        else
+            print_warn "Mode: Software emulation (TCG)"
+            print_info "Performance will be limited"
+            
+            # CPU configuration for TCG
+            if [[ "$CPU_TYPE" == "host" ]]; then
+                # Can't use host without KVM, fallback to qemu64
+                qemu_cmd+=(-cpu "qemu64")
+                print_warn "Falling back to qemu64 CPU (host requires KVM)"
+            else
+                qemu_cmd+=(-cpu "$CPU_TYPE")
+            fi
+            
+            # Add TCG accelerator
+            qemu_cmd+=(-accel tcg)
+        fi
+        
+        # Common QEMU parameters
+        qemu_cmd+=(
+            -smp "$CPUS"
             -m "$MEMORY"
-            -drive "file=$IMG_FILE,if=virtio,format=qcow2,cache=directsync"
+            -drive "file=$IMG_FILE,if=virtio,format=qcow2"
             -drive "file=$SEED_FILE,if=virtio,format=raw,readonly=on"
             # Networking
             -netdev "user,id=net0,net=$QEMU_NET,host=$QEMU_HOST,dns=$QEMU_DNS,hostfwd=tcp::$SSH_PORT-:22"
-            -device "virtio-net-pci,netdev=net0,mac=52:54:00:$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256)))"
-            # Performance optimizations
+            -device "virtio-net-pci,netdev=net0"
+            # Basic devices
             -device virtio-balloon-pci
             -object rng-random,filename=/dev/urandom,id=rng0
             -device virtio-rng-pci,rng=rng0
             -rtc base=utc,clock=host
             -nodefaults
             -boot order=c
-            # Machine and firmware
-            -machine "type=q35,accel=kvm,kernel_irqchip=on"
-            # SMBIOS for AMD branding
-            -smbios "type=0,vendor=AMD"
-            -smbios "type=1,manufacturer=AMD,product=EPYC,version=ZynexForge,serial=ZFX-$(echo $VM_NAME | md5sum | cut -c1-8),sku=ZFX-EPYC"
-            -smbios "type=4,manufacturer=AMD,sock_pfx=SP3,version=EPYC"
+            # Machine type
+            -machine "type=q35"
+            # SMBIOS for branding
+            -smbios "type=1,manufacturer=ZynexForge,product=VM,version=v$SCRIPT_VERSION"
         )
         
         # Add port forwards
@@ -737,38 +772,77 @@ start_vm() {
         
         # GUI or console mode
         if [[ "$GUI_MODE" == true ]]; then
-            qemu_cmd+=(-vga virtio -display gtk,gl=on)
+            qemu_cmd+=(-vga std -display gtk)
+            print_info "GUI mode enabled (may be slow without KVM)"
         else
             qemu_cmd+=(-nographic -serial mon:stdio)
+            print_info "Console mode enabled"
         fi
         
-        print_info "Starting QEMU with AMD EPYC CPU exposure..."
+        # Performance warning for TCG
+        if [ "$KVM_AVAILABLE" = false ]; then
+            echo ""
+            print_warn "⚠️  WARNING: Running in software emulation mode"
+            print_info "  - Performance will be significantly slower"
+            print_info "  - GUI mode may be very slow"
+            print_info "  - Recommend enabling KVM for better performance"
+            echo ""
+            print_info "To enable KVM (if supported):"
+            print_info "  1. Check if /dev/kvm exists"
+            print_info "  2. Ensure virtualization is enabled in BIOS"
+            print_info "  3. Load KVM module: sudo modprobe kvm_amd (or kvm_intel)"
+            echo ""
+        fi
+        
+        print_info "Starting QEMU..."
         echo ""
         print_info "══════════════════════════════════════════════════"
-        print_info "VM '$vm' is now running!"
+        print_info "VM '$vm' is starting..."
         print_info "SSH Connection: ssh -p $SSH_PORT $USERNAME@localhost"
         print_info "Password: $PASSWORD"
         print_info ""
-        print_info "Inside the VM, check CPU with:"
-        print_info "  neofetch                    # Should show AMD EPYC"
-        print_info "  cat /proc/cpuinfo           # CPU information"
-        print_info "  lscpu                       # CPU architecture"
-        print_info "  cpuid                       # CPU capabilities"
-        print_info "  inxi -C                     # CPU details"
+        
+        if [ "$KVM_AVAILABLE" = true ]; then
+            print_info "Mode: KVM accelerated ✓"
+        else
+            print_info "Mode: Software emulation ⚠️"
+        fi
+        
         print_info ""
-        print_info "Note: We've patched neofetch to show AMD EPYC"
-        print_info ""
+        
         if [[ "$GUI_MODE" == false ]]; then
             print_info "To exit: Press 'Ctrl+A' then 'X'"
         fi
         print_info "══════════════════════════════════════════════════"
         echo ""
         
-        # Run QEMU
-        "${qemu_cmd[@]}"
+        # Run QEMU with error handling
+        set +e  # Allow QEMU to fail without exiting script
+        if "${qemu_cmd[@]}"; then
+            print_info "VM $vm has been shut down"
+            log_message "STOP" "VM stopped normally: $vm"
+        else
+            local qemu_exit=$?
+            if [ $qemu_exit -eq 1 ]; then
+                print_error "QEMU failed to start"
+                print_info "Common issues:"
+                print_info "  1. KVM not available but required by CPU type"
+                print_info "  2. Invalid CPU model specified"
+                print_info "  3. Port already in use"
+                
+                # Suggest fallback to TCG
+                if [[ "$CPU_TYPE" == "host" ]] && [ "$KVM_AVAILABLE" = false ]; then
+                    print_info ""
+                    print_info "Try creating a new VM with:"
+                    print_info "  CPU Type: qemu64 (software compatible)"
+                    print_info "  Memory: 2048MB or less"
+                    print_info "  vCPUs: 1-2"
+                fi
+            fi
+            log_message "ERROR" "QEMU failed with exit code $qemu_exit for VM: $vm"
+        fi
+        set -e  # Re-enable strict error checking
         
-        print_info "VM $vm has been shut down"
-        log_message "STOP" "VM stopped: $vm"
     fi
 }
 
@@ -829,6 +903,7 @@ show_vm_info() {
         printf "│ %-20s: %-30s │\n" "Disk Size" "$DISK_SIZE"
         printf "│ %-20s: %-30s │\n" "GUI Mode" "$GUI_MODE"
         printf "│ %-20s: %-30s │\n" "CPU Model" "$CPU_TYPE"
+        printf "│ %-20s: %-30s │\n" "KVM Acceleration" "$([ "$KVM_AVAILABLE" = true ] && echo "Available ✓" || echo "Not available ⚠️")"
         printf "│ %-20s: %-30s │\n" "Network" "QEMU NAT"
         printf "│ %-20s: %-30s │\n" "Created" "$CREATED"
         printf "│ %-20s: %-30s │\n" "Port Forwards" "${PORT_FORWARDS:-None}"
@@ -837,9 +912,19 @@ show_vm_info() {
         echo "├─────────────────────────────────────────────────────┤"
         echo "│ SSH: ssh -p $SSH_PORT $USERNAME@localhost           │"
         echo "│ Password: $PASSWORD                                 │"
-        echo "│ Note: VM shows AMD EPYC CPU in neofetch            │"
         echo "└─────────────────────────────────────────────────────┘"
         echo ""
+        
+        # KVM status
+        if [ "$KVM_AVAILABLE" = false ]; then
+            echo "⚠️  KVM acceleration not available"
+            echo "   Performance will be limited"
+            echo "   Consider checking:"
+            echo "   - Is /dev/kvm present?"
+            echo "   - Is virtualization enabled in BIOS?"
+            echo "   - Are you in a container/cloud VM?"
+            echo ""
+        fi
         
         read -p "$(print_input "Press Enter to continue...")"
     fi
@@ -875,12 +960,16 @@ main_menu() {
             echo "└────┴──────────────────────────────┴──────────────┘"
             echo ""
             
-            # Show CPU info
-            print_info "Host System:"
+            # Show system info
+            print_info "System Information:"
             local cpu_info=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//')
             print_info "CPU: $cpu_info"
-            if grep -qi "AMD" /proc/cpuinfo; then
-                print_success "AMD processor detected - EPYC optimizations available"
+            print_info "KVM: $([ "$KVM_AVAILABLE" = true ] && echo "Available ✓" || echo "Not available ⚠️")"
+            
+            if [ "$KVM_AVAILABLE" = false ]; then
+                print_warn "KVM acceleration not available - VMs will run slower"
+                print_info "Check: ls -la /dev/kvm"
+                print_info "Try: sudo modprobe kvm_amd (or kvm_intel)"
             fi
         else
             print_info "No VMs found. Create your first VM to get started."
@@ -890,7 +979,7 @@ main_menu() {
         # Menu options
         echo "ZynexForge VM Engine v$SCRIPT_VERSION - Main Menu"
         echo "══════════════════════════════════════════════════"
-        echo "  1) Create new ZynexForge VM (AMD EPYC optimized)"
+        echo "  1) Create new ZynexForge VM"
         
         if [ $vm_count -gt 0 ]; then
             echo "  2) Start VM"
@@ -902,6 +991,7 @@ main_menu() {
             echo "  8) Show VM performance"
         fi
         
+        echo "  9) Check KVM status"
         echo "  0) Exit"
         echo ""
         
@@ -988,6 +1078,10 @@ main_menu() {
                     fi
                 fi
                 ;;
+            9)
+                check_kvm
+                read -p "$(print_input "Press Enter to continue...")"
+                ;;
             0)
                 print_info "Thank you for using ZynexForge VM Engine!"
                 exit 0
@@ -1011,5 +1105,5 @@ cleanup() {
 trap cleanup EXIT INT TERM
 init_dirs
 check_deps
-check_epyc
+check_kvm
 main_menu
