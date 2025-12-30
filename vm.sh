@@ -94,11 +94,12 @@ detect_amd_cpu() {
 
 # Function to detect GPU
 detect_gpu() {
-    if lspci | grep -i "vga\|3d\|display" | grep -qi "nvidia\|amd\|radeon"; then
-        return 0
-    else
-        return 1
+    if command -v lspci >/dev/null 2>&1; then
+        if lspci | grep -i "vga\|3d\|display" | grep -qi "nvidia\|amd\|radeon"; then
+            return 0
+        fi
     fi
+    return 1
 }
 
 # Function to generate random IP
@@ -591,8 +592,8 @@ create_new_vm() {
         
         echo -e "\n${COLOR_WHITE}Performance Features:${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}AMD Optimized:${COLOR_RESET} $HAS_AMD"
-        echo -e "  ${COLOR_Gray}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
-        echo -e "  ${COLOR_Gray}Daily Backups:${COLOR_RESET} Enabled"
+        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
+        echo -e "  ${COLOR_GRAY}Daily Backups:${COLOR_RESET} Enabled"
         
         echo -e "\n${COLOR_YELLOW}══════════════════════════════════════════════════════════════════════${COLOR_RESET}"
         
@@ -651,8 +652,8 @@ start_vm() {
                 3)
                     print_status "INFO" "Access Information:"
                     echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
-                    echo -e "  ${COLOR_Gray}Password:${COLOR_RESET} $PASSWORD"
-                    echo -e "  ${COLOR_Gray}IP:${COLOR_RESET} $STATIC_IP"
+                    echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
+                    echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
                     read -p "$(echo -e "${COLOR_CYAN}[INPUT]${COLOR_RESET} Press Enter to continue...")"
                     ;;
                 4)
@@ -673,8 +674,8 @@ start_vm() {
         print_status "BEAST" "Starting VM with ultimate performance..."
         print_status "INFO" "Access Information:"
         echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
-        echo -e "  ${COLOR_Gray}Password:${COLOR_RESET} $PASSWORD"
-        echo -e "  ${COLOR_Gray}IP:${COLOR_RESET} $STATIC_IP"
+        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
+        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
         echo
         
         # Beast QEMU command
@@ -784,17 +785,17 @@ show_vm_performance() {
         echo -e "\n${COLOR_WHITE}Configuration:${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
+        echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
         
         echo -e "\n${COLOR_WHITE}Optimizations:${COLOR_RESET}"
         if [[ "$CPU_TYPE" == "EPYC-v4" ]]; then
-            echo -e "  ${COLOR_Gray}CPU:${COLOR_RESET} ${COLOR_GREEN}AMD EPYC Optimized${COLOR_RESET}"
+            echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} ${COLOR_GREEN}AMD EPYC Optimized${COLOR_RESET}"
         else
-            echo -e "  ${COLOR_Gray}CPU:${COLOR_RESET} Host Passthrough"
+            echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} Host Passthrough"
         fi
-        echo -e "  ${COLOR_Gray}Disk Cache:${COLOR_RESET} Writeback + Discard"
-        echo -e "  ${COLOR_Gray}Network:${COLOR_RESET} VirtIO"
+        echo -e "  ${COLOR_GRAY}Disk Cache:${COLOR_RESET} Writeback + Discard"
+        echo -e "  ${COLOR_GRAY}Network:${COLOR_RESET} VirtIO"
         
         echo
         read -p "$(echo -e "${COLOR_CYAN}[INPUT]${COLOR_RESET} Press Enter to continue...")"
@@ -844,27 +845,27 @@ show_vm_info() {
         section_header "VIRTUAL MACHINE INFORMATION"
         
         echo -e "${COLOR_WHITE}Basic Information:${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Name:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}OS:${COLOR_RESET} $OS_TYPE"
-        echo -e "  ${COLOR_Gray}Created:${COLOR_RESET} $CREATED"
-        echo -e "  ${COLOR_Gray}Status:${COLOR_RESET} $(is_vm_running "$vm_name" && echo -e "${COLOR_GREEN}Running${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Stopped${COLOR_RESET}")"
+        echo -e "  ${COLOR_GRAY}Name:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}OS:${COLOR_RESET} $OS_TYPE"
+        echo -e "  ${COLOR_GRAY}Created:${COLOR_RESET} $CREATED"
+        echo -e "  ${COLOR_GRAY}Status:${COLOR_RESET} $(is_vm_running "$vm_name" && echo -e "${COLOR_GREEN}Running${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Stopped${COLOR_RESET}")"
         
         echo -e "\n${COLOR_WHITE}Resources:${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
+        echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
         
         echo -e "\n${COLOR_WHITE}Network:${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}IP:${COLOR_RESET} $STATIC_IP"
-        echo -e "  ${COLOR_Gray}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
+        echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
         if [[ -n "$PORT_FORWARDS" ]]; then
-            echo -e "  ${COLOR_Gray}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
+            echo -e "  ${COLOR_GRAY}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
         fi
         
         echo -e "\n${COLOR_WHITE}Access:${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Username:${COLOR_RESET} ${COLOR_GREEN}$USERNAME${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Password:${COLOR_RESET} ********"
+        echo -e "  ${COLOR_GRAY}Username:${COLOR_RESET} ${COLOR_GREEN}$USERNAME${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} ********"
         
         echo
         read -p "$(echo -e "${COLOR_CYAN}[INPUT]${COLOR_RESET} Press Enter to continue...")"
@@ -911,16 +912,16 @@ show_system_overview() {
     done
     
     echo -e "${COLOR_WHITE}Platform Statistics:${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}Total VMs:${COLOR_RESET} ${COLOR_CYAN}$total_vms${COLOR_RESET} / $MAX_VMS"
-    echo -e "  ${COLOR_Gray}Running VMs:${COLOR_RESET} ${COLOR_GREEN}$running_vms${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}Stopped VMs:${COLOR_RESET} ${COLOR_YELLOW}$((total_vms - running_vms))${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Total VMs:${COLOR_RESET} ${COLOR_CYAN}$total_vms${COLOR_RESET} / $MAX_VMS"
+    echo -e "  ${COLOR_GRAY}Running VMs:${COLOR_RESET} ${COLOR_GREEN}$running_vms${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Stopped VMs:${COLOR_RESET} ${COLOR_YELLOW}$((total_vms - running_vms))${COLOR_RESET}"
     
     # System info
     echo -e "\n${COLOR_WHITE}System Information:${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}CPU:${COLOR_RESET} $(detect_amd_cpu && echo "AMD Ryzen/EPYC" || echo "Intel/Other")"
-    echo -e "  ${COLOR_Gray}GPU:${COLOR_RESET} $(detect_gpu && echo "Available" || echo "Not detected")"
-    echo -e "  ${COLOR_Gray}Memory:${COLOR_RESET} $(free -h | awk '/^Mem:/{print $3 "/" $2}') used"
-    echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} $(df -h / | awk 'NR==2 {print $4 " free"}')"
+    echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} $(detect_amd_cpu && echo "AMD Ryzen/EPYC" || echo "Intel/Other")"
+    echo -e "  ${COLOR_GRAY}GPU:${COLOR_RESET} $(detect_gpu && echo "Available" || echo "Not detected")"
+    echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} $(free -h | awk '/^Mem:/{print $3 "/" $2}') used"
+    echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} $(df -h / | awk 'NR==2 {print $4 " free"}')"
     
     echo
     read -p "$(echo -e "${COLOR_CYAN}[INPUT]${COLOR_RESET} Press Enter to continue...")"
