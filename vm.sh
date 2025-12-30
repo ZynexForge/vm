@@ -24,6 +24,7 @@ EPYC_CPU_TOPOLOGY="sockets=1,dies=1,cores=8,threads=2"
 DEFAULT_IP="10.0.2.15"
 DEFAULT_GATEWAY="10.0.2.2"
 DEFAULT_DNS="8.8.8.8,8.8.4.4"
+QEMU_DNS="8.8.8.8"  # Use Google DNS for QEMU networking
 
 # Display banner
 display_banner() {
@@ -591,7 +592,8 @@ start_vm() {
         print_info "Gateway: $VM_GATEWAY"
         print_info "DNS: $VM_DNS"
         
-        # Build QEMU command with proper networking
+        # Build QEMU command with proper networking - FIXED DNS ISSUE
+        # Use Google DNS (8.8.8.8) instead of gateway for QEMU networking
         local qemu_cmd=(
             qemu-system-x86_64
             -name "$vm"
@@ -601,7 +603,7 @@ start_vm() {
             -m "$MEMORY"
             -drive "file=$IMG_FILE,if=virtio,format=qcow2,cache=directsync"
             -drive "file=$SEED_FILE,if=virtio,format=raw,readonly=on"
-            -netdev "user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=$VM_GATEWAY,hostfwd=tcp::$SSH_PORT-:22"
+            -netdev "user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=$QEMU_DNS,hostfwd=tcp::$SSH_PORT-:22"
             -device "virtio-net-pci,netdev=net0,mac=52:54:00:$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256)))"
             -device virtio-balloon-pci
             -object rng-random,filename=/dev/urandom,id=rng0
