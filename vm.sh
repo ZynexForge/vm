@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================
-# ZYNEXFORGE™ - Ultimate VM Manager
+# ZYNEXFORGE™ - Virtual Machine Manager
 # =============================
 
 # Terminal colors
@@ -45,8 +45,8 @@ __________                             ___________
         \/\/         \/     \/      \/      \/             /_____/      \/ 
 EOF
     echo -e "${COLOR_RESET}"
-    echo -e "${COLOR_WHITE}ZYNEXFORGE™ Virtual Machine Manager v5.0${COLOR_RESET}"
-    echo -e "${COLOR_YELLOW}Max VMs: $MAX_VMS | Auto IP | All Features${COLOR_RESET}"
+    echo -e "${COLOR_WHITE}ZYNEXFORGE™ Virtual Machine Manager${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}Max VMs: $MAX_VMS${COLOR_RESET}"
     echo "$SEPARATOR"
     echo
 }
@@ -154,7 +154,6 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "Install with: nix-shell -p qemu_kvm cloud-utils"
         exit 1
     fi
 }
@@ -287,11 +286,6 @@ EOF
         print_status "ERROR" "Failed to create seed image"
         exit 1
     fi
-    
-    # Create initial snapshot
-    if [[ "$SNAPSHOT_COUNT" -gt 0 ]]; then
-        qemu-img snapshot -c "initial" "$IMG_FILE" 2>/dev/null || true
-    fi
 }
 
 # Function to create new VM
@@ -310,7 +304,6 @@ create_new_vm() {
         ["Ubuntu 22.04"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
         ["Ubuntu 24.04"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
         ["Debian 12"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
-        ["Fedora 40"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|fedora"
         ["Proxmox 8"]="proxmox|ve8|https://download.proxmox.com/images/cloud/bookworm/current/debian-12-genericcloud-amd64.qcow2|proxmox8|root|proxmox"
     )
     
@@ -407,29 +400,6 @@ create_new_vm() {
         fi
     done
 
-    # CPU Features
-    section_header "ADVANCED CPU FEATURES"
-    echo "CPU Types:"
-    echo "  1) host (best performance)"
-    echo "  2) EPYC-v4 (AMD optimized)"
-    echo "  3) kvm64 (compatibility)"
-    
-    read -p "$(print_status "INPUT" "Select CPU type (default: 1): ")" cpu_choice
-    case $cpu_choice in
-        1) CPU_TYPE="host" ;;
-        2) CPU_TYPE="EPYC-v4" ;;
-        3) CPU_TYPE="kvm64" ;;
-        *) CPU_TYPE="host" ;;
-    esac
-
-    # GPU passthrough
-    read -p "$(print_status "INPUT" "Enable GPU passthrough? (y/N): ")" gpu_choice
-    if [[ "$gpu_choice" =~ ^[Yy]$ ]]; then
-        GPU_PASSTHROUGH=true
-    else
-        GPU_PASSTHROUGH=false
-    fi
-
     # Network Configuration
     section_header "NETWORK CONFIGURATION"
     
@@ -440,16 +410,7 @@ create_new_vm() {
     STATIC_IP=$(generate_auto_ip)
     echo -e "Auto-generated IP: ${COLOR_GREEN}$STATIC_IP${COLOR_RESET}"
     
-    echo "Network Configuration:"
-    echo "  1) Tap networking (bridged) [RECOMMENDED]"
-    echo "  2) User mode networking (NAT)"
-    
-    read -p "$(print_status "INPUT" "Select network type (default: 1): ")" net_choice
-    case $net_choice in
-        1) NETWORK_CONFIG="tap" ;;
-        2) NETWORK_CONFIG="user" ;;
-        *) NETWORK_CONFIG="tap" ;;
-    esac
+    NETWORK_CONFIG="user"
 
     while true; do
         read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
@@ -468,26 +429,15 @@ create_new_vm() {
 
     read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80): ")" PORT_FORWARDS
 
-    # Backup & Snapshot
-    section_header "BACKUP & SNAPSHOT"
-    
-    echo "Backup Schedule:"
-    echo "  1) Daily"
-    echo "  2) Weekly"
-    echo "  3) Monthly"
-    echo "  4) None"
-    
-    read -p "$(print_status "INPUT" "Select backup schedule (default: 1): ")" backup_choice
-    case $backup_choice in
-        1) BACKUP_SCHEDULE="daily" ;;
-        2) BACKUP_SCHEDULE="weekly" ;;
-        3) BACKUP_SCHEDULE="monthly" ;;
-        4) BACKUP_SCHEDULE="none" ;;
-        *) BACKUP_SCHEDULE="daily" ;;
-    esac
+    # CPU type
+    CPU_TYPE="host"
 
-    read -p "$(print_status "INPUT" "Maximum snapshots to keep (default: 5): ")" SNAPSHOT_COUNT
-    SNAPSHOT_COUNT="${SNAPSHOT_COUNT:-5}"
+    # GPU passthrough
+    GPU_PASSTHROUGH=false
+
+    # Backup schedule
+    BACKUP_SCHEDULE="none"
+    SNAPSHOT_COUNT=5
 
     # Final configuration
     IMG_FILE="$VM_DIR/$VM_NAME.img"
@@ -533,16 +483,55 @@ is_vm_running() {
     return 1
 }
 
+# Function to get VM PID
+get_vm_pid() {
+    local vm_name=$1
+    pgrep -f "qemu-system-x86_64.*$vm_name" 2>/dev/null || echo ""
+}
+
 # Function to start VM
 start_vm() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
-        section_header "STARTING VIRTUAL MACHINE"
+        section_header "START VIRTUAL MACHINE"
         echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
         
         if is_vm_running "$vm_name"; then
-            print_status "WARN" "VM $vm_name is already running"
+            print_status "INFO" "VM $vm_name is already running"
+            
+            echo "Options for running VM:"
+            echo "  1) Connect to console"
+            echo "  2) Stop VM"
+            echo "  3) View SSH connection info"
+            echo "  0) Back to menu"
+            
+            read -p "$(print_status "INPUT" "Select option: ")" running_option
+            
+            case $running_option in
+                1)
+                    print_status "INFO" "Connecting to console..."
+                    # Try to connect via screen if it's in a screen session
+                    if screen -list | grep -q "qemu-$vm_name"; then
+                        screen -r "qemu-$vm_name"
+                    else
+                        print_status "INFO" "No screen session found. Use Ctrl+C in terminal to stop VM."
+                    fi
+                    ;;
+                2)
+                    stop_vm "$vm_name"
+                    ;;
+                3)
+                    print_status "INFO" "Access Information:"
+                    echo -e "  ${COLOR_GRAY}SSH: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
+                    echo -e "  ${COLOR_GRAY}Password: $PASSWORD${COLOR_RESET}"
+                    echo -e "  ${COLOR_GRAY}IP: $STATIC_IP${COLOR_RESET}"
+                    read -p "$(print_status "INPUT" "Press Enter to continue...")"
+                    ;;
+                *)
+                    return 0
+                    ;;
+            esac
             return 0
         fi
         
@@ -554,6 +543,7 @@ start_vm() {
         print_status "INFO" "Access Information:"
         echo -e "  ${COLOR_GRAY}SSH: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}Password: $PASSWORD${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}IP: $STATIC_IP${COLOR_RESET}"
         echo
         
         # QEMU command
@@ -570,23 +560,18 @@ start_vm() {
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
 
-        # Add GPU passthrough if enabled
-        if [[ "$GPU_PASSTHROUGH" == true ]]; then
-            qemu_cmd+=(-vga none -nographic)
-        elif [[ "$GUI_MODE" == true ]]; then
+        if [[ "$GUI_MODE" == true ]]; then
             qemu_cmd+=(-vga virtio -display gtk,gl=on)
         else
             qemu_cmd+=(-nographic -serial mon:stdio)
         fi
 
-        # Add performance enhancements
         qemu_cmd+=(
             -device virtio-balloon-pci
             -object rng-random,filename=/dev/urandom,id=rng0
             -device virtio-rng-pci,rng=rng0
         )
 
-        # Add port forwards
         if [[ -n "$PORT_FORWARDS" ]]; then
             IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
             local forward_idx=1
@@ -599,32 +584,71 @@ start_vm() {
         fi
 
         echo "Startup Mode:"
-        echo "  1) Foreground"
-        echo "  2) Background"
-        echo "  3) Screen session"
+        echo "  1) Foreground (with console)"
+        echo "  2) Background (daemon)"
+        echo "  3) Screen session (recommended)"
         
-        read -p "$(print_status "INPUT" "Select startup mode (default: 1): ")" startup_mode
-        startup_mode="${startup_mode:-1}"
+        read -p "$(print_status "INPUT" "Select startup mode (default: 3): ")" startup_mode
+        startup_mode="${startup_mode:-3}"
         
         case $startup_mode in
+            1)  # Foreground
+                echo "$SUBTLE_SEP"
+                print_status "INFO" "Starting VM in foreground..."
+                print_status "INFO" "Press Ctrl+C to stop the VM"
+                "${qemu_cmd[@]}"
+                print_status "INFO" "VM has been shut down"
+                ;;
+                
             2)  # Background
-                "${qemu_cmd[@]}" &
+                "${qemu_cmd[@]}" >/dev/null 2>&1 &
                 print_status "SUCCESS" "VM started in background"
                 ;;
                 
-            3)  # Screen
+            3)  # Screen session
                 screen -dmS "qemu-$vm_name" "${qemu_cmd[@]}"
-                print_status "SUCCESS" "VM started in screen session"
-                ;;
-                
-            *)  # Foreground
-                echo "$SUBTLE_SEP"
-                "${qemu_cmd[@]}"
-                print_status "INFO" "VM has been shut down"
+                print_status "SUCCESS" "VM started in screen session 'qemu-$vm_name'"
+                print_status "INFO" "Attach with: screen -r qemu-$vm_name"
+                print_status "INFO" "Detach with: Ctrl+A then D"
                 ;;
         esac
         
         log_action "START_VM" "$vm_name" "Started"
+    fi
+}
+
+# Function to stop VM
+stop_vm() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        section_header "STOP VIRTUAL MACHINE"
+        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        
+        if is_vm_running "$vm_name"; then
+            print_status "INFO" "Stopping VM..."
+            
+            # Check if it's in a screen session
+            if screen -list | grep -q "qemu-$vm_name"; then
+                screen -S "qemu-$vm_name" -X quit
+                print_status "SUCCESS" "VM stopped (screen session terminated)"
+            else
+                # Kill by process name
+                pkill -f "qemu-system-x86_64.*$vm_name"
+                sleep 2
+                
+                if is_vm_running "$vm_name"; then
+                    pkill -9 -f "qemu-system-x86_64.*$vm_name"
+                    print_status "SUCCESS" "VM force stopped"
+                else
+                    print_status "SUCCESS" "VM stopped"
+                fi
+            fi
+            
+            log_action "STOP_VM" "$vm_name" "Stopped"
+        else
+            print_status "INFO" "VM $vm_name is not running"
+        fi
     fi
 }
 
@@ -639,19 +663,23 @@ show_vm_info() {
         echo -e "  ${COLOR_GRAY}Name:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}OS:${COLOR_RESET} $OS_TYPE"
         echo -e "  ${COLOR_GRAY}Created:${COLOR_RESET} $CREATED"
-        echo -e "  ${COLOR_GRAY}Status:${COLOR_RESET} $(is_vm_running "$vm_name" && echo -e "${COLOR_GREEN}Running${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Stopped${COLOR_RESET}")"
+        echo -e "  ${COLOR_Gray}Status:${COLOR_RESET} $(is_vm_running "$vm_name" && echo -e "${COLOR_GREEN}Running${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Stopped${COLOR_RESET}")"
         
         echo -e "\n${COLOR_WHITE}Resources:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
         echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
         
         echo -e "\n${COLOR_WHITE}Network:${COLOR_RESET}"
         echo -e "  ${COLOR_Gray}IP:${COLOR_RESET} $STATIC_IP"
         echo -e "  ${COLOR_Gray}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+        if [[ -n "$PORT_FORWARDS" ]]; then
+            echo -e "  ${COLOR_Gray}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
+        fi
         
         echo -e "\n${COLOR_WHITE}Access:${COLOR_RESET}"
         echo -e "  ${COLOR_Gray}Username:${COLOR_RESET} ${COLOR_GREEN}$USERNAME${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Password:${COLOR_RESET} ********"
         
         echo
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
@@ -678,24 +706,6 @@ delete_vm() {
             log_action "DELETE_VM" "$vm_name" "Deleted"
         else
             print_status "INFO" "Deletion cancelled"
-        fi
-    fi
-}
-
-# Function to stop VM
-stop_vm() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        section_header "STOP VIRTUAL MACHINE"
-        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
-        
-        if is_vm_running "$vm_name"; then
-            pkill -f "qemu-system-x86_64.*$vm_name"
-            print_status "SUCCESS" "VM $vm_name stopped"
-            log_action "STOP_VM" "$vm_name" "Stopped"
-        else
-            print_status "INFO" "VM $vm_name is not running"
         fi
     fi
 }
@@ -757,7 +767,7 @@ main_menu() {
         section_header "MAIN MENU"
         echo "  1) Create a new VM"
         if [ $vm_count -gt 0 ]; then
-            echo "  2) Start a VM"
+            echo "  2) Start/Manage a VM"
             echo "  3) Stop a VM"
             echo "  4) Show VM info"
             echo "  5) Delete a VM"
@@ -774,7 +784,7 @@ main_menu() {
                 ;;
             2)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to start: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         start_vm "${vms[$((vm_num-1))]}"
                     else
