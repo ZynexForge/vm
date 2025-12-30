@@ -20,6 +20,11 @@ BRAND_PREFIX="ZynexForge-"
 EPYC_CPU_FLAGS="host,topoext=on,svm=on,kvm=on"
 EPYC_CPU_TOPOLOGY="sockets=1,dies=1,cores=8,threads=2"
 
+# Network settings
+DEFAULT_IP="10.0.2.15"
+DEFAULT_GATEWAY="10.0.2.2"
+DEFAULT_DNS="8.8.8.8,8.8.4.4"
+
 # Display banner
 display_banner() {
     clear
@@ -111,6 +116,9 @@ validate_input() {
         "username")
             [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]] && [ ${#1} -le 32 ]
             ;;
+        "ip")
+            [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            ;;
         *)
             return 1
             ;;
@@ -189,6 +197,7 @@ load_config() {
     if [[ -f "$config" ]]; then
         unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
+        unset VM_IP VM_GATEWAY VM_DNS
         
         source "$config"
         return 0
@@ -219,6 +228,9 @@ PORT_FORWARDS="$PORT_FORWARDS"
 IMG_FILE="$IMG_FILE"
 SEED_FILE="$SEED_FILE"
 CREATED="$CREATED"
+VM_IP="$VM_IP"
+VM_GATEWAY="$VM_GATEWAY"
+VM_DNS="$VM_DNS"
 EOF
     
     chmod 600 "$config"
@@ -360,6 +372,45 @@ create_vm() {
         fi
     done
     
+    # Network settings
+    print_info "Network Configuration:"
+    while true; do
+        read -p "$(print_input "VM IP Address (default: $DEFAULT_IP): ")" VM_IP
+        VM_IP="${VM_IP:-$DEFAULT_IP}"
+        if validate_input "ip" "$VM_IP"; then
+            break
+        fi
+        print_error "Invalid IP address format (e.g., 10.0.2.15)"
+    done
+    
+    while true; do
+        read -p "$(print_input "Gateway (default: $DEFAULT_GATEWAY): ")" VM_GATEWAY
+        VM_GATEWAY="${VM_GATEWAY:-$DEFAULT_GATEWAY}"
+        if validate_input "ip" "$VM_GATEWAY"; then
+            break
+        fi
+        print_error "Invalid IP address format (e.g., 10.0.2.2)"
+    done
+    
+    while true; do
+        read -p "$(print_input "DNS Servers (comma-separated, default: $DEFAULT_DNS): ")" VM_DNS
+        VM_DNS="${VM_DNS:-$DEFAULT_DNS}"
+        # Validate DNS servers
+        local valid=true
+        IFS=',' read -ra dns_servers <<< "$VM_DNS"
+        for dns in "${dns_servers[@]}"; do
+            dns=$(echo "$dns" | xargs)  # Trim whitespace
+            if ! validate_input "ip" "$dns"; then
+                print_error "Invalid DNS server IP: $dns"
+                valid=false
+                break
+            fi
+        done
+        if $valid; then
+            break
+        fi
+    done
+    
     # Port forwards
     read -p "$(print_input "Additional port forwards (e.g., 8080:80,8443:443): ")" PORT_FORWARDS
     
@@ -376,10 +427,11 @@ create_vm() {
     
     print_success "ZynexForge VM '$VM_NAME' created successfully!"
     print_info "Configuration: $CPUS vCPUs, ${MEMORY}MB RAM, $DISK_SIZE disk"
+    print_info "Network: IP=$VM_IP, Gateway=$VM_GATEWAY, DNS=$VM_DNS"
     print_info "To start: Select VM from main menu"
 }
 
-# Setup VM image (improved)
+# Setup VM image (improved with networking)
 setup_vm() {
     print_info "Preparing VM image..."
     
@@ -415,7 +467,14 @@ setup_vm() {
         print_warn "Using plain password (install 'openssl' package for secure hashing)"
     fi
     
-    # Cloud-init config
+    # Prepare DNS servers array for cloud-config
+    local dns_servers_yaml=""
+    IFS=',' read -ra dns_servers <<< "$VM_DNS"
+    for dns in "${dns_servers[@]}"; do
+        dns_servers_yaml="${dns_servers_yaml}  - $(echo "$dns" | xargs)\n"
+    done
+    
+    # Cloud-init config with network configuration
     cat > /tmp/user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
@@ -432,16 +491,49 @@ chpasswd:
     root:$PASSWORD
     $USERNAME:$PASSWORD
   expire: false
+manage_etc_hosts: true
+package_update: true
+package_upgrade: true
 packages:
   - qemu-guest-agent
+  - net-tools
+  - iputils-ping
+  - dnsutils
+  - curl
+  - wget
+  - neofetch
+write_files:
+  - path: /etc/netplan/50-cloud-init.yaml
+    content: |
+      network:
+        version: 2
+        ethernets:
+          eth0:
+            dhcp4: false
+            addresses:
+              - $VM_IP/24
+            gateway4: $VM_GATEWAY
+            nameservers:
+              addresses: [$(echo "$VM_DNS" | tr ',' ' ')]
 runcmd:
+  - netplan apply
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
+  - echo "ZynexForge VM Ready" > /etc/motd
+  - echo "IP Address: $VM_IP" >> /etc/motd
+  - echo "Hostname: $HOSTNAME" >> /etc/motd
 EOF
     
     cat > /tmp/meta-data <<EOF
 instance-id: $VM_NAME
 local-hostname: $HOSTNAME
+network-interfaces: |
+  auto eth0
+  iface eth0 inet static
+  address $VM_IP
+  netmask 255.255.255.0
+  gateway $VM_GATEWAY
+  dns-nameservers $(echo "$VM_DNS" | tr ',' ' ')
 EOF
     
     # Create seed image
@@ -458,7 +550,7 @@ EOF
     log_message "CREATE" "Created VM: $VM_NAME ($OS_TYPE)"
 }
 
-# Start VM (FIXED - runs in foreground like Script 2)
+# Start VM (FIXED - runs in foreground with networking)
 start_vm() {
     local vm="$1"
     
@@ -487,8 +579,11 @@ start_vm() {
         print_info "Starting ZynexForge VM: $vm"
         print_info "SSH Access: ssh -p $SSH_PORT $USERNAME@localhost"
         print_info "Password: $PASSWORD"
+        print_info "VM IP: $VM_IP"
+        print_info "Gateway: $VM_GATEWAY"
+        print_info "DNS: $VM_DNS"
         
-        # Build QEMU command
+        # Build QEMU command with proper networking
         local qemu_cmd=(
             qemu-system-x86_64
             -name "$vm"
@@ -498,7 +593,7 @@ start_vm() {
             -m "$MEMORY"
             -drive "file=$IMG_FILE,if=virtio,format=qcow2,cache=directsync"
             -drive "file=$SEED_FILE,if=virtio,format=raw,readonly=on"
-            -netdev "user,id=net0,hostfwd=tcp::$SSH_PORT-:22"
+            -netdev "user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=$VM_GATEWAY,hostfwd=tcp::$SSH_PORT-:22"
             -device "virtio-net-pci,netdev=net0,mac=52:54:00:$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256)))"
             -device virtio-balloon-pci
             -object rng-random,filename=/dev/urandom,id=rng0
@@ -534,6 +629,7 @@ start_vm() {
         print_info "══════════════════════════════════════════════════"
         print_info "VM '$vm' is now running!"
         print_info "SSH Connection: ssh -p $SSH_PORT $USERNAME@localhost"
+        print_info "VM IP: $VM_IP (internal network)"
         print_info "Password: $PASSWORD"
         if [[ "$GUI_MODE" == false ]]; then
             print_info "To exit: Press 'Ctrl+A' then 'X'"
@@ -641,6 +737,9 @@ show_vm_info() {
         printf "│ %-20s: %-30s │\n" "vCPUs" "$CPUS"
         printf "│ %-20s: %-30s │\n" "Disk Size" "$DISK_SIZE"
         printf "│ %-20s: %-30s │\n" "GUI Mode" "$GUI_MODE"
+        printf "│ %-20s: %-30s │\n" "VM IP" "$VM_IP"
+        printf "│ %-20s: %-30s │\n" "Gateway" "$VM_GATEWAY"
+        printf "│ %-20s: %-30s │\n" "DNS Servers" "$VM_DNS"
         printf "│ %-20s: %-30s │\n" "Created" "$CREATED"
         printf "│ %-20s: %-30s │\n" "Port Forwards" "${PORT_FORWARDS:-None}"
         echo "├─────────────────────────────────────────────────────┤"
@@ -648,6 +747,7 @@ show_vm_info() {
         echo "├─────────────────────────────────────────────────────┤"
         echo "│ SSH: ssh -p $SSH_PORT $USERNAME@localhost           │"
         echo "│ Password: $PASSWORD                                 │"
+        echo "│ VM IP: $VM_IP                                       │"
         echo "└─────────────────────────────────────────────────────┘"
         echo ""
         
@@ -677,8 +777,11 @@ edit_vm() {
             echo "  5) Memory (Current: ${MEMORY}MB)"
             echo "  6) vCPUs (Current: $CPUS)"
             echo "  7) GUI Mode (Current: $GUI_MODE)"
-            echo "  8) Port Forwards (Current: ${PORT_FORWARDS:-None})"
-            echo "  9) Disk Size (Current: $DISK_SIZE)"
+            echo "  8) VM IP (Current: $VM_IP)"
+            echo "  9) Gateway (Current: $VM_GATEWAY)"
+            echo "  10) DNS Servers (Current: $VM_DNS)"
+            echo "  11) Port Forwards (Current: ${PORT_FORWARDS:-None})"
+            echo "  12) Disk Size (Current: $DISK_SIZE)"
             echo "  0) Save and Return"
             echo ""
             
@@ -769,10 +872,51 @@ edit_vm() {
                     done
                     ;;
                 8)
+                    while true; do
+                        read -p "$(print_input "New VM IP [$VM_IP]: ")" new_ip
+                        new_ip="${new_ip:-$VM_IP}"
+                        if validate_input "ip" "$new_ip"; then
+                            VM_IP="$new_ip"
+                            break
+                        fi
+                    done
+                    ;;
+                9)
+                    while true; do
+                        read -p "$(print_input "New Gateway [$VM_GATEWAY]: ")" new_gateway
+                        new_gateway="${new_gateway:-$VM_GATEWAY}"
+                        if validate_input "ip" "$new_gateway"; then
+                            VM_GATEWAY="$new_gateway"
+                            break
+                        fi
+                    done
+                    ;;
+                10)
+                    while true; do
+                        read -p "$(print_input "New DNS Servers [$VM_DNS]: ")" new_dns
+                        new_dns="${new_dns:-$VM_DNS}"
+                        # Validate DNS servers
+                        local valid=true
+                        IFS=',' read -ra dns_servers <<< "$new_dns"
+                        for dns in "${dns_servers[@]}"; do
+                            dns=$(echo "$dns" | xargs)
+                            if ! validate_input "ip" "$dns"; then
+                                print_error "Invalid DNS server IP: $dns"
+                                valid=false
+                                break
+                            fi
+                        done
+                        if $valid; then
+                            VM_DNS="$new_dns"
+                            break
+                        fi
+                    done
+                    ;;
+                11)
                     read -p "$(print_input "New port forwards [$PORT_FORWARDS]: ")" new_forwards
                     PORT_FORWARDS="${new_forwards:-$PORT_FORWARDS}"
                     ;;
-                9)
+                12)
                     while true; do
                         read -p "$(print_input "New disk size [$DISK_SIZE]: ")" new_disk_size
                         new_disk_size="${new_disk_size:-$DISK_SIZE}"
@@ -893,6 +1037,7 @@ show_vm_performance() {
             echo "  Memory: $MEMORY MB"
             echo "  CPUs: $CPUS"
             echo "  Disk: $DISK_SIZE"
+            echo "  IP: $VM_IP"
         fi
         echo "══════════════════════════════════════════════════"
         read -p "$(print_input "Press Enter to continue...")"
