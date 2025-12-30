@@ -40,8 +40,7 @@ display_header() {
     cat << "EOF"
 
 __________                             ___________                         
-\____    /___.__. ____   ____ ___  ___ \_   _____/__________  ____   ____  
-  /     /<   |  |/    \_/ __ \\  \/  /  |    __)/  _ \_  __ \/ ___\_/ __ \ 
+\____    /_____/ __ \/ __ \/ __ \/ __ \/  _ \_  __ \/ __ \_/ __ \ 
  /     /_ \___  |   |  \  ___/ >    <   |     \(  <_> )  | \/ /_/  >  ___/ 
 /_______ \/ ____|___|  /\___  >__/\_ \  \___  / \____/|__|  \___  / \___  >
         \/\/         \/     \/      \/      \/             /_____/      \/ 
@@ -67,6 +66,7 @@ print_status() {
         "INPUT") echo -e "${COLOR_CYAN}[INPUT]${COLOR_RESET} $message" ;;
         "BEAST") echo -e "${COLOR_MAGENTA}[BEAST]${COLOR_RESET} $message" ;;
         "PROXMOX") echo -e "${COLOR_BLUE}[PROXMOX]${COLOR_RESET} $message" ;;
+        "AMD") echo -e "${COLOR_MAGENTA}[AMD]${COLOR_RESET} $message" ;;
         *) echo -e "${COLOR_WHITE}[$type]${COLOR_RESET} $message" ;;
     esac
 }
@@ -87,19 +87,39 @@ section_header() {
     echo "$SUBTLE_SEP"
 }
 
-# Function to detect AMD CPU
+# Function to detect AMD CPU (improved detection)
 detect_amd_cpu() {
-    if grep -qi "amd" /proc/cpuinfo || grep -qi "ryzen" /proc/cpuinfo; then
+    if grep -qi "vendor_id.*AMD" /proc/cpuinfo || grep -qi "model.*AMD" /proc/cpuinfo || \
+       grep -qi "vendor.*AMD" /proc/cpuinfo || grep -qi "ryzen" /proc/cpuinfo || \
+       grep -qi "epyc" /proc/cpuinfo || grep -qi "athlon" /proc/cpuinfo || \
+       grep -qi "phenom" /proc/cpuinfo || grep -qi "fx" /proc/cpuinfo; then
         return 0
     else
         return 1
     fi
 }
 
+# Function to get AMD CPU model
+get_amd_cpu_model() {
+    if grep -qi "ryzen" /proc/cpuinfo; then
+        echo "Ryzen"
+    elif grep -qi "epyc" /proc/cpuinfo; then
+        echo "EPYC"
+    elif grep -qi "athlon" /proc/cpuinfo; then
+        echo "Athlon"
+    elif grep -qi "phenom" /proc/cpuinfo; then
+        echo "Phenom"
+    elif grep -qi "fx" /proc/cpuinfo; then
+        echo "FX"
+    else
+        echo "AMD"
+    fi
+}
+
 # Function to detect AMD GPU
 detect_amd_gpu() {
     if command -v lspci >/dev/null 2>&1; then
-        if lspci | grep -i "vga\|3d\|display" | grep -qi "amd\|radeon"; then
+        if lspci | grep -i "vga\|3d\|display" | grep -qi "amd\|radeon\|ati"; then
             return 0
         fi
     fi
@@ -129,7 +149,7 @@ detect_intel_gpu() {
 # Function to detect any GPU for passthrough
 detect_gpu() {
     if command -v lspci >/dev/null 2>&1; then
-        if lspci | grep -i "vga\|3d\|display" | grep -qi "nvidia\|amd\|radeon\|intel"; then
+        if lspci | grep -i "vga\|3d\|display" | grep -qi "nvidia\|amd\|radeon\|intel\|ati"; then
             return 0
         fi
     fi
@@ -140,13 +160,13 @@ detect_gpu() {
 get_gpu_info() {
     local gpu_info=""
     if detect_amd_gpu; then
-        gpu_info="AMD GPU detected"
+        gpu_info="AMD GPU"
     elif detect_nvidia_gpu; then
-        gpu_info="NVIDIA GPU detected"
+        gpu_info="NVIDIA GPU"
     elif detect_intel_gpu; then
-        gpu_info="Intel GPU detected"
+        gpu_info="Intel GPU"
     else
-        gpu_info="No GPU detected"
+        gpu_info="No GPU"
     fi
     echo "$gpu_info"
 }
@@ -172,9 +192,16 @@ get_gpu_pci_addresses() {
 
 # Function to check if IOMMU is enabled
 check_iommu() {
-    if grep -q "iommu=on" /proc/cmdline || grep -q "amd_iommu=on" /proc/cmdline || grep -q "intel_iommu=on" /proc/cmdline; then
+    if grep -q "iommu=on" /proc/cmdline || grep -q "amd_iommu=on" /proc/cmdline || \
+       grep -q "intel_iommu=on" /proc/cmdline || dmesg | grep -qi "iommu.*enabled"; then
         return 0
     fi
+    
+    # Check via /sys
+    if [[ -d "/sys/kernel/iommu_groups" ]] && [[ $(ls /sys/kernel/iommu_groups/ 2>/dev/null | wc -l) -gt 0 ]]; then
+        return 0
+    fi
+    
     return 1
 }
 
@@ -342,7 +369,7 @@ EOF
 
 # Function to setup VM image with AMD optimization
 setup_vm_image() {
-    print_status "BEAST" "Setting up VM storage with AMD optimization..."
+    print_status "AMD" "Setting up VM storage with AMD optimization..."
     
     # Create cache directory
     mkdir -p "$IMAGES_DIR"
@@ -362,7 +389,7 @@ setup_vm_image() {
     fi
     
     # Create AMD-optimized qcow2 image
-    print_status "BEAST" "Creating AMD-optimized disk image..."
+    print_status "AMD" "Creating AMD-optimized disk image..."
     
     # Convert the downloaded image to qcow2 format with AMD optimizations
     qemu-img convert -f qcow2 -O qcow2 -o cluster_size=2M,preallocation=metadata,compat=1.1,lazy_refcounts=on \
@@ -443,7 +470,7 @@ EOF
         exit 1
     fi
     
-    print_status "BEAST" "VM image optimized for AMD performance!"
+    print_status "AMD" "VM image optimized for AMD performance!"
 }
 
 # Function to setup Proxmox VM
@@ -558,6 +585,7 @@ create_new_vm() {
     
     # Detect system capabilities
     local HAS_AMD=false
+    local AMD_CPU_MODEL=""
     local HAS_GPU=false
     local GPU_TYPE="none"
     local IOMMU_ENABLED=false
@@ -565,7 +593,10 @@ create_new_vm() {
     
     if detect_amd_cpu; then
         HAS_AMD=true
-        print_status "BEAST" "AMD CPU detected! Enabling Ryzen/EPYC optimizations..."
+        AMD_CPU_MODEL=$(get_amd_cpu_model)
+        print_status "AMD" "$AMD_CPU_MODEL CPU detected! Enabling AMD optimizations..."
+    else
+        print_status "INFO" "Non-AMD CPU detected"
     fi
     
     if check_iommu; then
@@ -727,7 +758,7 @@ create_new_vm() {
     
     if [ "$HAS_AMD" = true ]; then
         CPU_TYPE="EPYC-v4"
-        print_status "BEAST" "Using AMD EPYC-v4 CPU model with all optimizations!"
+        print_status "AMD" "Using AMD EPYC-v4 CPU model with all optimizations!"
     else
         CPU_TYPE="host"
         print_status "INFO" "Using host CPU passthrough"
@@ -756,7 +787,7 @@ create_new_vm() {
                 if detect_amd_gpu; then
                     GPU_PASSTHROUGH=true
                     GPU_TYPE="amd"
-                    print_status "BEAST" "AMD GPU passthrough enabled!"
+                    print_status "AMD" "AMD GPU passthrough enabled!"
                 else
                     GPU_PASSTHROUGH=false
                     print_status "ERROR" "AMD GPU not detected"
@@ -879,11 +910,14 @@ create_new_vm() {
             echo -e "  ${COLOR_GRAY}After boot, install Proxmox VE with:${COLOR_RESET}"
             echo -e "  ${COLOR_GRAY}1. Connect to console or SSH${COLOR_RESET}"
             echo -e "  ${COLOR_GRAY}2. Update system: apt update && apt full-upgrade -y${COLOR_RESET}"
-            echo -e "  ${COLOR_Gray}3. Install Proxmox: apt install -y proxmox-ve${COLOR_RESET}"
+            echo -e "  ${COLOR_GRAY}3. Install Proxmox: apt install -y proxmox-ve${COLOR_RESET}"
         fi
         
         echo -e "\n${COLOR_WHITE}Performance Features:${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}AMD Optimized:${COLOR_RESET} $HAS_AMD"
+        if [ "$HAS_AMD" = true ]; then
+            echo -e "  ${COLOR_GRAY}AMD CPU Model:${COLOR_RESET} $AMD_CPU_MODEL"
+        fi
         echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
         if [ "$GPU_PASSTHROUGH" = true ]; then
             echo -e "  ${COLOR_GRAY}GPU Type:${COLOR_RESET} $GPU_TYPE"
@@ -949,7 +983,7 @@ start_vm() {
                     print_status "INFO" "Access Information:"
                     echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
                     echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
-                    echo -e "  ${COLOR_Gray}IP:${COLOR_RESET} $STATIC_IP"
+                    echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
                     read -p "$(print_status "INPUT" "Press Enter to continue...")"
                     ;;
                 4)
@@ -974,7 +1008,7 @@ start_vm() {
         print_status "INFO" "Access Information:"
         echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
         echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
-        echo -e "  ${COLOR_Gray}IP:${COLOR_RESET} $STATIC_IP"
+        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
         echo
         
         # Build QEMU command with AMD optimizations
@@ -996,7 +1030,7 @@ start_vm() {
         if [[ "$GPU_PASSTHROUGH" == true ]]; then
             local gpu_pci_addresses=($GPU_PCI_ADDRESSES)
             if [ ${#gpu_pci_addresses[@]} -gt 0 ]; then
-                print_status "BEAST" "Enabling GPU passthrough for $GPU_TYPE GPU..."
+                print_status "AMD" "Enabling GPU passthrough for $GPU_TYPE GPU..."
                 
                 # Add vfio-pci devices
                 for pci_addr in "${gpu_pci_addresses[@]}"; do
@@ -1209,22 +1243,22 @@ show_vm_performance() {
         echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
+        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
         if [ "$GPU_PASSTHROUGH" = true ]; then
-            echo -e "  ${COLOR_Gray}GPU Type:${COLOR_RESET} $GPU_TYPE"
+            echo -e "  ${COLOR_GRAY}GPU Type:${COLOR_RESET} $GPU_TYPE"
         fi
         
         echo -e "\n${COLOR_WHITE}Optimizations:${COLOR_RESET}"
         if [[ "$CPU_TYPE" == "EPYC-v4" ]]; then
-            echo -e "  ${COLOR_Gray}CPU:${COLOR_RESET} ${COLOR_GREEN}AMD EPYC Optimized${COLOR_RESET}"
-            echo -e "  ${COLOR_Gray}Features:${COLOR_RESET} L3 Cache enabled, Topology Extensions"
+            echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} ${COLOR_GREEN}AMD EPYC Optimized${COLOR_RESET}"
+            echo -e "  ${COLOR_GRAY}Features:${COLOR_RESET} L3 Cache enabled, Topology Extensions"
         else
-            echo -e "  ${COLOR_Gray}CPU:${COLOR_RESET} Host Passthrough"
+            echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} Host Passthrough"
         fi
-        echo -e "  ${COLOR_Gray}Disk Cache:${COLOR_RESET} Writeback + Discard"
-        echo -e "  ${COLOR_Gray}Network:${COLOR_RESET} VirtIO"
+        echo -e "  ${COLOR_GRAY}Disk Cache:${COLOR_RESET} Writeback + Discard"
+        echo -e "  ${COLOR_GRAY}Network:${COLOR_RESET} VirtIO"
         if [ -d "/dev/hugepages" ]; then
-            echo -e "  ${COLOR_Gray}Huge Pages:${COLOR_RESET} Enabled"
+            echo -e "  ${COLOR_GRAY}Huge Pages:${COLOR_RESET} Enabled"
         fi
         
         echo
@@ -1284,26 +1318,26 @@ show_vm_info() {
         echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
+        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
         if [ "$GPU_PASSTHROUGH" = true ]; then
-            echo -e "  ${COLOR_Gray}GPU Type:${COLOR_RESET} $GPU_TYPE"
+            echo -e "  ${COLOR_GRAY}GPU Type:${COLOR_RESET} $GPU_TYPE"
         fi
         
         echo -e "\n${COLOR_WHITE}Network:${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}IP:${COLOR_RESET} $STATIC_IP"
-        echo -e "  ${COLOR_Gray}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
+        echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
         if [[ -n "$PORT_FORWARDS" ]]; then
-            echo -e "  ${COLOR_Gray}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
+            echo -e "  ${COLOR_GRAY}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
         fi
         
         echo -e "\n${COLOR_WHITE}Access:${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Username:${COLOR_RESET} ${COLOR_GREEN}$USERNAME${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Password:${COLOR_RESET} ********"
+        echo -e "  ${COLOR_GRAY}Username:${COLOR_RESET} ${COLOR_GREEN}$USERNAME${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} ********"
         
         if [ "$PROXMOX_MODE" = true ]; then
             echo -e "\n${COLOR_WHITE}Proxmox VE:${COLOR_RESET}"
-            echo -e "  ${COLOR_Gray}Mode:${COLOR_RESET} Installation Ready"
-            echo -e "  ${COLOR_Gray}Template:${COLOR_RESET} $PROXMOX_TEMPLATE"
+            echo -e "  ${COLOR_GRAY}Mode:${COLOR_RESET} Installation Ready"
+            echo -e "  ${COLOR_GRAY}Template:${COLOR_RESET} $PROXMOX_TEMPLATE"
         fi
         
         echo
@@ -1480,19 +1514,19 @@ show_system_overview() {
     
     # System info
     echo -e "\n${COLOR_WHITE}System Information:${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} $(detect_amd_cpu && echo -e "${COLOR_GREEN}AMD Ryzen/EPYC${COLOR_RESET}" || echo "Intel/Other")"
-    echo -e "  ${COLOR_Gray}GPU:${COLOR_RESET} $(get_gpu_info)"
-    echo -e "  ${COLOR_Gray}IOMMU:${COLOR_RESET} $(check_iommu && echo -e "${COLOR_GREEN}Enabled${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Disabled${COLOR_RESET}")"
-    echo -e "  ${COLOR_Gray}Memory:${COLOR_RESET} $(free -h | awk '/^Mem:/{print $3 "/" $2 " used"}')"
-    echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} $(df -h / | awk 'NR==2 {print $4 " free"}')"
+    echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} $(detect_amd_cpu && echo -e "${COLOR_GREEN}AMD $(get_amd_cpu_model)${COLOR_RESET}" || echo "Intel/Other")"
+    echo -e "  ${COLOR_GRAY}GPU:${COLOR_RESET} $(get_gpu_info)"
+    echo -e "  ${COLOR_GRAY}IOMMU:${COLOR_RESET} $(check_iommu && echo -e "${COLOR_GREEN}Enabled${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Disabled${COLOR_RESET}")"
+    echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} $(free -h | awk '/^Mem:/{print $3 "/" $2 " used"}')"
+    echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} $(df -h / | awk 'NR==2 {print $4 " free"}')"
     
     # AMD-specific info
     if detect_amd_cpu; then
         echo -e "\n${COLOR_WHITE}AMD Optimizations:${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}CPU Model:${COLOR_RESET} EPYC-v4"
-        echo -e "  ${COLOR_Gray}Features:${COLOR_RESET} L3 Cache, Topology Extensions"
+        echo -e "  ${COLOR_GRAY}CPU Model:${COLOR_RESET} EPYC-v4"
+        echo -e "  ${COLOR_GRAY}Features:${COLOR_RESET} L3 Cache, Topology Extensions"
         if [ -d "/dev/hugepages" ]; then
-            echo -e "  ${COLOR_Gray}Huge Pages:${COLOR_RESET} Enabled"
+            echo -e "  ${COLOR_GRAY}Huge Pages:${COLOR_RESET} Enabled"
         fi
     fi
     
