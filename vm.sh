@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================
-# ZYNEXFORGE™ - Virtual Machine Manager
+# ZYNEXFORGE™ - Ultimate VM Manager
 # =============================
 
 # Terminal colors
@@ -46,7 +46,7 @@ __________                             ___________
 EOF
     echo -e "${COLOR_RESET}"
     echo -e "${COLOR_WHITE}ZYNEXFORGE™ Virtual Machine Manager${COLOR_RESET}"
-    echo -e "${COLOR_YELLOW}Max VMs: $MAX_VMS${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}Max VMs: $MAX_VMS | AMD Optimized | Beast Performance${COLOR_RESET}"
     echo "$SEPARATOR"
     echo
 }
@@ -62,6 +62,7 @@ print_status() {
         "ERROR") echo -e "${COLOR_RED}[ERROR]${COLOR_RESET} $message" ;;
         "SUCCESS") echo -e "${COLOR_GREEN}[SUCCESS]${COLOR_RESET} $message" ;;
         "INPUT") echo -e "${COLOR_CYAN}[INPUT]${COLOR_RESET} $message" ;;
+        "BEAST") echo -e "${COLOR_MAGENTA}[BEAST]${COLOR_RESET} $message" ;;
         *) echo -e "${COLOR_WHITE}[$type]${COLOR_RESET} $message" ;;
     esac
 }
@@ -80,6 +81,24 @@ section_header() {
     echo
     echo -e "${COLOR_WHITE}$title${COLOR_RESET}"
     echo "$SUBTLE_SEP"
+}
+
+# Function to detect AMD CPU
+detect_amd_cpu() {
+    if grep -qi "amd" /proc/cpuinfo || grep -qi "ryzen" /proc/cpuinfo; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to detect GPU
+detect_gpu() {
+    if lspci | grep -i "vga\|3d\|display" | grep -qi "nvidia\|amd\|radeon"; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # Function to generate random IP
@@ -236,9 +255,9 @@ EOF
     log_action "SAVE_CONFIG" "$VM_NAME" "Configuration updated"
 }
 
-# Function to setup VM image
+# Function to setup VM image with beast optimization
 setup_vm_image() {
-    print_status "INFO" "Setting up VM storage..."
+    print_status "BEAST" "Setting up VM storage with ultimate optimization..."
     
     # Create cache directory
     mkdir -p "$IMAGES_DIR"
@@ -260,42 +279,101 @@ setup_vm_image() {
     # Copy to VM location
     cp "$cached_image" "$IMG_FILE"
     
-    # Resize disk
-    qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null || \
-    qemu-img create -f qcow2 "$IMG_FILE" "$DISK_SIZE"
+    # Create beast-optimized qcow2 image
+    print_status "BEAST" "Creating beast-optimized disk image..."
+    qemu-img create -f qcow2 -o cluster_size=2M,preallocation=metadata,compat=1.1,lazy_refcounts=on "$IMG_FILE" "$DISK_SIZE"
     
-    # Create cloud-init config
+    # Beast cloud-init config
     cat > user-data <<EOF
 #cloud-config
+# ZYNEXFORGE BEAST CONFIGURATION
 hostname: $HOSTNAME
 ssh_pwauth: true
 disable_root: false
+preserve_hostname: false
+manage_etc_hosts: true
+package_upgrade: true
+package_reboot_if_required: true
+timezone: UTC
+
 users:
   - name: $USERNAME
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
-    password: $(echo "$PASSWORD" | openssl passwd -6 -stdin 2>/dev/null | tr -d '\n')
+    lock_passwd: false
+    passwd: $(echo "$PASSWORD" | openssl passwd -6 -stdin 2>/dev/null | tr -d '\n')
+    groups: [adm, audio, cdrom, dialout, floppy, video, plugdev, dip, netdev, docker]
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+
+packages:
+  - qemu-guest-agent
+  - htop
+  - neofetch
+  - curl
+  - wget
+  - git
+  - python3
+  - docker.io
+  - docker-compose
+  - net-tools
+  - iperf3
+
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - echo "vm.swappiness=10" >> /etc/sysctl.conf
+  - echo "vm.dirty_ratio=10" >> /etc/sysctl.conf
+  - echo "vm.dirty_background_ratio=5" >> /etc/sysctl.conf
+  - echo "net.core.rmem_max=134217728" >> /etc/sysctl.conf
+  - echo "net.core.wmem_max=134217728" >> /etc/sysctl.conf
+  - sysctl -p
+  - timedatectl set-timezone UTC
+
+bootcmd:
+  - echo "performance" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+
+power_state:
+  mode: reboot
+  timeout: 300
+  message: "ZYNEXFORGE Beast VM is ready!"
 EOF
 
     cat > meta-data <<EOF
 instance-id: iid-$VM_NAME
 local-hostname: $HOSTNAME
+hostname: $HOSTNAME
 EOF
 
     if ! cloud-localds "$SEED_FILE" user-data meta-data; then
         print_status "ERROR" "Failed to create seed image"
         exit 1
     fi
+    
+    print_status "BEAST" "VM image optimized for beast performance!"
 }
 
-# Function to create new VM
+# Function to create beast VM
 create_new_vm() {
     if ! check_vm_limit; then
         return 1
     fi
     
     display_header
-    section_header "CREATE NEW VIRTUAL MACHINE"
+    section_header "CREATE BEAST VIRTUAL MACHINE"
+    
+    # Detect AMD CPU and GPU
+    local HAS_AMD=false
+    local HAS_GPU=false
+    
+    if detect_amd_cpu; then
+        HAS_AMD=true
+        print_status "BEAST" "AMD CPU detected! Optimizing for AMD Ryzen/EPYC..."
+    fi
+    
+    if detect_gpu; then
+        HAS_GPU=true
+        print_status "BEAST" "GPU detected! GPU passthrough available..."
+    fi
     
     # OS Selection
     section_header "OPERATING SYSTEM SELECTION"
@@ -373,32 +451,75 @@ create_new_vm() {
 
     read -p "$(print_status "INPUT" "Add SSH public keys (press Enter to skip): ")" SSH_KEYS
 
-    # Resource Allocation
-    section_header "RESOURCE ALLOCATION"
+    # BEAST Resource Allocation
+    section_header "BEAST RESOURCE ALLOCATION"
+    
+    print_status "BEAST" "Auto-configuring optimal resources..."
+    
+    # Auto-detect optimal settings
+    local TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+    local TOTAL_CPUS=$(nproc)
+    
+    # Calculate optimal resources
+    local OPTIMAL_MEMORY=$((TOTAL_MEM / 4))  # Use 25% of total RAM
+    if [ $OPTIMAL_MEMORY -gt 16384 ]; then
+        OPTIMAL_MEMORY=16384  # Cap at 16GB
+    elif [ $OPTIMAL_MEMORY -lt 2048 ]; then
+        OPTIMAL_MEMORY=2048   # Minimum 2GB
+    fi
+    
+    local OPTIMAL_CPUS=$((TOTAL_CPUS / 2))  # Use half of CPUs
+    if [ $OPTIMAL_CPUS -gt 8 ]; then
+        OPTIMAL_CPUS=8  # Cap at 8 vCPUs
+    elif [ $OPTIMAL_CPUS -lt 2 ]; then
+        OPTIMAL_CPUS=2  # Minimum 2 vCPUs
+    fi
+    
+    print_status "INFO" "System has ${TOTAL_MEM}MB RAM, ${TOTAL_CPUS} CPUs"
+    print_status "BEAST" "Recommended: ${OPTIMAL_MEMORY}MB RAM, ${OPTIMAL_CPUS} vCPUs"
     
     while true; do
-        read -p "$(print_status "INPUT" "Disk size (default: 50G): ")" DISK_SIZE
-        DISK_SIZE="${DISK_SIZE:-50G}"
+        read -p "$(print_status "INPUT" "Disk size (default: 100G): ")" DISK_SIZE
+        DISK_SIZE="${DISK_SIZE:-100G}"
         if validate_input "size" "$DISK_SIZE"; then
             break
         fi
     done
 
     while true; do
-        read -p "$(print_status "INPUT" "Memory in MB (default: 4096): ")" MEMORY
-        MEMORY="${MEMORY:-4096}"
+        read -p "$(print_status "INPUT" "Memory in MB (recommended: $OPTIMAL_MEMORY): ")" MEMORY
+        MEMORY="${MEMORY:-$OPTIMAL_MEMORY}"
         if validate_input "number" "$MEMORY"; then
             break
         fi
     done
 
     while true; do
-        read -p "$(print_status "INPUT" "Number of CPUs (default: 4): ")" CPUS
-        CPUS="${CPUS:-4}"
+        read -p "$(print_status "INPUT" "Number of CPUs (recommended: $OPTIMAL_CPUS): ")" CPUS
+        CPUS="${CPUS:-$OPTIMAL_CPUS}"
         if validate_input "number" "$CPUS"; then
             break
         fi
     done
+
+    # BEAST CPU Optimization
+    section_header "BEAST CPU OPTIMIZATION"
+    
+    if [ "$HAS_AMD" = true ]; then
+        CPU_TYPE="EPYC-v4"
+        print_status "BEAST" "Using AMD EPYC-v4 CPU with all optimizations!"
+    else
+        CPU_TYPE="host"
+        print_status "INFO" "Using host CPU passthrough"
+    fi
+
+    # GPU Passthrough
+    if [ "$HAS_GPU" = true ]; then
+        print_status "BEAST" "GPU detected! Enabling GPU passthrough for ultimate performance!"
+        GPU_PASSTHROUGH=true
+    else
+        GPU_PASSTHROUGH=false
+    fi
 
     # Network Configuration
     section_header "NETWORK CONFIGURATION"
@@ -413,8 +534,9 @@ create_new_vm() {
     NETWORK_CONFIG="user"
 
     while true; do
-        read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
-        SSH_PORT="${SSH_PORT:-2222}"
+        DEFAULT_SSH_PORT=$((22220 + $(get_vm_count)))
+        read -p "$(print_status "INPUT" "SSH Port (recommended: $DEFAULT_SSH_PORT): ")" SSH_PORT
+        SSH_PORT="${SSH_PORT:-$DEFAULT_SSH_PORT}"
         if validate_input "port" "$SSH_PORT"; then
             break
         fi
@@ -427,43 +549,52 @@ create_new_vm() {
         GUI_MODE=false
     fi
 
-    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80): ")" PORT_FORWARDS
+    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80,8443:443): ")" PORT_FORWARDS
 
-    # CPU type
-    CPU_TYPE="host"
-
-    # GPU passthrough
-    GPU_PASSTHROUGH=false
-
-    # Backup schedule
-    BACKUP_SCHEDULE="none"
-    SNAPSHOT_COUNT=5
+    # Backup & Snapshot
+    BACKUP_SCHEDULE="daily"
+    SNAPSHOT_COUNT=10
+    print_status "BEAST" "Auto-configured: Daily backups, 10 snapshots"
 
     # Final configuration
     IMG_FILE="$VM_DIR/$VM_NAME.img"
     SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
     CREATED="$(date '+%Y-%m-%d %H:%M:%S')"
 
-    section_header "DEPLOYMENT SUMMARY"
-    echo -e "${COLOR_WHITE}VM Configuration:${COLOR_RESET}"
-    echo -e "  Name: ${COLOR_CYAN}$VM_NAME${COLOR_RESET}"
-    echo -e "  OS: ${COLOR_GREEN}$os${COLOR_RESET}"
-    echo -e "  Resources: ${COLOR_YELLOW}$CPUS vCPU | ${MEMORY}MB RAM | $DISK_SIZE disk${COLOR_RESET}"
-    echo -e "  Network: ${COLOR_CYAN}$NETWORK_CONFIG${COLOR_RESET} (IP: $STATIC_IP)"
-    echo -e "  SSH Port: ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+    section_header "BEAST DEPLOYMENT SUMMARY"
+    echo -e "${COLOR_WHITE}Beast VM Configuration:${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Name:${COLOR_RESET} ${COLOR_CYAN}$VM_NAME${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}OS:${COLOR_RESET} ${COLOR_GREEN}$os${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Resources:${COLOR_RESET} ${COLOR_YELLOW}$CPUS vCPU | ${MEMORY}MB RAM | $DISK_SIZE disk${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} ${COLOR_MAGENTA}$CPU_TYPE${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} ${COLOR_MAGENTA}$GPU_PASSTHROUGH${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Network:${COLOR_RESET} ${COLOR_CYAN}$NETWORK_CONFIG${COLOR_RESET} (IP: $STATIC_IP)"
+    echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
     echo
     
-    read -p "$(print_status "INPUT" "Proceed with deployment? (Y/n): ")" confirm
+    read -p "$(print_status "INPUT" "Deploy this beast VM? (Y/n): ")" confirm
     if [[ ! "$confirm" =~ ^[Nn]$ ]]; then
         setup_vm_image
         save_vm_config
         
-        section_header "DEPLOYMENT COMPLETE"
-        print_status "SUCCESS" "VM '$VM_NAME' deployed successfully"
-        log_action "CREATE_VM" "$VM_NAME" "Created with $OS_TYPE"
+        section_header "BEAST DEPLOYMENT COMPLETE"
+        print_status "SUCCESS" "╔══════════════════════════════════════════════════════════════════════╗"
+        print_status "SUCCESS" "║                     BEAST VM DEPLOYED SUCCESSFULLY!                   ║"
+        print_status "SUCCESS" "╚══════════════════════════════════════════════════════════════════════╝"
         
-        echo -e "  ${COLOR_GRAY}SSH: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}IP: $STATIC_IP${COLOR_RESET}"
+        log_action "CREATE_VM" "$VM_NAME" "Beast VM created with $OS_TYPE, ${MEMORY}MB RAM, ${CPUS} vCPU"
+        
+        echo -e "\n${COLOR_WHITE}Access Information:${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
+        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
+        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
+        
+        echo -e "\n${COLOR_WHITE}Performance Features:${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}AMD Optimized:${COLOR_RESET} $HAS_AMD"
+        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
+        echo -e "  ${COLOR_GRAY}Daily Backups:${COLOR_RESET} Enabled"
+        
+        echo -e "\n${COLOR_YELLOW}══════════════════════════════════════════════════════════════════════${COLOR_RESET}"
         
         read -p "$(print_status "INPUT" "Start VM now? (Y/n): ")" start_now
         if [[ ! "$start_now" =~ ^[Nn]$ ]]; then
@@ -483,27 +614,24 @@ is_vm_running() {
     return 1
 }
 
-# Function to get VM PID
-get_vm_pid() {
-    local vm_name=$1
-    pgrep -f "qemu-system-x86_64.*$vm_name" 2>/dev/null || echo ""
-}
-
-# Function to start VM
+# Function to start beast VM
 start_vm() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
         section_header "START VIRTUAL MACHINE"
         echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "${COLOR_WHITE}OS:${COLOR_RESET} $OS_TYPE"
+        echo -e "${COLOR_WHITE}Resources:${COLOR_RESET} ${COLOR_YELLOW}$CPUS vCPU | ${MEMORY}MB RAM${COLOR_RESET}"
         
         if is_vm_running "$vm_name"; then
             print_status "INFO" "VM $vm_name is already running"
             
-            echo "Options for running VM:"
+            echo -e "\n${COLOR_WHITE}Options for running VM:${COLOR_RESET}"
             echo "  1) Connect to console"
             echo "  2) Stop VM"
             echo "  3) View SSH connection info"
+            echo "  4) Show performance stats"
             echo "  0) Back to menu"
             
             read -p "$(print_status "INPUT" "Select option: ")" running_option
@@ -511,11 +639,10 @@ start_vm() {
             case $running_option in
                 1)
                     print_status "INFO" "Connecting to console..."
-                    # Try to connect via screen if it's in a screen session
                     if screen -list | grep -q "qemu-$vm_name"; then
                         screen -r "qemu-$vm_name"
                     else
-                        print_status "INFO" "No screen session found. Use Ctrl+C in terminal to stop VM."
+                        print_status "INFO" "No screen session found"
                     fi
                     ;;
                 2)
@@ -523,10 +650,13 @@ start_vm() {
                     ;;
                 3)
                     print_status "INFO" "Access Information:"
-                    echo -e "  ${COLOR_GRAY}SSH: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
-                    echo -e "  ${COLOR_GRAY}Password: $PASSWORD${COLOR_RESET}"
-                    echo -e "  ${COLOR_GRAY}IP: $STATIC_IP${COLOR_RESET}"
+                    echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
+                    echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
+                    echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
                     read -p "$(print_status "INPUT" "Press Enter to continue...")"
+                    ;;
+                4)
+                    show_vm_performance "$vm_name"
                     ;;
                 *)
                     return 0
@@ -540,38 +670,53 @@ start_vm() {
             return 1
         fi
         
+        print_status "BEAST" "Starting VM with ultimate performance..."
         print_status "INFO" "Access Information:"
-        echo -e "  ${COLOR_GRAY}SSH: ssh -p $SSH_PORT $USERNAME@localhost${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Password: $PASSWORD${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}IP: $STATIC_IP${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
+        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
+        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
         echo
         
-        # QEMU command
+        # Beast QEMU command
         local qemu_cmd=(
             qemu-system-x86_64
             -enable-kvm
-            -m "$MEMORY"
-            -smp "$CPUS"
+            -machine "type=q35,accel=kvm"
             -cpu "$CPU_TYPE"
-            -drive "file=$IMG_FILE,format=qcow2"
-            -drive "file=$SEED_FILE,format=raw"
-            -boot order=c
+            -m "$MEMORY"
+            -smp "$CPUS,sockets=1,cores=$CPUS,threads=1"
+            -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,discard=on"
+            -drive "file=$SEED_FILE,format=raw,if=virtio"
+            -boot "order=c,menu=on"
             -device "virtio-net-pci,netdev=n0"
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
-
-        if [[ "$GUI_MODE" == true ]]; then
-            qemu_cmd+=(-vga virtio -display gtk,gl=on)
+        
+        # Add GPU passthrough if enabled
+        if [[ "$GPU_PASSTHROUGH" == true ]]; then
+            qemu_cmd+=(
+                -device "vfio-pci,host=01:00.0,multifunction=on"
+                -device "vfio-pci,host=01:00.1"
+                -vga none
+                -nographic
+            )
+        elif [[ "$GUI_MODE" == true ]]; then
+            qemu_cmd+=(-vga "virtio" -display "gtk,gl=on")
         else
-            qemu_cmd+=(-nographic -serial mon:stdio)
+            qemu_cmd+=(-nographic -serial "mon:stdio")
         fi
-
+        
+        # Beast performance enhancements
         qemu_cmd+=(
-            -device virtio-balloon-pci
-            -object rng-random,filename=/dev/urandom,id=rng0
-            -device virtio-rng-pci,rng=rng0
+            -device "virtio-balloon-pci"
+            -object "rng-random,filename=/dev/urandom,id=rng0"
+            -device "virtio-rng-pci,rng=rng0"
+            -rtc "base=utc,clock=host,driftfix=slew"
+            -no-reboot
+            -global "kvm-pit.lost_tick_policy=delay"
         )
-
+        
+        # Add port forwards
         if [[ -n "$PORT_FORWARDS" ]]; then
             IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
             local forward_idx=1
@@ -582,8 +727,8 @@ start_vm() {
                 ((forward_idx++))
             done
         fi
-
-        echo "Startup Mode:"
+        
+        echo -e "${COLOR_WHITE}Startup Mode:${COLOR_RESET}"
         echo "  1) Foreground (with console)"
         echo "  2) Background (daemon)"
         echo "  3) Screen session (recommended)"
@@ -613,7 +758,46 @@ start_vm() {
                 ;;
         esac
         
-        log_action "START_VM" "$vm_name" "Started"
+        log_action "START_VM" "$vm_name" "Started with beast optimization"
+    fi
+}
+
+# Function to show VM performance
+show_vm_performance() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        section_header "VM PERFORMANCE STATS"
+        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        
+        if is_vm_running "$vm_name"; then
+            local pid=$(pgrep -f "qemu-system-x86_64.*$vm_name")
+            if [[ -n "$pid" ]]; then
+                echo -e "\n${COLOR_WHITE}Process Stats:${COLOR_RESET}"
+                ps -p "$pid" -o pid,%cpu,%mem,sz,rss,vsz --no-headers | awk '{
+                    printf "  PID: %s | CPU: %s%% | MEM: %s%% | Size: %sMB\n", 
+                    $1, $2, $3, $4/1024
+                }'
+            fi
+        fi
+        
+        echo -e "\n${COLOR_WHITE}Configuration:${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
+        
+        echo -e "\n${COLOR_WHITE}Optimizations:${COLOR_RESET}"
+        if [[ "$CPU_TYPE" == "EPYC-v4" ]]; then
+            echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} ${COLOR_GREEN}AMD EPYC Optimized${COLOR_RESET}"
+        else
+            echo -e "  ${COLOR_Gray}CPU:${COLOR_RESET} Host Passthrough"
+        fi
+        echo -e "  ${COLOR_Gray}Disk Cache:${COLOR_RESET} Writeback + Discard"
+        echo -e "  ${COLOR_Gray}Network:${COLOR_RESET} VirtIO"
+        
+        echo
+        read -p "$(print_status "INPUT" "Press Enter to continue...")"
     fi
 }
 
@@ -663,16 +847,17 @@ show_vm_info() {
         echo -e "  ${COLOR_GRAY}Name:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}OS:${COLOR_RESET} $OS_TYPE"
         echo -e "  ${COLOR_GRAY}Created:${COLOR_RESET} $CREATED"
-        echo -e "  ${COLOR_Gray}Status:${COLOR_RESET} $(is_vm_running "$vm_name" && echo -e "${COLOR_GREEN}Running${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Stopped${COLOR_RESET}")"
+        echo -e "  ${COLOR_GRAY}Status:${COLOR_RESET} $(is_vm_running "$vm_name" && echo -e "${COLOR_GREEN}Running${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Stopped${COLOR_RESET}")"
         
         echo -e "\n${COLOR_WHITE}Resources:${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
         
         echo -e "\n${COLOR_WHITE}Network:${COLOR_RESET}"
-        echo -e "  ${COLOR_Gray}IP:${COLOR_RESET} $STATIC_IP"
-        echo -e "  ${COLOR_Gray}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
+        echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
         if [[ -n "$PORT_FORWARDS" ]]; then
             echo -e "  ${COLOR_Gray}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
         fi
@@ -726,9 +911,16 @@ show_system_overview() {
     done
     
     echo -e "${COLOR_WHITE}Platform Statistics:${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}Total VMs:${COLOR_RESET} ${COLOR_CYAN}$total_vms${COLOR_RESET} / $MAX_VMS"
-    echo -e "  ${COLOR_Gray}Running VMs:${COLOR_RESET} ${COLOR_GREEN}$running_vms${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}Stopped VMs:${COLOR_RESET} ${COLOR_YELLOW}$((total_vms - running_vms))${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Total VMs:${COLOR_RESET} ${COLOR_CYAN}$total_vms${COLOR_RESET} / $MAX_VMS"
+    echo -e "  ${COLOR_GRAY}Running VMs:${COLOR_RESET} ${COLOR_GREEN}$running_vms${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Stopped VMs:${COLOR_RESET} ${COLOR_YELLOW}$((total_vms - running_vms))${COLOR_RESET}"
+    
+    # System info
+    echo -e "\n${COLOR_WHITE}System Information:${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} $(detect_amd_cpu && echo "AMD Ryzen/EPYC" || echo "Intel/Other")"
+    echo -e "  ${COLOR_Gray}GPU:${COLOR_RESET} $(detect_gpu && echo "Available" || echo "Not detected")"
+    echo -e "  ${COLOR_Gray}Memory:${COLOR_RESET} $(free -h | awk '/^Mem:/{print $3 "/" $2}') used"
+    echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} $(df -h / | awk 'NR==2 {print $4 " free"}')"
     
     echo
     read -p "$(print_status "INPUT" "Press Enter to continue...")"
