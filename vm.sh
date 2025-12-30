@@ -16,7 +16,7 @@ readonly SCRIPT_VERSION="6.0"
 readonly BRAND_PREFIX="ZynexForge-"
 
 # EPYC CPU optimization flags
-readonly EPYC_CPU_FLAGS="host,migratable=no,host-cache-info=on,topoext=on,pmu=on,x2apic=on,acpi=on,ssbd=required,pdpe1gb=on"
+readonly EPYC_CPU_FLAGS="host,topoext=on,svm=on,kvm=on"
 readonly EPYC_CPU_TOPOLOGY="sockets=1,dies=1,cores=8,threads=2"
 
 # Performance tuning defaults
@@ -535,7 +535,6 @@ start_vm() {
             qemu-system-x86_64
             -name "$VM_NAME"
             -enable-kvm
-            -machine "q35,accel=kvm"
             -cpu "$EPYC_CPU_FLAGS"
             -smp "$CPUS"
             -m "$MEMORY"
@@ -631,6 +630,15 @@ start_vm() {
         else
             print_status "ERROR" "QEMU process failed to start"
             print_status "INFO" "Check log file for details: $log_file"
+            
+            # Show last few lines of log
+            if [[ -f "$log_file" ]]; then
+                print_status "DEBUG" "Last 5 lines of log:"
+                tail -5 "$log_file" | while read line; do
+                    echo "  $line"
+                done
+            fi
+            
             rm -f "$VM_DIR/$VM_NAME.pid"
             return 1
         fi
