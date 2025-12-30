@@ -50,7 +50,7 @@ display_header() {
     cat << "EOF"
 
 __________                             ___________                         
-\____    /___.__. ____   ____ ___  ___ \_   _____/__________  ____   ____  
+\____    /_____ . . ____   ____ ___  ___ \_   _____/__________  ____   ____  
   /     /<   |  |/    \_/ __ \\  \/  /  |    __)/  _ \_  __ \/ ___\_/ __ \ 
  /     /_ \___  |   |  \  ___/ >    <   |     \(  <_> )  | \/ /_/  >  ___/ 
 /_______ \/ ____|___|  /\___  >__/\_ \  \___  / \____/|__|  \___  / \___  >
@@ -261,7 +261,7 @@ validate_input() {
 
 # Function to check dependencies
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "virt-viewer" "screen" "tmux" "nmap")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "virt-viewer" "screen" "tmux")
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
@@ -475,22 +475,6 @@ runcmd:
   - apt-get -y autoremove
   - apt-get -y clean
 
-# Disk optimization
-disk_setup:
-  /dev/vda:
-    table_type: gpt
-    layout: true
-    overwrite: false
-
-fs_setup:
-  - label: root
-    filesystem: ext4
-    device: /dev/vda1
-    partition: auto
-
-mounts:
-  - [ /dev/vda1, /, ext4, "defaults,discard,noatime", "0", "1" ]
-
 # Final boot optimization
 bootcmd:
   - echo "performance" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
@@ -557,6 +541,19 @@ create_new_vm() {
     # OS Selection with Proxmox
     section_header "OPERATING SYSTEM SELECTION"
     print_status "INFO" "Available operating systems (Proxmox included):"
+    
+    # Define OS_OPTIONS here since it's not accessible yet
+    declare -A OS_OPTIONS=(
+        ["Ubuntu 22.04 LTS"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
+        ["Ubuntu 24.04 LTS"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
+        ["Debian 11 Bullseye"]="debian|bullseye|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|debian11|debian|debian"
+        ["Debian 12 Bookworm"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
+        ["Fedora 40"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|fedora"
+        ["CentOS Stream 9"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
+        ["AlmaLinux 9"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
+        ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
+        ["Proxmox VE 8"]="proxmox|ve8|https://download.proxmox.com/images/cloud/bookworm/current/debian-12-genericcloud-amd64.qcow2|proxmox8|root|proxmox"
+    )
     
     local os_options=()
     local i=1
@@ -838,18 +835,18 @@ create_new_vm() {
     
     echo -e "${COLOR_WHITE}Basic Configuration:${COLOR_RESET}"
     echo -e "  ${COLOR_GRAY}Name:${COLOR_RESET} ${COLOR_CYAN}$VM_NAME${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}OS:${COLOR_RESET} ${COLOR_GREEN}$os${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}Created:${COLOR_RESET} $CREATED"
+    echo -e "  ${COLOR_GRAY}OS:${COLOR_RESET} ${COLOR_GREEN}$os${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Created:${COLOR_RESET} $CREATED"
     
     echo -e "\n${COLOR_WHITE}Performance Settings:${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}Resources:${COLOR_RESET} ${COLOR_YELLOW}$CPUS vCPU ($CPU_TYPE) | ${MEMORY}MB RAM | $DISK_SIZE disk${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}GPU Passthrough:${COLOR_RESET} ${COLOR_MAGENTA}$GPU_PASSTHROUGH${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}Virtio:${COLOR_RESET} $VIRTIO_TYPE"
+    echo -e "  ${COLOR_GRAY}Resources:${COLOR_RESET} ${COLOR_YELLOW}$CPUS vCPU ($CPU_TYPE) | ${MEMORY}MB RAM | $DISK_SIZE disk${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} ${COLOR_MAGENTA}$GPU_PASSTHROUGH${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Virtio:${COLOR_RESET} $VIRTIO_TYPE"
     
     echo -e "\n${COLOR_WHITE}Network Configuration:${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}Type:${COLOR_RESET} ${COLOR_CYAN}$NETWORK_CONFIG${COLOR_RESET}"
-    echo -e "  ${COLOR_Gray}MAC:${COLOR_RESET} $MAC_ADDRESS"
-    echo -e "  ${COLOR_Gray}Static IP:${COLOR_RESET} ${COLOR_GREEN}$STATIC_IP${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}Type:${COLOR_RESET} ${COLOR_CYAN}$NETWORK_CONFIG${COLOR_RESET}"
+    echo -e "  ${COLOR_GRAY}MAC:${COLOR_RESET} $MAC_ADDRESS"
+    echo -e "  ${COLOR_GRAY}Static IP:${COLOR_RESET} ${COLOR_GREEN}$STATIC_IP${COLOR_RESET}"
     echo -e "  ${COLOR_Gray}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
     [[ -n "$SPICE_PORT" ]] && echo -e "  ${COLOR_Gray}SPICE Port:${COLOR_RESET} ${COLOR_CYAN}$SPICE_PORT${COLOR_RESET}"
     
@@ -882,16 +879,16 @@ create_new_vm() {
         
         echo -e "\n${COLOR_WHITE}Access Information:${COLOR_RESET}"
         echo -e "  ${COLOR_GRAY}SSH Access:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@$STATIC_IP"
-        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
-        echo -e "  ${COLOR_GRAY}Local SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
+        echo -e "  ${COLOR_Gray}Password:${COLOR_RESET} $PASSWORD"
+        echo -e "  ${COLOR_Gray}Local SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
         
         echo -e "\n${COLOR_WHITE}Management:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Configuration:${COLOR_RESET} $VM_DIR/$VM_NAME.conf"
+        echo -e "  ${COLOR_Gray}Configuration:${COLOR_RESET} $VM_DIR/$VM_NAME.conf"
         echo -e "  ${COLOR_Gray}Disk Image:${COLOR_RESET} $IMG_FILE"
         
         if [[ "$SPICE_ENABLED" == true ]]; then
             echo -e "\n${COLOR_WHITE}Remote Access:${COLOR_RESET}"
-            echo -e "  ${COLOR_GRAY}SPICE Client:${COLOR_RESET} spicy -h localhost -p $SPICE_PORT"
+            echo -e "  ${COLOR_Gray}SPICE Client:${COLOR_RESET} spicy -h localhost -p $SPICE_PORT"
         fi
         
         echo -e "\n${COLOR_ORANGE}══════════════════════════════════════════════════════════════════════${COLOR_RESET}"
@@ -904,6 +901,16 @@ create_new_vm() {
     else
         print_status "INFO" "Deployment cancelled"
     fi
+}
+
+# Function to check if VM is running
+is_vm_running() {
+    local vm_name=$1
+    # Check by process name
+    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null; then
+        return 0
+    fi
+    return 1
 }
 
 # Function to start ultimate VM
@@ -920,7 +927,8 @@ start_vm() {
             print_status "WARN" "VM $vm_name is already running"
             read -p "$(print_status "INPUT" "Connect to console? (y/N): ")" connect_console
             if [[ "$connect_console" =~ ^[Yy]$ ]]; then
-                connect_vm_console "$vm_name"
+                print_status "INFO" "Use Ctrl+A then D to detach from screen session"
+                screen -r "qemu-$vm_name"
             fi
             return 0
         fi
@@ -933,160 +941,54 @@ start_vm() {
         
         # Display access information
         print_status "ULTIMATE" "Access Information:"
-        echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@$STATIC_IP"
-        echo -e "  ${COLOR_GRAY}Local SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
-        [[ -n "$SPICE_PORT" ]] && echo -e "  ${COLOR_GRAY}SPICE:${COLOR_RESET} spicy -h localhost -p $SPICE_PORT"
+        echo -e "  ${COLOR_Gray}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@$STATIC_IP"
+        echo -e "  ${COLOR_Gray}Local SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
+        [[ -n "$SPICE_PORT" ]] && echo -e "  ${COLOR_Gray}SPICE:${COLOR_RESET} spicy -h localhost -p $SPICE_PORT"
         echo
         
-        # Ultimate QEMU command
+        # Simple QEMU command for basic functionality
         local qemu_cmd=(
             qemu-system-x86_64
             -enable-kvm
-            -machine "type=q35,accel=kvm"
-            -cpu "$CPU_TYPE,l3-cache=on"
             -m "$MEMORY"
-            -smp "$CPUS,sockets=1,cores=$CPUS,threads=1"
-            -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,discard=on"
-            -drive "file=$SEED_FILE,format=raw,if=virtio"
-            -boot "order=c,menu=on"
+            -smp "$CPUS"
+            -drive "file=$IMG_FILE,format=qcow2"
+            -drive "file=$SEED_FILE,format=raw"
+            -boot order=c
+            -device "virtio-net-pci,netdev=n0"
+            -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
         
-        # Add UEFI if enabled
-        if [[ "$UEFI_ENABLED" == true ]]; then
-            qemu_cmd+=(
-                -bios "/usr/share/OVMF/OVMF_CODE.fd"
-                -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_VARS.fd"
-            )
-        fi
-        
-        # Add TPM if enabled
-        if [[ "$TPMS_ENABLED" == true ]]; then
-            qemu_cmd+=(
-                -chardev "socket,id=chrtpm,path=$VM_DIR/$vm_name.tpm"
-                -tpmdev "emulator,id=tpm0,chardev=chrtpm"
-                -device "tpm-tis,tpmdev=tpm0"
-            )
-        fi
-        
-        # GPU passthrough
-        if [[ "$GPU_PASSTHROUGH" == true ]]; then
-            qemu_cmd+=(
-                -device "vfio-pci,host=01:00.0,multifunction=on"
-                -device "vfio-pci,host=01:00.1"
-                -vga none
-                -nographic
-            )
-        elif [[ "$GUI_MODE" == true ]]; then
-            qemu_cmd+=(
-                -vga "virtio"
-                -display "gtk,gl=on"
-            )
+        # Add GUI mode
+        if [[ "$GUI_MODE" == true ]]; then
+            qemu_cmd+=(-vga virtio -display gtk,gl=on)
         else
-            qemu_cmd+=(
-                -nographic
-                -serial "mon:stdio"
-            )
+            qemu_cmd+=(-nographic -serial mon:stdio)
         fi
         
-        # Network configuration
-        if [[ "$NETWORK_CONFIG" == "tap" ]]; then
-            qemu_cmd+=(
-                -netdev "tap,id=net0,ifname=tap-$vm_name,script=no,downscript=no"
-                -device "virtio-net-pci,netdev=net0,mac=$MAC_ADDRESS"
-            )
-        else
-            qemu_cmd+=(
-                -device "virtio-net-pci,netdev=n0,mac=$MAC_ADDRESS"
-                -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
-            )
-        fi
-        
-        # Performance enhancements
+        # Add performance enhancements
         qemu_cmd+=(
-            -device "virtio-balloon-pci"
-            -object "rng-random,filename=/dev/urandom,id=rng0"
-            -device "virtio-rng-pci,rng=rng0"
-            -rtc "base=utc,clock=host,driftfix=slew"
-            -no-reboot
-            -global "kvm-pit.lost_tick_policy=delay"
-            -device "virtio-scsi-pci,id=scsi"
-            -device "scsi-hd,bus=scsi.0,drive=drive0"
-            -drive "if=none,id=drive0,file=$IMG_FILE,format=qcow2"
-            -chardev "socket,id=charmonitor,path=$VM_DIR/$vm_name.monitor,server,nowait"
-            -mon "chardev=charmonitor,id=monitor,mode=control"
+            -device virtio-balloon-pci
+            -object rng-random,filename=/dev/urandom,id=rng0
+            -device virtio-rng-pci,rng=rng0
         )
         
-        # Add SPICE if enabled
-        if [[ "$SPICE_ENABLED" == true ]]; then
-            qemu_cmd+=(
-                -spice "port=$SPICE_PORT,addr=127.0.0.1,disable-ticketing=on"
-                -device "virtio-serial-pci"
-                -chardev "spicevmc,id=vdagent,name=vdagent"
-                -device "virtserialport,chardev=vdagent,name=com.redhat.spice.0"
-            )
-        fi
-        
-        # Add port forwards
-        if [[ -n "$PORT_FORWARDS" ]]; then
-            IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
-            local forward_idx=1
-            for forward in "${forwards[@]}"; do
-                IFS=':' read -r host_port guest_port <<< "$forward"
-                qemu_cmd+=(-device "virtio-net-pci,netdev=n$forward_idx")
-                qemu_cmd+=(-netdev "user,id=n$forward_idx,hostfwd=tcp::$host_port-:$guest_port")
-                ((forward_idx++))
-            done
-        fi
-        
-        print_status "ULTIMATE" "Starting QEMU with ultimate optimizations..."
-        
-        # Create startup script
-        local startup_script="$SCRIPTS_DIR/start-$vm_name.sh"
-        echo "#!/bin/bash" > "$startup_script"
-        echo "# Ultimate startup script for $vm_name" >> "$startup_script"
-        echo "# Generated: $(date)" >> "$startup_script"
-        echo "" >> "$startup_script"
-        printf '%s\n' "${qemu_cmd[@]}" >> "$startup_script"
-        chmod +x "$startup_script"
+        print_status "ULTIMATE" "Starting QEMU..."
         
         # Ask for startup mode
-        echo "Ultimate Startup Mode:"
+        echo "Startup Mode:"
         echo "  1) Foreground (with console output)"
-        echo "  2) Background (daemon)"
-        echo "  3) Screen session"
-        echo "  4) Tmux session"
-        echo "  5) Use startup script"
+        echo "  2) Screen session"
         
-        read -p "$(print_status "INPUT" "Select startup mode (1-5): ")" startup_mode
+        read -p "$(print_status "INPUT" "Select startup mode (1-2): ")" startup_mode
         startup_mode="${startup_mode:-1}"
         
         case $startup_mode in
-            2)  # Background
-                print_status "ULTIMATE" "Starting in background (daemon)..."
-                "${qemu_cmd[@]}" &
-                local qemu_pid=$!
-                echo $qemu_pid > "$VM_DIR/$vm_name.pid"
-                print_status "SUCCESS" "VM $vm_name started in background (PID: $qemu_pid)"
-                ;;
-                
-            3)  # Screen
+            2)  # Screen
                 print_status "ULTIMATE" "Starting in screen session..."
                 screen -dmS "qemu-$vm_name" "${qemu_cmd[@]}"
                 print_status "SUCCESS" "VM $vm_name started in screen session 'qemu-$vm_name'"
-                ;;
-                
-            4)  # Tmux
-                print_status "ULTIMATE" "Starting in tmux session..."
-                tmux new-session -d -s "qemu-$vm_name" "${qemu_cmd[@]}"
-                print_status "SUCCESS" "VM $vm_name started in tmux session 'qemu-$vm_name'"
-                ;;
-                
-            5)  # Startup script
-                print_status "ULTIMATE" "Using startup script: $startup_script"
-                "$startup_script" &
-                local qemu_pid=$!
-                echo $qemu_pid > "$VM_DIR/$vm_name.pid"
-                print_status "SUCCESS" "VM $vm_name started via startup script (PID: $qemu_pid)"
+                print_status "INFO" "Attach with: screen -r qemu-$vm_name"
                 ;;
                 
             *)  # Foreground
@@ -1097,32 +999,213 @@ start_vm() {
                 ;;
         esac
         
-        log_action "START_VM" "$vm_name" "Started with ultimate optimizations"
+        log_action "START_VM" "$vm_name" "Started"
     fi
 }
 
-# [Rest of the functions remain similar but enhanced with ultimate features...]
-# Note: Due to character limit, I'm showing the core enhanced functions.
-# The complete script would include all the other functions with similar ultimate enhancements.
+# Function to show VM info
+show_vm_info() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        section_header "VIRTUAL MACHINE INFORMATION"
+        
+        echo -e "${COLOR_WHITE}Basic Information:${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Name:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Hostname:${COLOR_RESET} $HOSTNAME"
+        echo -e "  ${COLOR_Gray}OS:${COLOR_RESET} $OS_TYPE $CODENAME"
+        echo -e "  ${COLOR_Gray}Created:${COLOR_RESET} $CREATED"
+        echo -e "  ${COLOR_Gray}Status:${COLOR_RESET} $(is_vm_running "$vm_name" && echo -e "${COLOR_GREEN}Running${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Stopped${COLOR_RESET}")"
+        
+        echo -e "\n${COLOR_WHITE}Resources:${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
+        
+        echo -e "\n${COLOR_WHITE}Network:${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Type:${COLOR_RESET} $NETWORK_CONFIG"
+        echo -e "  ${COLOR_Gray}MAC:${COLOR_RESET} $MAC_ADDRESS"
+        echo -e "  ${COLOR_Gray}Static IP:${COLOR_RESET} $STATIC_IP"
+        echo -e "  ${COLOR_Gray}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
+        
+        echo -e "\n${COLOR_WHITE}Access:${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Username:${COLOR_RESET} ${COLOR_GREEN}$USERNAME${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Password:${COLOR_RESET} ********"
+        
+        echo -e "\n${COLOR_WHITE}Storage:${COLOR_RESET}"
+        echo -e "  ${COLOR_Gray}Configuration:${COLOR_RESET} $VM_DIR/$vm_name.conf"
+        echo -e "  ${COLOR_Gray}Disk Image:${COLOR_RESET} $IMG_FILE"
+        
+        echo
+        read -p "$(print_status "INPUT" "Press Enter to continue...")"
+    fi
+}
+
+# Function to delete VM
+delete_vm() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        section_header "DELETE VIRTUAL MACHINE"
+        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        
+        print_status "WARN" "⚠️  This will permanently delete the VM!"
+        read -p "$(print_status "INPUT" "Type 'DELETE' to confirm: ")" confirm
+        if [[ "$confirm" == "DELETE" ]]; then
+            # Stop VM if running
+            if is_vm_running "$vm_name"; then
+                pkill -f "qemu-system-x86_64.*$vm_name"
+            fi
+            
+            # Delete files
+            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
+            
+            print_status "SUCCESS" "VM '$vm_name' has been deleted"
+        else
+            print_status "INFO" "Deletion cancelled"
+        fi
+    fi
+}
+
+# Function to show system overview
+show_system_overview() {
+    display_header
+    section_header "SYSTEM OVERVIEW"
+    
+    local total_vms=$(get_vm_count)
+    local running_vms=0
+    local vms=($(get_vm_list))
+    
+    for vm in "${vms[@]}"; do
+        if is_vm_running "$vm"; then
+            ((running_vms++))
+        fi
+    done
+    
+    echo -e "${COLOR_WHITE}Platform Statistics:${COLOR_RESET}"
+    echo -e "  ${COLOR_Gray}Total VMs:${COLOR_RESET} ${COLOR_CYAN}$total_vms${COLOR_RESET} / $MAX_VMS"
+    echo -e "  ${COLOR_Gray}Running VMs:${COLOR_RESET} ${COLOR_GREEN}$running_vms${COLOR_RESET}"
+    echo -e "  ${COLOR_Gray}Stopped VMs:${COLOR_RESET} ${COLOR_YELLOW}$((total_vms - running_vms))${COLOR_RESET}"
+    
+    echo
+    read -p "$(print_status "INPUT" "Press Enter to continue...")"
+}
+
+# Main menu function
+main_menu() {
+    while true; do
+        display_header
+        
+        local vms=($(get_vm_list))
+        local vm_count=${#vms[@]}
+        
+        if [ $vm_count -gt 0 ]; then
+            section_header "VIRTUAL MACHINES"
+            print_status "INFO" "Found $vm_count VM(s) (Limit: $MAX_VMS):"
+            echo
+            
+            for i in "${!vms[@]}"; do
+                local vm_name="${vms[$i]}"
+                local status=""
+                
+                if is_vm_running "$vm_name"; then
+                    status="${COLOR_GREEN}● Running${COLOR_RESET}"
+                else
+                    status="${COLOR_YELLOW}● Stopped${COLOR_RESET}"
+                fi
+                
+                printf "  %2d) %-20s %s\n" $((i+1)) "$vm_name" "$status"
+            done
+            echo
+        else
+            section_header "WELCOME"
+            echo -e "  ${COLOR_GRAY}No virtual machines found.${COLOR_RESET}"
+            echo -e "  ${COLOR_GRAY}Create your first VM to get started.${COLOR_RESET}"
+            echo
+        fi
+        
+        section_header "MAIN MENU"
+        echo "  1) Create a new VM"
+        if [ $vm_count -gt 0 ]; then
+            echo "  2) Start a VM"
+            echo "  3) Stop a VM"
+            echo "  4) Show VM info"
+            echo "  5) Delete a VM"
+            echo "  6) System overview"
+        fi
+        echo "  0) Exit"
+        echo
+        
+        read -p "$(print_status "INPUT" "Enter your choice: ")" choice
+        
+        case $choice in
+            1)
+                create_new_vm
+                ;;
+            2)
+                if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to start: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        start_vm "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                fi
+                ;;
+            3)
+                if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to stop: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        if is_vm_running "${vms[$((vm_num-1))]}"; then
+                            pkill -f "qemu-system-x86_64.*${vms[$((vm_num-1))]}"
+                            print_status "SUCCESS" "VM ${vms[$((vm_num-1))]} stopped"
+                        else
+                            print_status "INFO" "VM ${vms[$((vm_num-1))]} is not running"
+                        fi
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                fi
+                ;;
+            4)
+                if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to show info: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        show_vm_info "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                fi
+                ;;
+            5)
+                if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        delete_vm "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                fi
+                ;;
+            6)
+                show_system_overview
+                ;;
+            0)
+                print_status "INFO" "Goodbye!"
+                exit 0
+                ;;
+            *)
+                print_status "ERROR" "Invalid option"
+                ;;
+        esac
+    done
+}
 
 # Set trap to cleanup on exit
 trap cleanup EXIT
 
 # Check dependencies
 check_dependencies
-
-# Ultimate OS list with Proxmox
-declare -A OS_OPTIONS=(
-    ["Ubuntu 22.04 LTS"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
-    ["Ubuntu 24.04 LTS"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
-    ["Debian 11 Bullseye"]="debian|bullseye|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|debian11|debian|debian"
-    ["Debian 12 Bookworm"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
-    ["Fedora 40"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|fedora"
-    ["CentOS Stream 9"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
-    ["AlmaLinux 9"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
-    ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
-    ["Proxmox VE 8"]="proxmox|ve8|https://download.proxmox.com/images/cloud/bookworm/current/debian-12-genericcloud-amd64.qcow2|proxmox8|root|proxmox"
-)
 
 # Start the main menu
 main_menu
