@@ -1,272 +1,98 @@
 #!/bin/bash
 set -euo pipefail
 
-# =============================
-# ZYNEXFORGE™ - Ultimate VM Manager
-# AMD Ryzen/EPYC Optimized with GPU Passthrough & Proxmox
-# =============================
+# ================================================
+# ZYNEXFORGE VM ENGINE - Advanced Virtualization Manager
+# Version: 6.0
+# Author: FaaizJohar
+# Optimized for AMD EPYC with QEMU/KVM
+# ================================================
 
-# Terminal colors
-COLOR_RESET="\033[0m"
-COLOR_BLUE="\033[1;34m"
-COLOR_CYAN="\033[1;36m"
-COLOR_GREEN="\033[1;32m"
-COLOR_YELLOW="\033[1;33m"
-COLOR_RED="\033[1;31m"
-COLOR_WHITE="\033[1;37m"
-COLOR_MAGENTA="\033[1;35m"
-COLOR_GRAY="\033[90m"
+# Global configuration
+readonly VM_DIR="${VM_DIR:-$HOME/zynexforge-vms}"
+readonly CONFIG_DIR="$VM_DIR/configs"
+readonly LOG_DIR="$VM_DIR/logs"
+readonly SCRIPT_VERSION="6.0"
+readonly BRAND_PREFIX="ZynexForge-"
 
-# UI constants
-SEPARATOR="========================================================================="
-SUBTLE_SEP="─────────────────────────────────────────────────────────────────────────"
+# EPYC CPU optimization flags
+readonly EPYC_CPU_FLAGS="host,migratable=no,host-cache-info=on,topoext=on,pmu=on,x2apic=on,acpi=on,ssbd=required,pdpe1gb=on"
+readonly EPYC_CPU_TOPOLOGY="sockets=1,dies=1,cores=${CORES_PER_SOCKET:-8},threads=2"
 
-# Configuration
-MAX_VMS=8
-VM_BASE_DIR="$HOME/.zynexforge"
-VM_DIR="$VM_BASE_DIR/vms"
-IMAGES_DIR="$VM_BASE_DIR/images"
-BACKUPS_DIR="$VM_BASE_DIR/backups"
-LOGS_DIR="$VM_BASE_DIR/logs"
-TEMPLATES_DIR="$VM_BASE_DIR/templates"
+# Performance tuning defaults
+readonly HUGEPAGES_SIZE="1G"
+readonly HUGEPAGES_COUNT="${HUGEPAGES_COUNT:-32}"
+readonly DISK_CACHE="directsync"
+readonly DISK_IO="threads"
+readonly NET_TYPE="virtio-net-pci"
+readonly NET_QUEUES="${NET_QUEUES:-4}"
 
-# Create directories
-mkdir -p "$VM_DIR" "$IMAGES_DIR" "$BACKUPS_DIR" "$LOGS_DIR" "$TEMPLATES_DIR"
+# Supported OS images
+declare -A OS_OPTIONS=(
+    ["Ubuntu 22.04 LTS"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
+    ["Ubuntu 24.04 LTS"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
+    ["Debian 11 Bullseye"]="debian|bullseye|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|debian11|debian|debian"
+    ["Debian 12 Bookworm"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
+    ["Kali Linux Rolling"]="kali|rolling|https://cloud.kali.org/kali/images/kali-2024.4/kali-linux-2024.4-genericcloud-amd64.qcow2|kali-rolling|kali|kali"
+    ["Arch Linux Latest"]="arch|latest|https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2|archlinux|arch|arch"
+    ["Fedora 40"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|fedora"
+    ["CentOS Stream 9"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
+)
 
-# Function to display header
-display_header() {
+# ================================================
+# INITIALIZATION FUNCTIONS
+# ================================================
+
+init_directories() {
+    mkdir -p "$VM_DIR" "$CONFIG_DIR" "$LOG_DIR" "$VM_DIR/isos" "$VM_DIR/disks"
+    chmod 755 "$VM_DIR" "$CONFIG_DIR" "$LOG_DIR"
+}
+
+display_banner() {
     clear
-    echo -e "${COLOR_CYAN}"
     cat << "EOF"
-
 __________                             ___________                         
-\____    /_____/ __ \/ __ \/ __ \/ __ \/  _ \_  __ \/ __ \_/ __ \ 
+\____    /___.__. ____   ____ ___  ___ \_   _____/__________  ____   ____  
+  /     /<   |  |/    \_/ __ \\  \/  /  |    __)/  _ \_  __ \/ ___\_/ __ \ 
  /     /_ \___  |   |  \  ___/ >    <   |     \(  <_> )  | \/ /_/  >  ___/ 
 /_______ \/ ____|___|  /\___  >__/\_ \  \___  / \____/|__|  \___  / \___  >
         \/\/         \/     \/      \/      \/             /_____/      \/ 
+
+        ZynexForge VM Engine v6.0 | AMD EPYC Optimized | Powered by HopingBoyz
+===============================================================================
 EOF
-    echo -e "${COLOR_RESET}"
-    echo -e "${COLOR_WHITE}ZYNEXFORGE™ Virtual Machine Manager${COLOR_RESET}"
-    echo -e "${COLOR_YELLOW}AMD Ryzen/EPYC Optimized | GPU Passthrough | Proxmox Support${COLOR_RESET}"
-    echo -e "${COLOR_GRAY}Max VMs: $MAX_VMS | Base Directory: $VM_BASE_DIR${COLOR_RESET}"
-    echo "$SEPARATOR"
-    echo
+    echo ""
 }
 
-# Function to print styled messages
+# Color output functions
 print_status() {
     local type=$1
     local message=$2
     
     case $type in
-        "INFO") echo -e "${COLOR_BLUE}[INFO]${COLOR_RESET} $message" ;;
-        "WARN") echo -e "${COLOR_YELLOW}[WARN]${COLOR_RESET} $message" ;;
-        "ERROR") echo -e "${COLOR_RED}[ERROR]${COLOR_RESET} $message" ;;
-        "SUCCESS") echo -e "${COLOR_GREEN}[SUCCESS]${COLOR_RESET} $message" ;;
-        "INPUT") echo -e "${COLOR_CYAN}[INPUT]${COLOR_RESET} $message" ;;
-        "BEAST") echo -e "${COLOR_MAGENTA}[BEAST]${COLOR_RESET} $message" ;;
-        "PROXMOX") echo -e "${COLOR_BLUE}[PROXMOX]${COLOR_RESET} $message" ;;
-        "AMD") echo -e "${COLOR_MAGENTA}[AMD]${COLOR_RESET} $message" ;;
-        *) echo -e "${COLOR_WHITE}[$type]${COLOR_RESET} $message" ;;
+        "INFO")    echo -e "\033[1;34m[INFO]\033[0m $message" ;;
+        "WARN")    echo -e "\033[1;33m[WARN]\033[0m $message" ;;
+        "ERROR")   echo -e "\033[1;31m[ERROR]\033[0m $message" ;;
+        "SUCCESS") echo -e "\033[1;32m[SUCCESS]\033[0m $message" ;;
+        "INPUT")   echo -e "\033[1;36m[INPUT]\033[0m $message" ;;
+        "DEBUG")   echo -e "\033[1;35m[DEBUG]\033[0m $message" ;;
+        *)         echo "[$type] $message" ;;
     esac
 }
 
-# Function to log actions
-log_action() {
-    local action=$1
-    local vm_name=$2
-    local details=$3
-    echo "$(date '+%Y-%m-%d %H:%M:%S') | $action | $vm_name | $details" >> "$LOGS_DIR/zynexforge.log" 2>/dev/null || true
+log_message() {
+    local level="$1"
+    local message="$2"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] [$level] $message" >> "$LOG_DIR/zynexforge.log"
 }
 
-# Function to display section header
-section_header() {
-    local title=$1
-    echo
-    echo -e "${COLOR_WHITE}$title${COLOR_RESET}"
-    echo "$SUBTLE_SEP"
-}
+# ================================================
+# DEPENDENCY & SYSTEM CHECKS
+# ================================================
 
-# Function to detect AMD CPU (improved detection)
-detect_amd_cpu() {
-    if grep -qi "vendor_id.*AMD" /proc/cpuinfo || grep -qi "model.*AMD" /proc/cpuinfo || \
-       grep -qi "vendor.*AMD" /proc/cpuinfo || grep -qi "ryzen" /proc/cpuinfo || \
-       grep -qi "epyc" /proc/cpuinfo || grep -qi "athlon" /proc/cpuinfo || \
-       grep -qi "phenom" /proc/cpuinfo || grep -qi "fx" /proc/cpuinfo; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Function to get AMD CPU model
-get_amd_cpu_model() {
-    if grep -qi "ryzen" /proc/cpuinfo; then
-        echo "Ryzen"
-    elif grep -qi "epyc" /proc/cpuinfo; then
-        echo "EPYC"
-    elif grep -qi "athlon" /proc/cpuinfo; then
-        echo "Athlon"
-    elif grep -qi "phenom" /proc/cpuinfo; then
-        echo "Phenom"
-    elif grep -qi "fx" /proc/cpuinfo; then
-        echo "FX"
-    else
-        echo "AMD"
-    fi
-}
-
-# Function to detect AMD GPU
-detect_amd_gpu() {
-    if command -v lspci >/dev/null 2>&1; then
-        if lspci | grep -i "vga\|3d\|display" | grep -qi "amd\|radeon\|ati"; then
-            return 0
-        fi
-    fi
-    return 1
-}
-
-# Function to detect NVIDIA GPU
-detect_nvidia_gpu() {
-    if command -v lspci >/dev/null 2>&1; then
-        if lspci | grep -i "vga\|3d\|display" | grep -qi "nvidia"; then
-            return 0
-        fi
-    fi
-    return 1
-}
-
-# Function to detect Intel GPU
-detect_intel_gpu() {
-    if command -v lspci >/dev/null 2>&1; then
-        if lspci | grep -i "vga\|3d\|display" | grep -qi "intel"; then
-            return 0
-        fi
-    fi
-    return 1
-}
-
-# Function to detect any GPU for passthrough
-detect_gpu() {
-    if command -v lspci >/dev/null 2>&1; then
-        if lspci | grep -i "vga\|3d\|display" | grep -qi "nvidia\|amd\|radeon\|intel\|ati"; then
-            return 0
-        fi
-    fi
-    return 1
-}
-
-# Function to get GPU information
-get_gpu_info() {
-    local gpu_info=""
-    if detect_amd_gpu; then
-        gpu_info="AMD GPU"
-    elif detect_nvidia_gpu; then
-        gpu_info="NVIDIA GPU"
-    elif detect_intel_gpu; then
-        gpu_info="Intel GPU"
-    else
-        gpu_info="No GPU"
-    fi
-    echo "$gpu_info"
-}
-
-# Function to get GPU PCI addresses
-get_gpu_pci_addresses() {
-    local pci_addresses=()
-    if command -v lspci >/dev/null 2>&1; then
-        # Get primary GPU (first VGA/3D controller)
-        local primary=$(lspci | grep -i "vga\|3d\|display" | head -1 | awk '{print $1}')
-        if [[ -n "$primary" ]]; then
-            pci_addresses+=("$primary")
-        fi
-        
-        # Get audio function of GPU
-        local audio=$(lspci | grep -i "audio" | grep -i "amd\|nvidia\|intel" | awk '{print $1}' | head -1)
-        if [[ -n "$audio" ]]; then
-            pci_addresses+=("$audio")
-        fi
-    fi
-    echo "${pci_addresses[@]}"
-}
-
-# Function to check if IOMMU is enabled
-check_iommu() {
-    if grep -q "iommu=on" /proc/cmdline || grep -q "amd_iommu=on" /proc/cmdline || \
-       grep -q "intel_iommu=on" /proc/cmdline || dmesg | grep -qi "iommu.*enabled"; then
-        return 0
-    fi
-    
-    # Check via /sys
-    if [[ -d "/sys/kernel/iommu_groups" ]] && [[ $(ls /sys/kernel/iommu_groups/ 2>/dev/null | wc -l) -gt 0 ]]; then
-        return 0
-    fi
-    
-    return 1
-}
-
-# Function to generate random IP
-generate_auto_ip() {
-    local base="192.168.100"
-    local octet=$((RANDOM % 254 + 1))
-    echo "$base.$octet"
-}
-
-# Function to generate MAC address
-generate_mac() {
-    printf '52:54:%02x:%02x:%02x:%02x\n' \
-        $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256))
-}
-
-# Function to validate input
-validate_input() {
-    local type=$1
-    local value=$2
-    
-    case $type in
-        "number")
-            if ! [[ "$value" =~ ^[0-9]+$ ]]; then
-                print_status "ERROR" "Must be a number"
-                return 1
-            fi
-            ;;
-        "size")
-            if ! [[ "$value" =~ ^[0-9]+[GgMm]$ ]]; then
-                print_status "ERROR" "Must be a size with unit (e.g., 100G, 512M)"
-                return 1
-            fi
-            ;;
-        "port")
-            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 22 ] || [ "$value" -gt 65535 ]; then
-                print_status "ERROR" "Must be a valid port number (22-65535)"
-                return 1
-            fi
-            ;;
-        "name")
-            if ! [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-                print_status "ERROR" "VM name can only contain letters, numbers, hyphens, and underscores"
-                return 1
-            fi
-            ;;
-        "username")
-            if ! [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-                print_status "ERROR" "Username must start with a letter or underscore"
-                return 1
-            fi
-            ;;
-        "ip")
-            if ! [[ "$value" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-                print_status "ERROR" "Must be a valid IP address"
-                return 1
-            fi
-            ;;
-    esac
-    return 0
-}
-
-# Function to check dependencies
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "genisoimage")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "numactl" "bridge-utils")
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
@@ -277,61 +103,125 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "Install with: sudo apt install qemu-system cloud-image-utils wget genisoimage"
+        print_status "INFO" "Install with: sudo apt install qemu-system cloud-image-utils wget numactl bridge-utils"
         exit 1
     fi
 }
 
-# Function to cleanup temporary files
-cleanup() {
-    rm -f "user-data" "meta-data" "network-config" 2>/dev/null || true
+check_epyc_optimizations() {
+    # Check for AMD EPYC CPU
+    if grep -qi "AMD EPYC" /proc/cpuinfo; then
+        print_status "INFO" "AMD EPYC processor detected - applying optimizations"
+        
+        # Enable hugepages if not already enabled
+        if [ ! -f /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages ]; then
+            print_status "INFO" "Setting up 1GB hugepages"
+            echo $HUGEPAGES_COUNT | sudo tee /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages >/dev/null 2>&1 || \
+            print_status "WARN" "Failed to enable 1GB hugepages (requires root)"
+        fi
+        
+        # Check for KVM support
+        if [ ! -e /dev/kvm ]; then
+            print_status "ERROR" "KVM not available. Ensure virtualization is enabled in BIOS and kvm-amd module is loaded"
+            exit 1
+        fi
+    else
+        print_status "WARN" "Non-EPYC processor detected. Some optimizations may be limited."
+    fi
 }
 
-# Function to get all VM configurations
-get_vm_list() {
-    find "$VM_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort
+# ================================================
+# VALIDATION FUNCTIONS
+# ================================================
+
+validate_input() {
+    local type=$1
+    local value=$2
+    
+    case $type in
+        "number")
+            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1 ]; then
+                print_status "ERROR" "Must be a positive number"
+                return 1
+            fi
+            ;;
+        "size")
+            if ! [[ "$value" =~ ^[0-9]+[GgMm]$ ]]; then
+                print_status "ERROR" "Must be a size with unit (e.g., 100G, 512M)"
+                return 1
+            fi
+            ;;
+        "port")
+            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1024 ] || [ "$value" -gt 65535 ]; then
+                print_status "ERROR" "Must be a valid port number (1024-65535)"
+                return 1
+            fi
+            ;;
+        "name")
+            if ! [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]] || [ ${#value} -gt 32 ]; then
+                print_status "ERROR" "VM name can only contain letters, numbers, hyphens, underscores (max 32 chars)"
+                return 1
+            fi
+            ;;
+        "username")
+            if ! [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]] || [ ${#value} -gt 32 ]; then
+                print_status "ERROR" "Username must start with a letter or underscore, contain only lowercase letters, numbers, hyphens, underscores (max 32 chars)"
+                return 1
+            fi
+            ;;
+        "ip")
+            if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                print_status "ERROR" "Must be a valid IP address"
+                return 1
+            fi
+            ;;
+    esac
+    return 0
 }
 
-# Function to get VM count
-get_vm_count() {
-    get_vm_list | wc -l
-}
-
-# Function to check VM limit
-check_vm_limit() {
-    local current_count=$(get_vm_count)
-    if [ "$current_count" -ge "$MAX_VMS" ]; then
-        print_status "ERROR" "Maximum VM limit reached ($MAX_VMS)"
+check_port_available() {
+    local port=$1
+    if ss -tln 2>/dev/null | grep -q ":$port "; then
+        print_status "ERROR" "Port $port is already in use"
         return 1
     fi
     return 0
 }
 
-# Function to load VM configuration
+# ================================================
+# VM CONFIGURATION MANAGEMENT
+# ================================================
+
+get_vm_list() {
+    find "$CONFIG_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort
+}
+
 load_vm_config() {
     local vm_name=$1
-    local config_file="$VM_DIR/$vm_name.conf"
+    local config_file="$CONFIG_DIR/$vm_name.conf"
     
     if [[ -f "$config_file" ]]; then
-        # Clear any existing variables
-        unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD SSH_KEYS
+        # Clear previous variables
+        unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
-        unset NETWORK_CONFIG MAC_ADDRESS STATIC_IP BACKUP_SCHEDULE SNAPSHOT_COUNT CPU_TYPE GPU_PASSTHROUGH
-        unset GPU_TYPE GPU_PCI_ADDRESSES IOMMU_ENABLED PROXMOX_MODE PROXMOX_TEMPLATE
+        unset ENABLE_HUGEPAGES ENABLE_NUMA CPU_PINNING VIRTIO_OPTIONS
         
-        source "$config_file" 2>/dev/null
+        source "$config_file"
         return 0
     else
-        print_status "ERROR" "VM '$vm_name' not found"
+        print_status "ERROR" "Configuration for VM '$vm_name' not found"
         return 1
     fi
 }
 
-# Function to save VM configuration
 save_vm_config() {
-    local config_file="$VM_DIR/$VM_NAME.conf"
+    local config_file="$CONFIG_DIR/$VM_NAME.conf"
     
     cat > "$config_file" <<EOF
+# ZynexForge VM Engine Configuration
+# Generated: $(date)
+# Engine Version: $SCRIPT_VERSION
+
 VM_NAME="$VM_NAME"
 OS_TYPE="$OS_TYPE"
 CODENAME="$CODENAME"
@@ -339,7 +229,6 @@ IMG_URL="$IMG_URL"
 HOSTNAME="$HOSTNAME"
 USERNAME="$USERNAME"
 PASSWORD="$PASSWORD"
-SSH_KEYS="$SSH_KEYS"
 DISK_SIZE="$DISK_SIZE"
 MEMORY="$MEMORY"
 CPUS="$CPUS"
@@ -349,325 +238,52 @@ PORT_FORWARDS="$PORT_FORWARDS"
 IMG_FILE="$IMG_FILE"
 SEED_FILE="$SEED_FILE"
 CREATED="$CREATED"
-NETWORK_CONFIG="$NETWORK_CONFIG"
-MAC_ADDRESS="$MAC_ADDRESS"
-STATIC_IP="$STATIC_IP"
-BACKUP_SCHEDULE="$BACKUP_SCHEDULE"
-SNAPSHOT_COUNT="$SNAPSHOT_COUNT"
-CPU_TYPE="$CPU_TYPE"
-GPU_PASSTHROUGH="$GPU_PASSTHROUGH"
-GPU_TYPE="$GPU_TYPE"
-GPU_PCI_ADDRESSES="$GPU_PCI_ADDRESSES"
-IOMMU_ENABLED="$IOMMU_ENABLED"
-PROXMOX_MODE="$PROXMOX_MODE"
-PROXMOX_TEMPLATE="$PROXMOX_TEMPLATE"
+ENABLE_HUGEPAGES="$ENABLE_HUGEPAGES"
+ENABLE_NUMA="$ENABLE_NUMA"
+CPU_PINNING="$CPU_PINNING"
+VIRTIO_OPTIONS="$VIRTIO_OPTIONS"
 EOF
     
-    print_status "SUCCESS" "Configuration saved"
-    log_action "SAVE_CONFIG" "$VM_NAME" "Configuration updated"
+    chmod 600 "$config_file"
+    print_status "SUCCESS" "Configuration saved to $config_file"
+    log_message "CONFIG" "Saved config for VM: $VM_NAME"
 }
 
-# Function to setup VM image with AMD optimization
-setup_vm_image() {
-    print_status "AMD" "Setting up VM storage with AMD optimization..."
-    
-    # Create cache directory
-    mkdir -p "$IMAGES_DIR"
-    
-    # Extract filename from URL
-    local image_filename=$(basename "$IMG_URL")
-    local cached_image="$IMAGES_DIR/$image_filename"
-    
-    # Download or use cached image
-    if [[ ! -f "$cached_image" ]]; then
-        print_status "INFO" "Downloading OS image..."
-        if ! wget --progress=bar:force "$IMG_URL" -O "$cached_image.tmp" 2>&1; then
-            print_status "ERROR" "Failed to download image"
-            exit 1
-        fi
-        mv "$cached_image.tmp" "$cached_image"
-    fi
-    
-    # Create AMD-optimized qcow2 image
-    print_status "AMD" "Creating AMD-optimized disk image..."
-    
-    # Convert the downloaded image to qcow2 format with AMD optimizations
-    qemu-img convert -f qcow2 -O qcow2 -o cluster_size=2M,preallocation=metadata,compat=1.1,lazy_refcounts=on \
-        "$cached_image" "$IMG_FILE"
-    
-    # Resize the disk to the requested size
-    qemu-img resize "$IMG_FILE" "$DISK_SIZE"
-    
-    # AMD-optimized cloud-init config
-    cat > user-data <<EOF
-#cloud-config
-# ZYNEXFORGE AMD OPTIMIZED CONFIGURATION
-hostname: $HOSTNAME
-ssh_pwauth: true
-disable_root: false
-preserve_hostname: false
-manage_etc_hosts: true
-package_upgrade: true
-package_reboot_if_required: true
-timezone: UTC
+# ================================================
+# VM CREATION & IMAGE MANAGEMENT
+# ================================================
 
-users:
-  - name: $USERNAME
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    lock_passwd: false
-    passwd: $(echo "$PASSWORD" | openssl passwd -6 -stdin 2>/dev/null | tr -d '\n')
-    groups: [adm, audio, cdrom, dialout, floppy, video, plugdev, dip, netdev, docker]
-
-packages:
-  - qemu-guest-agent
-  - htop
-  - neofetch
-  - curl
-  - wget
-  - git
-  - python3
-  - docker.io
-  - docker-compose
-  - net-tools
-  - iperf3
-  - cpufrequtils
-  - amd64-microcode
-  - firmware-amd-graphics
-
-runcmd:
-  - systemctl enable qemu-guest-agent
-  - systemctl start qemu-guest-agent
-  - echo "vm.swappiness=10" >> /etc/sysctl.conf
-  - echo "vm.dirty_ratio=10" >> /etc/sysctl.conf
-  - echo "vm.dirty_background_ratio=5" >> /etc/sysctl.conf
-  - echo "net.core.rmem_max=134217728" >> /etc/sysctl.conf
-  - echo "net.core.wmem_max=134217728" >> /etc/sysctl.conf
-  - sysctl -p
-  - timedatectl set-timezone UTC
-  - [sh, -c, "echo 'performance' | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"]
-  - [sh, -c, "echo 'GOVERNOR=\"performance\"' > /etc/default/cpufrequtils"]
-  - systemctl restart cpufrequtils
-
-bootcmd:
-  - echo "AMD Optimized" > /etc/motd
-  - echo "ZYNEXFORGE VM - Ready for Maximum Performance" >> /etc/motd
-
-power_state:
-  mode: reboot
-  timeout: 300
-  message: "ZYNEXFORGE AMD Optimized VM is ready!"
-EOF
-
-    cat > meta-data <<EOF
-instance-id: iid-$VM_NAME
-local-hostname: $HOSTNAME
-hostname: $HOSTNAME
-EOF
-
-    if ! cloud-localds "$SEED_FILE" user-data meta-data 2>/dev/null; then
-        print_status "ERROR" "Failed to create seed image"
-        exit 1
-    fi
-    
-    print_status "AMD" "VM image optimized for AMD performance!"
-}
-
-# Function to setup Proxmox VM
-setup_proxmox_vm() {
-    print_status "PROXMOX" "Setting up Proxmox Virtual Environment..."
-    
-    # Create cache directory
-    mkdir -p "$IMAGES_DIR"
-    
-    # Proxmox VE specific image handling
-    local proxmox_image="$IMAGES_DIR/proxmox-ve-amd64.img"
-    
-    # Download Proxmox VE installer if not cached
-    if [[ ! -f "$proxmox_image" ]]; then
-        print_status "INFO" "Downloading Proxmox VE installer..."
-        if ! wget --progress=bar:force "https://download.proxmox.com/iso/proxmox-ve_8.1-1.iso" -O "$proxmox_image.tmp" 2>&1; then
-            print_status "ERROR" "Failed to download Proxmox VE installer"
-            print_status "INFO" "Trying alternative Proxmox VE image..."
-            # Alternative cloud image for Proxmox
-            if ! wget --progress=bar:force "https://download.proxmox.com/images/cloud/bookworm/current/debian-12-genericcloud-amd64.qcow2" -O "$proxmox_image.tmp" 2>&1; then
-                print_status "ERROR" "Failed to download Proxmox VE image"
-                exit 1
-            fi
-        fi
-        mv "$proxmox_image.tmp" "$proxmox_image"
-    fi
-    
-    # Copy to VM location
-    cp "$proxmox_image" "$IMG_FILE"
-    
-    # Create Proxmox-optimized qcow2 image
-    print_status "PROXMOX" "Creating Proxmox-optimized disk image..."
-    qemu-img create -f qcow2 -o cluster_size=2M,preallocation=metadata,compat=1.1,lazy_refcounts=on "$IMG_FILE" "$DISK_SIZE"
-    
-    # Proxmox cloud-init config
-    cat > user-data <<EOF
-#cloud-config
-# PROXMOX VE CLOUD-INIT CONFIGURATION
-hostname: $HOSTNAME
-ssh_pwauth: true
-disable_root: false
-preserve_hostname: false
-manage_etc_hosts: true
-package_upgrade: true
-package_reboot_if_required: true
-timezone: UTC
-
-users:
-  - name: $USERNAME
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    lock_passwd: false
-    passwd: $(echo "$PASSWORD" | openssl passwd -6 -stdin 2>/dev/null | tr -d '\n')
-    groups: [adm, audio, cdrom, dialout, floppy, video, plugdev, dip, netdev, docker, sudo]
-
-packages:
-  - qemu-guest-agent
-  - htop
-  - neofetch
-  - curl
-  - wget
-  - git
-  - python3
-  - net-tools
-  - iperf3
-  - bridge-utils
-  - ifupdown2
-
-runcmd:
-  - systemctl enable qemu-guest-agent
-  - systemctl start qemu-guest-agent
-  - apt-get update
-  - apt-get install -y linux-headers-$(uname -r)
-  - echo "Setting up for Proxmox VE installation..."
-  - echo "After boot, install Proxmox VE with:"
-  - echo "  wget https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg -O /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg"
-  - echo "  echo 'deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription' > /etc/apt/sources.list.d/pve-install-repo.list"
-  - echo "  apt update && apt full-upgrade -y"
-  - echo "  apt install -y proxmox-ve postfix open-iscsi"
-
-bootcmd:
-  - echo "Proxmox VE Ready for Installation" > /etc/motd
-
-power_state:
-  mode: reboot
-  timeout: 300
-  message: "Proxmox VE VM is ready for installation!"
-EOF
-
-    cat > meta-data <<EOF
-instance-id: iid-$VM_NAME
-local-hostname: $HOSTNAME
-hostname: $HOSTNAME
-EOF
-
-    if ! cloud-localds "$SEED_FILE" user-data meta-data 2>/dev/null; then
-        print_status "ERROR" "Failed to create seed image for Proxmox"
-        exit 1
-    fi
-    
-    print_status "PROXMOX" "Proxmox VE VM image prepared! Install Proxmox VE after boot."
-}
-
-# Function to create new VM with AMD and GPU options
 create_new_vm() {
-    if ! check_vm_limit; then
-        return 1
-    fi
+    display_banner
+    print_status "INFO" "Creating new ZynexForge VM"
     
-    display_header
-    section_header "CREATE VIRTUAL MACHINE"
-    
-    # Detect system capabilities
-    local HAS_AMD=false
-    local AMD_CPU_MODEL=""
-    local HAS_GPU=false
-    local GPU_TYPE="none"
-    local IOMMU_ENABLED=false
-    local GPU_PCI_ADDRESSES=""
-    
-    if detect_amd_cpu; then
-        HAS_AMD=true
-        AMD_CPU_MODEL=$(get_amd_cpu_model)
-        print_status "AMD" "$AMD_CPU_MODEL CPU detected! Enabling AMD optimizations..."
-    else
-        print_status "INFO" "Non-AMD CPU detected"
-    fi
-    
-    if check_iommu; then
-        IOMMU_ENABLED=true
-        print_status "INFO" "IOMMU is enabled (required for GPU passthrough)"
-    else
-        print_status "WARN" "IOMMU is not enabled. GPU passthrough may not work."
-    fi
-    
-    if detect_gpu; then
-        HAS_GPU=true
-        GPU_TYPE=$(get_gpu_info)
-        GPU_PCI_ADDRESSES=$(get_gpu_pci_addresses)
-        print_status "INFO" "$GPU_TYPE"
-        if [[ -n "$GPU_PCI_ADDRESSES" ]]; then
-            print_status "INFO" "GPU PCI Addresses: $GPU_PCI_ADDRESSES"
-        fi
-    fi
-    
-    # OS Selection with Proxmox option
-    section_header "OPERATING SYSTEM SELECTION"
-    
-    declare -A OS_OPTIONS=(
-        ["Ubuntu 22.04 LTS (Jammy Jellyfish)"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
-        ["Ubuntu 24.04 LTS (Noble Numbat)"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
-        ["Debian 12 (Bookworm)"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
-        ["Proxmox VE 8.1"]="proxmox|ve81|proxmox-custom|proxmox81|root|proxmox"
-        ["Rocky Linux 9"]="rocky|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
-        ["AlmaLinux 9"]="alma|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|alma9|alma|alma"
-    )
-    
-    local os_list=()
+    # OS Selection
+    print_status "INFO" "Select an OS distribution:"
+    local os_options=()
     local i=1
-    
-    print_status "INFO" "Available operating systems:"
     for os in "${!OS_OPTIONS[@]}"; do
-        echo -e "  ${COLOR_CYAN}$i) $os${COLOR_RESET}"
-        os_list[$i]="$os"
+        printf "  %2d) %s\n" "$i" "$os"
+        os_options[$i]="$os"
         ((i++))
     done
     
     while true; do
-        echo
-        read -p "$(print_status "INPUT" "Select OS (1-${#OS_OPTIONS[@]}): ")" choice
-        
+        read -p "$(print_status "INPUT" "Enter your choice (1-${#OS_OPTIONS[@]}): ")" choice
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#OS_OPTIONS[@]} ]; then
-            local os="${os_list[$choice]}"
+            local os="${os_options[$choice]}"
             IFS='|' read -r OS_TYPE CODENAME IMG_URL DEFAULT_HOSTNAME DEFAULT_USERNAME DEFAULT_PASSWORD <<< "${OS_OPTIONS[$os]}"
-            
-            # Check if this is Proxmox
-            if [[ "$OS_TYPE" == "proxmox" ]]; then
-                PROXMOX_MODE=true
-                print_status "PROXMOX" "Selected: $os"
-            else
-                PROXMOX_MODE=false
-                print_status "INFO" "Selected: $os"
-            fi
             break
         else
-            print_status "ERROR" "Invalid selection"
+            print_status "ERROR" "Invalid selection. Try again."
         fi
     done
 
-    # VM Configuration
-    section_header "VIRTUAL MACHINE CONFIGURATION"
-    
+    # VM Name with branding
     while true; do
-        read -p "$(print_status "INPUT" "Enter VM name (default: $DEFAULT_HOSTNAME): ")" VM_NAME
-        VM_NAME="${VM_NAME:-$DEFAULT_HOSTNAME}"
+        read -p "$(print_status "INPUT" "Enter VM name (default: ${BRAND_PREFIX}${DEFAULT_HOSTNAME}): ")" input_name
+        VM_NAME="${input_name:-${BRAND_PREFIX}${DEFAULT_HOSTNAME}}"
         if validate_input "name" "$VM_NAME"; then
-            if [[ -f "$VM_DIR/$VM_NAME.conf" ]]; then
+            if [[ -f "$CONFIG_DIR/$VM_NAME.conf" ]]; then
                 print_status "ERROR" "VM with name '$VM_NAME' already exists"
             else
                 break
@@ -675,11 +291,16 @@ create_new_vm() {
         fi
     done
 
-    HOSTNAME="$VM_NAME"
+    # Hostname
+    while true; do
+        read -p "$(print_status "INPUT" "Enter hostname (default: $VM_NAME): ")" HOSTNAME
+        HOSTNAME="${HOSTNAME:-$VM_NAME}"
+        if validate_input "name" "$HOSTNAME"; then
+            break
+        fi
+    done
 
-    # Access Credentials
-    section_header "ACCESS CREDENTIALS"
-    
+    # Username
     while true; do
         read -p "$(print_status "INPUT" "Enter username (default: $DEFAULT_USERNAME): ")" USERNAME
         USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
@@ -688,957 +309,856 @@ create_new_vm() {
         fi
     done
 
+    # Password
     while true; do
-        echo -e "${COLOR_YELLOW}Password requirements: Minimum 4 characters${COLOR_RESET}"
         read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
         PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
         echo
-        if [ ${#PASSWORD} -ge 4 ]; then
+        if [ -n "$PASSWORD" ]; then
             break
         else
-            print_status "ERROR" "Password must be at least 4 characters"
+            print_status "ERROR" "Password cannot be empty"
         fi
     done
 
-    read -p "$(print_status "INPUT" "Add SSH public keys (press Enter to skip): ")" SSH_KEYS
-
-    # Resource Allocation with AMD optimization
-    section_header "RESOURCE ALLOCATION"
-    
-    print_status "INFO" "Auto-configuring optimal resources..."
-    
-    # Auto-detect optimal settings
-    local TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
-    local TOTAL_CPUS=$(nproc)
-    
-    # Calculate optimal resources
-    local OPTIMAL_MEMORY=$((TOTAL_MEM / 4))  # Use 25% of total RAM
-    if [ $OPTIMAL_MEMORY -gt 32768 ]; then
-        OPTIMAL_MEMORY=32768  # Cap at 32GB
-    elif [ $OPTIMAL_MEMORY -lt 2048 ]; then
-        OPTIMAL_MEMORY=2048   # Minimum 2GB
-    fi
-    
-    local OPTIMAL_CPUS=$((TOTAL_CPUS / 2))  # Use half of CPUs
-    if [ $OPTIMAL_CPUS -gt 16 ]; then
-        OPTIMAL_CPUS=16  # Cap at 16 vCPUs
-    elif [ $OPTIMAL_CPUS -lt 2 ]; then
-        OPTIMAL_CPUS=2  # Minimum 2 vCPUs
-    fi
-    
-    print_status "INFO" "System has ${TOTAL_MEM}MB RAM, ${TOTAL_CPUS} CPUs"
-    print_status "INFO" "Recommended: ${OPTIMAL_MEMORY}MB RAM, ${OPTIMAL_CPUS} vCPUs"
-    
+    # Resource allocation with validation
     while true; do
-        read -p "$(print_status "INPUT" "Disk size (default: 100G): ")" DISK_SIZE
-        DISK_SIZE="${DISK_SIZE:-100G}"
+        read -p "$(print_status "INPUT" "Disk size (default: 50G): ")" DISK_SIZE
+        DISK_SIZE="${DISK_SIZE:-50G}"
         if validate_input "size" "$DISK_SIZE"; then
             break
         fi
     done
 
     while true; do
-        read -p "$(print_status "INPUT" "Memory in MB (recommended: $OPTIMAL_MEMORY): ")" MEMORY
-        MEMORY="${MEMORY:-$OPTIMAL_MEMORY}"
+        read -p "$(print_status "INPUT" "Memory in MB (default: 4096): ")" MEMORY
+        MEMORY="${MEMORY:-4096}"
         if validate_input "number" "$MEMORY"; then
+            if [ "$MEMORY" -lt 512 ]; then
+                print_status "WARN" "Minimum recommended memory is 512MB"
+            fi
             break
         fi
     done
 
     while true; do
-        read -p "$(print_status "INPUT" "Number of CPUs (recommended: $OPTIMAL_CPUS): ")" CPUS
-        CPUS="${CPUS:-$OPTIMAL_CPUS}"
+        read -p "$(print_status "INPUT" "Number of vCPUs (default: 4): ")" CPUS
+        CPUS="${CPUS:-4}"
         if validate_input "number" "$CPUS"; then
+            if [ "$CPUS" -gt "$(nproc)" ]; then
+                print_status "WARN" "Warning: Requested $CPUS vCPUs but host only has $(nproc) cores"
+            fi
             break
         fi
     done
 
-    # CPU Optimization
-    section_header "CPU OPTIMIZATION"
-    
-    if [ "$HAS_AMD" = true ]; then
-        CPU_TYPE="EPYC-v4"
-        print_status "AMD" "Using AMD EPYC-v4 CPU model with all optimizations!"
-    else
-        CPU_TYPE="host"
-        print_status "INFO" "Using host CPU passthrough"
-    fi
-
-    # GPU Passthrough Options
-    section_header "GPU PASSTHROUGH"
-    
-    if [ "$HAS_GPU" = true ] && [ "$IOMMU_ENABLED" = true ]; then
-        print_status "INFO" "GPU detected and IOMMU enabled. GPU passthrough available."
-        echo -e "${COLOR_YELLOW}Options:${COLOR_RESET}"
-        echo "  1) No GPU passthrough"
-        echo "  2) AMD GPU passthrough (if AMD GPU detected)"
-        echo "  3) NVIDIA GPU passthrough (if NVIDIA GPU detected)"
-        echo "  4) Intel GPU passthrough (if Intel GPU detected)"
-        
-        read -p "$(print_status "INPUT" "Select GPU option (default: 1): ")" gpu_option
-        gpu_option="${gpu_option:-1}"
-        
-        case $gpu_option in
-            1)
-                GPU_PASSTHROUGH=false
-                print_status "INFO" "GPU passthrough disabled"
-                ;;
-            2)
-                if detect_amd_gpu; then
-                    GPU_PASSTHROUGH=true
-                    GPU_TYPE="amd"
-                    print_status "AMD" "AMD GPU passthrough enabled!"
-                else
-                    GPU_PASSTHROUGH=false
-                    print_status "ERROR" "AMD GPU not detected"
-                fi
-                ;;
-            3)
-                if detect_nvidia_gpu; then
-                    GPU_PASSTHROUGH=true
-                    GPU_TYPE="nvidia"
-                    print_status "INFO" "NVIDIA GPU passthrough enabled!"
-                else
-                    GPU_PASSTHROUGH=false
-                    print_status "ERROR" "NVIDIA GPU not detected"
-                fi
-                ;;
-            4)
-                if detect_intel_gpu; then
-                    GPU_PASSTHROUGH=true
-                    GPU_TYPE="intel"
-                    print_status "INFO" "Intel GPU passthrough enabled!"
-                else
-                    GPU_PASSTHROUGH=false
-                    print_status "ERROR" "Intel GPU not detected"
-                fi
-                ;;
-            *)
-                GPU_PASSTHROUGH=false
-                print_status "INFO" "GPU passthrough disabled"
-                ;;
-        esac
-    else
-        GPU_PASSTHROUGH=false
-        if [ "$HAS_GPU" = false ]; then
-            print_status "INFO" "No GPU detected"
-        else
-            print_status "WARN" "IOMMU not enabled. GPU passthrough unavailable."
+    # SSH Port
+    while true; do
+        read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
+        SSH_PORT="${SSH_PORT:-2222}"
+        if validate_input "port" "$SSH_PORT" && check_port_available "$SSH_PORT"; then
+            break
         fi
-    fi
+    done
 
-    # Network Configuration
-    section_header "NETWORK CONFIGURATION"
-    
-    MAC_ADDRESS=$(generate_mac)
-    echo -e "Generated MAC: ${COLOR_CYAN}$MAC_ADDRESS${COLOR_RESET}"
-    
-    # Auto-generate static IP
-    STATIC_IP=$(generate_auto_ip)
-    echo -e "Auto-generated IP: ${COLOR_GREEN}$STATIC_IP${COLOR_RESET}"
-    
-    NETWORK_CONFIG="user"
+    # GUI Mode
+    while true; do
+        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
+        GUI_MODE=false
+        gui_input="${gui_input:-n}"
+        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
+            GUI_MODE=true
+            break
+        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
+            break
+        else
+            print_status "ERROR" "Please answer y or n"
+        fi
+    done
+
+    # Performance optimizations
+    while true; do
+        read -p "$(print_status "INPUT" "Enable 1GB HugePages? (y/n, default: y): ")" hp_input
+        hp_input="${hp_input:-y}"
+        if [[ "$hp_input" =~ ^[Yy]$ ]]; then
+            ENABLE_HUGEPAGES=true
+            break
+        elif [[ "$hp_input" =~ ^[Nn]$ ]]; then
+            ENABLE_HUGEPAGES=false
+            break
+        else
+            print_status "ERROR" "Please answer y or n"
+        fi
+    done
 
     while true; do
-        DEFAULT_SSH_PORT=$((22220 + $(get_vm_count)))
-        read -p "$(print_status "INPUT" "SSH Port (recommended: $DEFAULT_SSH_PORT): ")" SSH_PORT
-        SSH_PORT="${SSH_PORT:-$DEFAULT_SSH_PORT}"
-        if validate_input "port" "$SSH_PORT"; then
+        read -p "$(print_status "INPUT" "Enable NUMA awareness? (y/n, default: y): ")" numa_input
+        numa_input="${numa_input:-y}"
+        if [[ "$numa_input" =~ ^[Yy]$ ]]; then
+            ENABLE_NUMA=true
             break
+        elif [[ "$numa_input" =~ ^[Nn]$ ]]; then
+            ENABLE_NUMA=false
+            break
+        else
+            print_status "ERROR" "Please answer y or n"
         fi
     done
 
-    read -p "$(print_status "INPUT" "Enable GUI mode? (y/N): ")" gui_input
-    if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
-        GUI_MODE=true
-    else
-        GUI_MODE=false
-    fi
+    # Additional port forwards
+    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80,8443:443, press Enter for none): ")" PORT_FORWARDS
 
-    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80,8443:443): ")" PORT_FORWARDS
-
-    # Backup & Snapshot
-    BACKUP_SCHEDULE="daily"
-    SNAPSHOT_COUNT=10
-
-    # Final configuration
-    IMG_FILE="$VM_DIR/$VM_NAME.img"
-    SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
+    # Set file paths
+    IMG_FILE="$VM_DIR/disks/$VM_NAME.qcow2"
+    SEED_FILE="$VM_DIR/isos/$VM_NAME-seed.iso"
     CREATED="$(date '+%Y-%m-%d %H:%M:%S')"
-    PROXMOX_TEMPLATE="false"
-
-    section_header "DEPLOYMENT SUMMARY"
-    echo -e "${COLOR_WHITE}VM Configuration:${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}Name:${COLOR_RESET} ${COLOR_CYAN}$VM_NAME${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}OS:${COLOR_RESET} ${COLOR_GREEN}$os${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}Resources:${COLOR_RESET} ${COLOR_YELLOW}$CPUS vCPU | ${MEMORY}MB RAM | $DISK_SIZE disk${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} ${COLOR_MAGENTA}$CPU_TYPE${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} ${COLOR_MAGENTA}$GPU_PASSTHROUGH${COLOR_RESET}"
-    if [ "$GPU_PASSTHROUGH" = true ]; then
-        echo -e "  ${COLOR_GRAY}GPU Type:${COLOR_RESET} $GPU_TYPE"
-    fi
-    echo -e "  ${COLOR_GRAY}Network:${COLOR_RESET} ${COLOR_CYAN}$NETWORK_CONFIG${COLOR_RESET} (IP: $STATIC_IP)"
-    echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
-    if [ "$PROXMOX_MODE" = true ]; then
-        echo -e "  ${COLOR_GRAY}Proxmox VE:${COLOR_RESET} ${COLOR_BLUE}Ready for installation${COLOR_RESET}"
-    fi
-    echo
     
-    read -p "$(print_status "INPUT" "Deploy this VM? (Y/n): ")" confirm
-    if [[ ! "$confirm" =~ ^[Nn]$ ]]; then
-        if [ "$PROXMOX_MODE" = true ]; then
-            setup_proxmox_vm
-        else
-            setup_vm_image
-        fi
-        save_vm_config
-        
-        section_header "DEPLOYMENT COMPLETE"
-        print_status "SUCCESS" "╔══════════════════════════════════════════════════════════════════════╗"
-        print_status "SUCCESS" "║                     VM DEPLOYED SUCCESSFULLY!                         ║"
-        print_status "SUCCESS" "╚══════════════════════════════════════════════════════════════════════╝"
-        
-        log_action "CREATE_VM" "$VM_NAME" "VM created with $OS_TYPE, ${MEMORY}MB RAM, ${CPUS} vCPU, GPU: $GPU_PASSTHROUGH"
-        
-        echo -e "\n${COLOR_WHITE}Access Information:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
-        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
-        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
-        
-        if [ "$PROXMOX_MODE" = true ]; then
-            echo -e "\n${COLOR_WHITE}Proxmox VE Installation:${COLOR_RESET}"
-            echo -e "  ${COLOR_GRAY}After boot, install Proxmox VE with:${COLOR_RESET}"
-            echo -e "  ${COLOR_GRAY}1. Connect to console or SSH${COLOR_RESET}"
-            echo -e "  ${COLOR_GRAY}2. Update system: apt update && apt full-upgrade -y${COLOR_RESET}"
-            echo -e "  ${COLOR_GRAY}3. Install Proxmox: apt install -y proxmox-ve${COLOR_RESET}"
-        fi
-        
-        echo -e "\n${COLOR_WHITE}Performance Features:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}AMD Optimized:${COLOR_RESET} $HAS_AMD"
-        if [ "$HAS_AMD" = true ]; then
-            echo -e "  ${COLOR_GRAY}AMD CPU Model:${COLOR_RESET} $AMD_CPU_MODEL"
-        fi
-        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
-        if [ "$GPU_PASSTHROUGH" = true ]; then
-            echo -e "  ${COLOR_GRAY}GPU Type:${COLOR_RESET} $GPU_TYPE"
-        fi
-        echo -e "  ${COLOR_GRAY}Daily Backups:${COLOR_RESET} Enabled"
-        
-        echo -e "\n${COLOR_YELLOW}══════════════════════════════════════════════════════════════════════${COLOR_RESET}"
-        
-        read -p "$(print_status "INPUT" "Start VM now? (Y/n): ")" start_now
-        if [[ ! "$start_now" =~ ^[Nn]$ ]]; then
-            start_vm "$VM_NAME"
-        fi
-    else
-        print_status "INFO" "Deployment cancelled"
-    fi
+    # Set optimization flags
+    CPU_PINNING=""
+    VIRTIO_OPTIONS="iothread=on,discard=unmap"
+    
+    # Setup VM image
+    setup_vm_image
+    
+    # Save configuration
+    save_vm_config
+    
+    print_status "SUCCESS" "ZynexForge VM '$VM_NAME' created successfully!"
+    print_status "INFO" "Configuration: $CPUS vCPUs, ${MEMORY}MB RAM, $DISK_SIZE disk"
+    print_status "INFO" "To start: Select VM from main menu"
 }
 
-# Function to check if VM is running
-is_vm_running() {
-    local vm_name=$1
-    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null 2>&1; then
-        return 0
+setup_vm_image() {
+    print_status "INFO" "Preparing VM image with AMD EPYC optimizations..."
+    
+    # Download image if not exists
+    if [[ ! -f "$IMG_FILE" ]]; then
+        print_status "INFO" "Downloading OS image from $IMG_URL..."
+        if ! wget --progress=bar:force --tries=3 --timeout=30 "$IMG_URL" -O "$IMG_FILE.tmp"; then
+            print_status "ERROR" "Failed to download image from $IMG_URL"
+            exit 1
+        fi
+        mv "$IMG_FILE.tmp" "$IMG_FILE"
     fi
-    return 1
+    
+    # Resize disk using qcow2 with fast allocation
+    print_status "INFO" "Configuring disk to $DISK_SIZE with NVMe optimizations..."
+    if ! qemu-img resize -f qcow2 "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
+        print_status "WARN" "Failed to resize existing image, creating optimized base..."
+        qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=1M,lazy_refcounts=on "$IMG_FILE" "$DISK_SIZE"
+    fi
+    
+    # Optimize qcow2 image
+    print_status "INFO" "Optimizing disk image for performance..."
+    qemu-img check "$IMG_FILE" && \
+    qemu-img amend -f qcow2 -o compat=1.1,lazy_refcounts=on "$IMG_FILE" 2>/dev/null || true
+    
+    # Create cloud-init configuration with ZynexForge branding
+    cat > /tmp/user-data <<EOF
+#cloud-config
+# ZynexForge VM Engine - Cloud Init Configuration
+hostname: $HOSTNAME
+fqdn: $HOSTNAME.zynexforge.local
+manage_etc_hosts: true
+ssh_pwauth: true
+disable_root: false
+package_update: true
+package_upgrade: true
+timezone: UTC
+users:
+  - name: $USERNAME
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    passwd: $(openssl passwd -6 "$PASSWORD" | tr -d '\n')
+    ssh_authorized_keys: []
+    groups: [sudo, docker, admin]
+    no_user_group: true
+    create_groups: true
+chpasswd:
+  list: |
+    root:$PASSWORD
+    $USERNAME:$PASSWORD
+  expire: false
+write_files:
+  - path: /etc/motd
+    content: |
+      Welcome to ZynexForge VM Engine
+      Hostname: $HOSTNAME
+      Created: $CREATED
+      OS: $OS_TYPE $CODENAME
+      Engine Version: $SCRIPT_VERSION
+      
+      This VM is managed by ZynexForge VM Engine
+      For support, check your host system documentation.
+    owner: root:root
+    permissions: '0644'
+packages:
+  - qemu-guest-agent
+  - cloud-utils
+  - cloud-initramfs-growroot
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - growpart /dev/vda 1 || true
+  - resize2fs /dev/vda1 || true
+  - cloud-init clean --logs
+final_message: |
+  ZynexForge VM Setup Complete!
+  Hostname: $HOSTNAME
+  Username: $USERNAME
+  SSH Port: $SSH_PORT
+  Connect: ssh -p $SSH_PORT $USERNAME@localhost
+EOF
+
+    cat > /tmp/meta-data <<EOF
+instance-id: zynexforge-$VM_NAME
+local-hostname: $HOSTNAME
+cloud-name: zynexforge
+network-interfaces: |
+  auto eth0
+  iface eth0 inet dhcp
+  mtu 1500
+EOF
+
+    # Create seed image
+    print_status "INFO" "Creating cloud-init seed image..."
+    if ! cloud-localds -f vfat -H "$HOSTNAME" "$SEED_FILE" /tmp/user-data /tmp/meta-data; then
+        print_status "ERROR" "Failed to create cloud-init seed image"
+        exit 1
+    fi
+    
+    # Cleanup temp files
+    rm -f /tmp/user-data /tmp/meta-data
+    
+    print_status "SUCCESS" "VM image preparation complete"
+    log_message "CREATE" "Created VM: $VM_NAME with $OS_TYPE"
 }
 
-# Function to start VM with AMD and GPU optimizations
+# ================================================
+# VM OPERATIONS
+# ================================================
+
 start_vm() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
-        section_header "START VIRTUAL MACHINE"
-        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
-        echo -e "${COLOR_WHITE}OS:${COLOR_RESET} $OS_TYPE"
-        echo -e "${COLOR_WHITE}Resources:${COLOR_RESET} ${COLOR_YELLOW}$CPUS vCPU | ${MEMORY}MB RAM${COLOR_RESET}"
+        print_status "INFO" "Starting ZynexForge VM: $vm_name"
         
+        # Check if already running
         if is_vm_running "$vm_name"; then
-            print_status "INFO" "VM $vm_name is already running"
-            
-            echo -e "\n${COLOR_WHITE}Options for running VM:${COLOR_RESET}"
-            echo "  1) Connect to console"
-            echo "  2) Stop VM"
-            echo "  3) View SSH connection info"
-            echo "  4) Show performance stats"
-            echo "  5) Attach/detach GPU"
-            echo "  0) Back to menu"
-            
-            read -p "$(print_status "INPUT" "Select option: ")" running_option
-            
-            case $running_option in
-                1)
-                    print_status "INFO" "Connecting to console..."
-                    if screen -list | grep -q "qemu-$vm_name"; then
-                        screen -r "qemu-$vm_name"
-                    else
-                        print_status "INFO" "No screen session found"
-                    fi
-                    ;;
-                2)
-                    stop_vm "$vm_name"
-                    ;;
-                3)
-                    print_status "INFO" "Access Information:"
-                    echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
-                    echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
-                    echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
-                    read -p "$(print_status "INPUT" "Press Enter to continue...")"
-                    ;;
-                4)
-                    show_vm_performance "$vm_name"
-                    ;;
-                5)
-                    toggle_gpu_passthrough "$vm_name"
-                    ;;
-                *)
-                    return 0
-                    ;;
-            esac
+            print_status "WARN" "VM '$vm_name' is already running"
             return 0
         fi
         
+        # Verify files exist
         if [[ ! -f "$IMG_FILE" ]]; then
-            print_status "ERROR" "VM image not found"
+            print_status "ERROR" "VM image file not found: $IMG_FILE"
             return 1
         fi
         
-        print_status "INFO" "Starting VM with optimizations..."
-        print_status "INFO" "Access Information:"
-        echo -e "  ${COLOR_GRAY}SSH:${COLOR_RESET} ssh -p $SSH_PORT $USERNAME@localhost"
-        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} $PASSWORD"
-        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
-        echo
-        
-        # Build QEMU command with AMD optimizations
-        local qemu_cmd=(
-            qemu-system-x86_64
-            -enable-kvm
-            -machine "type=q35,accel=kvm"
-            -cpu "$CPU_TYPE,l3-cache=on,topoext=on"
-            -m "$MEMORY"
-            -smp "$CPUS,sockets=1,cores=$CPUS,threads=1"
-            -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,discard=on"
-            -drive "file=$SEED_FILE,format=raw,if=virtio,readonly=on"
-            -boot "order=c,menu=on"
-            -device "virtio-net-pci,netdev=n0,mac=$MAC_ADDRESS"
-            -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
-        )
-        
-        # Add GPU passthrough if enabled
-        if [[ "$GPU_PASSTHROUGH" == true ]]; then
-            local gpu_pci_addresses=($GPU_PCI_ADDRESSES)
-            if [ ${#gpu_pci_addresses[@]} -gt 0 ]; then
-                print_status "AMD" "Enabling GPU passthrough for $GPU_TYPE GPU..."
-                
-                # Add vfio-pci devices
-                for pci_addr in "${gpu_pci_addresses[@]}"; do
-                    # Convert PCI address format (e.g., 01:00.0 to 0000:01:00.0)
-                    local full_pci_addr="0000:$pci_addr"
-                    qemu_cmd+=(
-                        -device "vfio-pci,host=$full_pci_addr"
-                    )
-                done
-                
-                # Additional GPU options
-                qemu_cmd+=(
-                    -vga none
-                    -nographic
-                    -device "virtio-gpu-pci"
-                )
-                
-                # Add GPU ROM if needed (for NVIDIA)
-                if [[ "$GPU_TYPE" == "nvidia" ]]; then
-                    if [ -f "/usr/share/kvm/vbios.bin" ]; then
-                        qemu_cmd+=(-device "vfio-pci,host=0000:${gpu_pci_addresses[0]},romfile=/usr/share/kvm/vbios.bin")
-                    fi
-                fi
-            fi
-        elif [[ "$GUI_MODE" == true ]]; then
-            qemu_cmd+=(-vga "virtio" -display "gtk,gl=on")
-        else
-            qemu_cmd+=(-nographic -serial "mon:stdio")
+        if [[ ! -f "$SEED_FILE" ]]; then
+            print_status "WARN" "Seed file not found, recreating..."
+            setup_vm_image
         fi
         
-        # AMD performance enhancements
-        qemu_cmd+=(
-            -device "virtio-balloon-pci"
-            -object "rng-random,filename=/dev/urandom,id=rng0"
-            -device "virtio-rng-pci,rng=rng0"
-            -rtc "base=utc,clock=host,driftfix=slew"
-            -no-reboot
-            -global "kvm-pit.lost_tick_policy=delay"
-            -device "virtio-serial"
-            -chardev "stdio,id=console,signal=off"
-            -device "virtconsole,chardev=console"
+        print_status "INFO" "SSH Access: ssh -p $SSH_PORT $USERNAME@localhost"
+        print_status "INFO" "Password: $PASSWORD"
+        
+        # Build QEMU command with EPYC optimizations
+        local qemu_cmd=(
+            taskset -c 0-$((CPUS-1))
+            qemu-system-x86_64
+            -name "zynexforge-$VM_NAME,debug-threads=on"
+            -enable-kvm
+            -machine "q35,accel=kvm,kernel_irqchip=split"
+            -cpu "$EPYC_CPU_FLAGS"
+            -smp "$CPUS,$EPYC_CPU_TOPOLOGY"
+            -m "$MEMORY"
+            -overcommit mem-lock=on
+            -rtc base=utc,clock=host,driftfix=slew
+            -global kvm-pit.lost_tick_policy=delay
+            -no-hpet
+            -serial mon:stdio
+            -nodefaults
+            -no-user-config
+            -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny
         )
         
-        # Add hugepages for better performance (if available)
-        if [ -d "/dev/hugepages" ]; then
-            local hugepage_size=$((MEMORY * 1024 * 1024 / 2048))
+        # Add hugepages if enabled
+        if [[ "$ENABLE_HUGEPAGES" == true ]]; then
             qemu_cmd+=(
-                -mem-path "/dev/hugepages"
                 -mem-prealloc
-                -object "memory-backend-file,id=mem,size=${MEMORY}M,mem-path=/dev/hugepages,share=on,prealloc=yes"
-                -numa "node,memdev=mem"
+                -mem-path "/dev/hugepages"
             )
         fi
         
-        # Add port forwards
+        # Add NUMA configuration if enabled
+        if [[ "$ENABLE_NUMA" == true ]] && [ "$CPUS" -gt 1 ]; then
+            qemu_cmd+=(
+                -numa "node,nodeid=0,cpus=0-$((CPUS-1)),mem=$MEMORY"
+            )
+        fi
+        
+        # Storage configuration with VirtIO optimizations
+        qemu_cmd+=(
+            -drive "file=$IMG_FILE,if=none,id=drive0,cache=$DISK_CACHE,discard=unmap,aio=$DISK_IO,format=qcow2"
+            -device "virtio-blk-pci,drive=drive0,iothread=iothread0,scsi=off,config-wce=off"
+            -drive "file=$SEED_FILE,if=none,id=drive1,format=raw,readonly=on"
+            -device "virtio-blk-pci,drive=drive1"
+            -object "iothread,id=iothread0"
+        )
+        
+        # Network configuration with multi-queue VirtIO
+        qemu_cmd+=(
+            -netdev "user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=8.8.8.8,hostfwd=tcp::$SSH_PORT-:22,restrict=on"
+            -device "$NET_TYPE,netdev=net0,mac=52:54:00:$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))),vectors=$((NET_QUEUES*2+2))"
+        )
+        
+        # Add additional port forwards
         if [[ -n "$PORT_FORWARDS" ]]; then
             IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
-            local forward_idx=1
+            local net_id=1
             for forward in "${forwards[@]}"; do
                 IFS=':' read -r host_port guest_port <<< "$forward"
-                qemu_cmd+=(-device "virtio-net-pci,netdev=n$forward_idx")
-                qemu_cmd+=(-netdev "user,id=n$forward_idx,hostfwd=tcp::$host_port-:$guest_port")
-                ((forward_idx++))
+                if validate_input "port" "$host_port" && validate_input "port" "$guest_port"; then
+                    qemu_cmd+=(
+                        -netdev "user,id=net$net_id,hostfwd=tcp::$host_port-:$guest_port"
+                        -device "virtio-net-pci,netdev=net$net_id"
+                    )
+                    ((net_id++))
+                fi
             done
         fi
         
-        echo -e "${COLOR_WHITE}Startup Mode:${COLOR_RESET}"
-        echo "  1) Foreground (with console)"
-        echo "  2) Background (daemon)"
-        echo "  3) Screen session (recommended)"
+        # GUI or console mode
+        if [[ "$GUI_MODE" == true ]]; then
+            qemu_cmd+=(
+                -vga virtio
+                -display "gtk,gl=on,show-cursor=on"
+                -usb
+                -device "usb-tablet"
+            )
+        else
+            qemu_cmd+=(
+                -nographic
+                -vga none
+            )
+        fi
         
-        read -p "$(print_status "INPUT" "Select startup mode (default: 3): ")" startup_mode
-        startup_mode="${startup_mode:-3}"
+        # Additional performance devices
+        qemu_cmd+=(
+            -device "virtio-balloon-pci,deflate-on-oom=on"
+            -object "rng-random,id=rng0,filename=/dev/urandom"
+            -device "virtio-rng-pci,rng=rng0,max-bytes=1024,period=1000"
+            -device "vfio-pci,host=0000:00:00.0" 2>/dev/null || true
+            -audiodev "none,id=audio0"
+            -device "AC97,audiodev=audio0"
+        )
         
-        case $startup_mode in
-            1)  # Foreground
-                echo "$SUBTLE_SEP"
-                print_status "INFO" "Starting VM in foreground..."
-                print_status "INFO" "Press Ctrl+C to stop the VM"
-                "${qemu_cmd[@]}"
-                print_status "INFO" "VM has been shut down"
-                ;;
-                
-            2)  # Background
-                "${qemu_cmd[@]}" >/dev/null 2>&1 &
-                print_status "SUCCESS" "VM started in background"
-                ;;
-                
-            3)  # Screen session
-                screen -dmS "qemu-$vm_name" "${qemu_cmd[@]}"
-                print_status "SUCCESS" "VM started in screen session 'qemu-$vm_name'"
-                print_status "INFO" "Attach with: screen -r qemu-$vm_name"
-                print_status "INFO" "Detach with: Ctrl+A then D"
-                ;;
-        esac
+        # Start VM in background with logging
+        local log_file="$LOG_DIR/$VM_NAME-$(date '+%Y%m%d-%H%M%S').log"
+        print_status "INFO" "Starting QEMU with EPYC optimizations..."
+        print_status "DEBUG" "Log file: $log_file"
         
-        log_action "START_VM" "$vm_name" "Started with AMD optimization, GPU: $GPU_PASSTHROUGH"
-    fi
-}
-
-# Function to toggle GPU passthrough
-toggle_gpu_passthrough() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        section_header "GPU PASSTHROUGH MANAGEMENT"
+        # Execute QEMU
+        if [[ "$GUI_MODE" == true ]]; then
+            "${qemu_cmd[@]}" 2>&1 | tee "$log_file" &
+        else
+            "${qemu_cmd[@]}" 2>&1 | tee "$log_file" > /dev/null &
+        fi
+        
+        local qemu_pid=$!
+        echo "$qemu_pid" > "$VM_DIR/$VM_NAME.pid"
+        
+        # Wait for VM to boot
+        print_status "INFO" "VM starting (PID: $qemu_pid)..."
+        sleep 3
         
         if is_vm_running "$vm_name"; then
-            print_status "WARN" "Cannot change GPU passthrough while VM is running"
-            print_status "INFO" "Stop the VM first to change GPU passthrough settings"
+            print_status "SUCCESS" "VM '$vm_name' started successfully"
+            log_message "START" "Started VM: $vm_name (PID: $qemu_pid)"
+        else
+            print_status "ERROR" "Failed to start VM"
             return 1
         fi
-        
-        echo -e "Current GPU Passthrough: ${COLOR_CYAN}$GPU_PASSTHROUGH${COLOR_RESET}"
-        if [ "$GPU_PASSTHROUGH" = true ]; then
-            echo -e "GPU Type: $GPU_TYPE"
-        fi
-        
-        echo -e "\n${COLOR_WHITE}Options:${COLOR_RESET}"
-        echo "  1) Enable GPU passthrough"
-        echo "  2) Disable GPU passthrough"
-        echo "  3) Change GPU type"
-        echo "  0) Back"
-        
-        read -p "$(print_status "INPUT" "Select option: ")" gpu_option
-        
-        case $gpu_option in
-            1)
-                if check_iommu && detect_gpu; then
-                    GPU_PASSTHROUGH=true
-                    GPU_TYPE=$(get_gpu_info)
-                    GPU_PCI_ADDRESSES=$(get_gpu_pci_addresses)
-                    print_status "SUCCESS" "GPU passthrough enabled for $GPU_TYPE"
-                    save_vm_config
-                else
-                    print_status "ERROR" "Cannot enable GPU passthrough"
-                    if ! check_iommu; then
-                        print_status "INFO" "IOMMU is not enabled. Enable it in BIOS/UEFI and kernel parameters."
-                    fi
-                    if ! detect_gpu; then
-                        print_status "INFO" "No GPU detected"
-                    fi
-                fi
-                ;;
-            2)
-                GPU_PASSTHROUGH=false
-                print_status "SUCCESS" "GPU passthrough disabled"
-                save_vm_config
-                ;;
-            3)
-                if check_iommu && detect_gpu; then
-                    echo -e "${COLOR_YELLOW}Available GPU Types:${COLOR_RESET}"
-                    local gpu_types=()
-                    local i=1
-                    
-                    if detect_amd_gpu; then
-                        echo "  $i) AMD GPU"
-                        gpu_types[$i]="amd"
-                        ((i++))
-                    fi
-                    if detect_nvidia_gpu; then
-                        echo "  $i) NVIDIA GPU"
-                        gpu_types[$i]="nvidia"
-                        ((i++))
-                    fi
-                    if detect_intel_gpu; then
-                        echo "  $i) Intel GPU"
-                        gpu_types[$i]="intel"
-                        ((i++))
-                    fi
-                    
-                    read -p "$(print_status "INPUT" "Select GPU type: ")" gpu_type_choice
-                    if [[ "$gpu_type_choice" =~ ^[0-9]+$ ]] && [ "$gpu_type_choice" -ge 1 ] && [ "$gpu_type_choice" -le ${#gpu_types[@]} ]; then
-                        GPU_TYPE="${gpu_types[$gpu_type_choice]}"
-                        GPU_PASSTHROUGH=true
-                        GPU_PCI_ADDRESSES=$(get_gpu_pci_addresses)
-                        print_status "SUCCESS" "GPU type set to $GPU_TYPE"
-                        save_vm_config
-                    fi
-                fi
-                ;;
-        esac
     fi
 }
 
-# Function to show VM performance
-show_vm_performance() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        section_header "VM PERFORMANCE STATS"
-        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
-        
-        if is_vm_running "$vm_name"; then
-            local pid=$(pgrep -f "qemu-system-x86_64.*$vm_name")
-            if [[ -n "$pid" ]]; then
-                echo -e "\n${COLOR_WHITE}Process Stats:${COLOR_RESET}"
-                ps -p "$pid" -o pid,%cpu,%mem,sz,rss,vsz,cmd --no-headers | awk '{
-                    printf "  PID: %s | CPU: %s%% | MEM: %s%% | Size: %sMB | Command: %s\n", 
-                    $1, $2, $3, $4/1024, $7
-                }'
-                
-                # Show CPU pinning info
-                echo -e "\n${COLOR_WHITE}CPU Affinity:${COLOR_RESET}"
-                taskset -cp "$pid" 2>/dev/null || echo "  Not available"
-            fi
-        fi
-        
-        echo -e "\n${COLOR_WHITE}Configuration:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
-        if [ "$GPU_PASSTHROUGH" = true ]; then
-            echo -e "  ${COLOR_GRAY}GPU Type:${COLOR_RESET} $GPU_TYPE"
-        fi
-        
-        echo -e "\n${COLOR_WHITE}Optimizations:${COLOR_RESET}"
-        if [[ "$CPU_TYPE" == "EPYC-v4" ]]; then
-            echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} ${COLOR_GREEN}AMD EPYC Optimized${COLOR_RESET}"
-            echo -e "  ${COLOR_GRAY}Features:${COLOR_RESET} L3 Cache enabled, Topology Extensions"
-        else
-            echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} Host Passthrough"
-        fi
-        echo -e "  ${COLOR_GRAY}Disk Cache:${COLOR_RESET} Writeback + Discard"
-        echo -e "  ${COLOR_GRAY}Network:${COLOR_RESET} VirtIO"
-        if [ -d "/dev/hugepages" ]; then
-            echo -e "  ${COLOR_GRAY}Huge Pages:${COLOR_RESET} Enabled"
-        fi
-        
-        echo
-        read -p "$(print_status "INPUT" "Press Enter to continue...")"
-    fi
-}
-
-# Function to stop VM
 stop_vm() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
-        section_header "STOP VIRTUAL MACHINE"
-        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
-        
         if is_vm_running "$vm_name"; then
-            print_status "INFO" "Stopping VM..."
+            print_status "INFO" "Stopping VM: $vm_name"
             
-            # Check if it's in a screen session
-            if screen -list | grep -q "qemu-$vm_name"; then
-                screen -S "qemu-$vm_name" -X quit
-                print_status "SUCCESS" "VM stopped (screen session terminated)"
-            else
-                # Kill by process name
-                pkill -f "qemu-system-x86_64.*$vm_name"
-                sleep 2
+            # Try graceful shutdown via ACPI
+            if [[ -f "$VM_DIR/$vm_name.pid" ]]; then
+                local pid=$(cat "$VM_DIR/$vm_name.pid")
+                kill -SIGTERM "$pid" 2>/dev/null
+                
+                # Wait for graceful shutdown
+                local timeout=30
+                while is_vm_running "$vm_name" && [ $timeout -gt 0 ]; do
+                    sleep 1
+                    ((timeout--))
+                done
                 
                 if is_vm_running "$vm_name"; then
-                    pkill -9 -f "qemu-system-x86_64.*$vm_name"
-                    print_status "SUCCESS" "VM force stopped"
-                else
-                    print_status "SUCCESS" "VM stopped"
+                    print_status "WARN" "VM did not shutdown gracefully, forcing..."
+                    kill -SIGKILL "$pid" 2>/dev/null
+                fi
+            else
+                # Fallback to pkill
+                pkill -f "qemu-system-x86_64.*$IMG_FILE"
+                sleep 2
+                if is_vm_running "$vm_name"; then
+                    pkill -9 -f "qemu-system-x86_64.*$IMG_FILE"
                 fi
             fi
             
-            log_action "STOP_VM" "$vm_name" "Stopped"
+            # Cleanup PID file
+            rm -f "$VM_DIR/$vm_name.pid"
+            
+            print_status "SUCCESS" "VM $vm_name stopped"
+            log_message "STOP" "Stopped VM: $vm_name"
         else
             print_status "INFO" "VM $vm_name is not running"
         fi
     fi
 }
 
-# Function to show VM info
-show_vm_info() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        section_header "VIRTUAL MACHINE INFORMATION"
-        
-        echo -e "${COLOR_WHITE}Basic Information:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Name:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}OS:${COLOR_RESET} $OS_TYPE"
-        echo -e "  ${COLOR_GRAY}Created:${COLOR_RESET} $CREATED"
-        echo -e "  ${COLOR_GRAY}Status:${COLOR_RESET} $(is_vm_running "$vm_name" && echo -e "${COLOR_GREEN}Running${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Stopped${COLOR_RESET}")"
-        
-        echo -e "\n${COLOR_WHITE}Resources:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}vCPUs:${COLOR_RESET} ${COLOR_YELLOW}$CPUS ($CPU_TYPE)${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} ${COLOR_YELLOW}${MEMORY}MB${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} ${COLOR_YELLOW}$DISK_SIZE${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}GPU Passthrough:${COLOR_RESET} $GPU_PASSTHROUGH"
-        if [ "$GPU_PASSTHROUGH" = true ]; then
-            echo -e "  ${COLOR_GRAY}GPU Type:${COLOR_RESET} $GPU_TYPE"
-        fi
-        
-        echo -e "\n${COLOR_WHITE}Network:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}IP:${COLOR_RESET} $STATIC_IP"
-        echo -e "  ${COLOR_GRAY}SSH Port:${COLOR_RESET} ${COLOR_CYAN}$SSH_PORT${COLOR_RESET}"
-        if [[ -n "$PORT_FORWARDS" ]]; then
-            echo -e "  ${COLOR_GRAY}Port Forwards:${COLOR_RESET} $PORT_FORWARDS"
-        fi
-        
-        echo -e "\n${COLOR_WHITE}Access:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Username:${COLOR_RESET} ${COLOR_GREEN}$USERNAME${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}Password:${COLOR_RESET} ********"
-        
-        if [ "$PROXMOX_MODE" = true ]; then
-            echo -e "\n${COLOR_WHITE}Proxmox VE:${COLOR_RESET}"
-            echo -e "  ${COLOR_GRAY}Mode:${COLOR_RESET} Installation Ready"
-            echo -e "  ${COLOR_GRAY}Template:${COLOR_RESET} $PROXMOX_TEMPLATE"
-        fi
-        
-        echo
-        read -p "$(print_status "INPUT" "Press Enter to continue...")"
-    fi
-}
-
-# Function to delete VM
 delete_vm() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
-        section_header "DELETE VIRTUAL MACHINE"
-        echo -e "${COLOR_WHITE}VM:${COLOR_RESET} ${COLOR_CYAN}$vm_name${COLOR_RESET}"
+        print_status "WARN" "This will PERMANENTLY delete VM '$vm_name' and all associated data!"
+        print_status "WARN" "This action cannot be undone!"
         
-        print_status "WARN" "This will permanently delete the VM!"
-        read -p "$(print_status "INPUT" "Type 'DELETE' to confirm: ")" confirm
-        if [[ "$confirm" == "DELETE" ]]; then
-            if is_vm_running "$vm_name"; then
-                pkill -f "qemu-system-x86_64.*$vm_name"
-            fi
-            
-            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
-            print_status "SUCCESS" "VM '$vm_name' deleted"
-            log_action "DELETE_VM" "$vm_name" "Deleted"
-        else
+        read -p "$(print_status "INPUT" "Are you absolutely sure? (type 'DELETE' to confirm): ")" confirmation
+        if [[ "$confirmation" != "DELETE" ]]; then
             print_status "INFO" "Deletion cancelled"
+            return 0
         fi
+        
+        # Stop VM if running
+        if is_vm_running "$vm_name"; then
+            print_status "INFO" "VM is running, stopping first..."
+            stop_vm "$vm_name"
+            sleep 2
+        fi
+        
+        # Remove all VM files
+        rm -f "$IMG_FILE" "$SEED_FILE" "$CONFIG_DIR/$vm_name.conf" "$VM_DIR/$vm_name.pid" 2>/dev/null
+        
+        # Cleanup logs
+        find "$LOG_DIR" -name "$vm_name-*.log" -delete 2>/dev/null
+        
+        print_status "SUCCESS" "ZynexForge VM '$vm_name' has been completely deleted"
+        log_message "DELETE" "Deleted VM: $vm_name"
     fi
 }
 
-# Function to convert VM to Proxmox template
-convert_to_proxmox_template() {
+# ================================================
+# VM STATUS & INFORMATION
+# ================================================
+
+is_vm_running() {
+    local vm_name=$1
+    if [[ -f "$VM_DIR/$vm_name.pid" ]]; then
+        local pid=$(cat "$VM_DIR/$vm_name.pid" 2>/dev/null)
+        if ps -p "$pid" > /dev/null 2>&1; then
+            return 0
+        fi
+        rm -f "$VM_DIR/$vm_name.pid"
+    fi
+    return 1
+}
+
+show_vm_info() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
-        section_header "CONVERT TO PROXMOX TEMPLATE"
+        echo ""
+        echo "┌─────────────────────────────────────────────────────┐"
+        echo "│            ZYNEXFORGE VM INFORMATION                │"
+        echo "├─────────────────────────────────────────────────────┤"
+        printf "│ %-20s: %-30s │\n" "VM Name" "$VM_NAME"
+        printf "│ %-20s: %-30s │\n" "Status" "$(is_vm_running "$vm_name" && echo "Running" || echo "Stopped")"
+        printf "│ %-20s: %-30s │\n" "OS Type" "$OS_TYPE"
+        printf "│ %-20s: %-30s │\n" "Hostname" "$HOSTNAME"
+        printf "│ %-20s: %-30s │\n" "Username" "$USERNAME"
+        printf "│ %-20s: %-30s │\n" "SSH Port" "$SSH_PORT"
+        printf "│ %-20s: %-30s │\n" "Memory" "${MEMORY}MB"
+        printf "│ %-20s: %-30s │\n" "vCPUs" "$CPUS"
+        printf "│ %-20s: %-30s │\n" "Disk Size" "$DISK_SIZE"
+        printf "│ %-20s: %-30s │\n" "GUI Mode" "$GUI_MODE"
+        printf "│ %-20s: %-30s │\n" "HugePages" "$ENABLE_HUGEPAGES"
+        printf "│ %-20s: %-30s │\n" "NUMA" "$ENABLE_NUMA"
+        printf "│ %-20s: %-30s │\n" "Created" "$CREATED"
+        printf "│ %-20s: %-30s │\n" "Port Forwards" "${PORT_FORWARDS:-None}"
+        echo "├─────────────────────────────────────────────────────┤"
+        echo "│ CONNECTION INFO                                     │"
+        echo "├─────────────────────────────────────────────────────┤"
+        echo "│ SSH: ssh -p $SSH_PORT $USERNAME@localhost           │"
+        echo "│ Password: $PASSWORD                                 │"
+        echo "└─────────────────────────────────────────────────────┘"
+        echo ""
         
         if is_vm_running "$vm_name"; then
-            print_status "ERROR" "Cannot convert running VM to template"
-            return 1
-        fi
-        
-        print_status "INFO" "Converting VM '$vm_name' to Proxmox template..."
-        
-        # Create template directory
-        local template_dir="$TEMPLATES_DIR/$vm_name"
-        mkdir -p "$template_dir"
-        
-        # Copy VM files
-        cp "$IMG_FILE" "$template_dir/"
-        cp "$SEED_FILE" "$template_dir/"
-        cp "$VM_DIR/$vm_name.conf" "$template_dir/"
-        
-        # Create template metadata
-        cat > "$template_dir/template.info" <<EOF
-Template Name: $vm_name
-Original VM: $vm_name
-OS Type: $OS_TYPE
-Created: $(date)
-CPU: $CPUS vCPU
-Memory: $MEMORY MB
-Disk: $DISK_SIZE
-EOF
-        
-        # Update VM config to mark as template
-        PROXMOX_TEMPLATE="true"
-        save_vm_config
-        
-        print_status "SUCCESS" "VM converted to Proxmox template in $template_dir"
-        print_status "INFO" "Template can be cloned to create new VMs"
-    fi
-}
-
-# Function to clone VM from template
-clone_from_template() {
-    local template_name=$1
-    
-    local template_dir="$TEMPLATES_DIR/$template_name"
-    if [ ! -d "$template_dir" ]; then
-        print_status "ERROR" "Template '$template_name' not found"
-        return 1
-    fi
-    
-    section_header "CLONE FROM TEMPLATE"
-    
-    # Load template config
-    if [ -f "$template_dir/$template_name.conf" ]; then
-        source "$template_dir/$template_name.conf" 2>/dev/null
-    fi
-    
-    # Get new VM name
-    while true; do
-        read -p "$(print_status "INPUT" "Enter name for new VM: ")" new_vm_name
-        if validate_input "name" "$new_vm_name"; then
-            if [[ -f "$VM_DIR/$new_vm_name.conf" ]]; then
-                print_status "ERROR" "VM with name '$new_vm_name' already exists"
-            else
-                break
+            local pid=$(cat "$VM_DIR/$vm_name.pid" 2>/dev/null)
+            if [[ -n "$pid" ]]; then
+                echo "Process Information:"
+                ps -p "$pid" -o pid,%cpu,%mem,vsz,rss,etime,cmd --no-headers
+                echo ""
             fi
         fi
-    done
-    
-    # Clone the template
-    print_status "INFO" "Cloning template '$template_name' to '$new_vm_name'..."
-    
-    # Copy image file
-    local new_img_file="$VM_DIR/$new_vm_name.img"
-    cp "$template_dir/$template_name.img" "$new_img_file"
-    
-    # Create new config
-    VM_NAME="$new_vm_name"
-    HOSTNAME="$new_vm_name"
-    IMG_FILE="$new_img_file"
-    SEED_FILE="$VM_DIR/$new_vm_name-seed.iso"
-    CREATED="$(date '+%Y-%m-%d %H:%M:%S')"
-    PROXMOX_TEMPLATE="false"
-    
-    # Generate new MAC and IP
-    MAC_ADDRESS=$(generate_mac)
-    STATIC_IP=$(generate_auto_ip)
-    
-    # Create new cloud-init seed
-    cat > user-data <<EOF
-#cloud-config
-hostname: $HOSTNAME
-ssh_pwauth: true
-disable_root: false
-users:
-  - name: $USERNAME
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    lock_passwd: false
-    passwd: $(echo "$PASSWORD" | openssl passwd -6 -stdin 2>/dev/null | tr -d '\n')
-EOF
-
-    cat > meta-data <<EOF
-instance-id: iid-$VM_NAME
-local-hostname: $HOSTNAME
-EOF
-
-    if cloud-localds "$SEED_FILE" user-data meta-data 2>/dev/null; then
-        save_vm_config
-        print_status "SUCCESS" "VM '$new_vm_name' cloned from template '$template_name'"
-        log_action "CLONE_TEMPLATE" "$new_vm_name" "Cloned from $template_name"
-    else
-        print_status "ERROR" "Failed to create seed image for cloned VM"
-    fi
-}
-
-# Function to show system overview
-show_system_overview() {
-    display_header
-    section_header "SYSTEM OVERVIEW"
-    
-    local total_vms=$(get_vm_count)
-    local running_vms=0
-    local vms=($(get_vm_list))
-    
-    for vm in "${vms[@]}"; do
-        if is_vm_running "$vm"; then
-            ((running_vms++))
-        fi
-    done
-    
-    echo -e "${COLOR_WHITE}Platform Statistics:${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}Total VMs:${COLOR_RESET} ${COLOR_CYAN}$total_vms${COLOR_RESET} / $MAX_VMS"
-    echo -e "  ${COLOR_GRAY}Running VMs:${COLOR_RESET} ${COLOR_GREEN}$running_vms${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}Stopped VMs:${COLOR_RESET} ${COLOR_YELLOW}$((total_vms - running_vms))${COLOR_RESET}"
-    
-    # Count templates
-    local template_count=$(find "$TEMPLATES_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
-    echo -e "  ${COLOR_GRAY}Templates:${COLOR_RESET} ${COLOR_MAGENTA}$template_count${COLOR_RESET}"
-    
-    # System info
-    echo -e "\n${COLOR_WHITE}System Information:${COLOR_RESET}"
-    echo -e "  ${COLOR_GRAY}CPU:${COLOR_RESET} $(detect_amd_cpu && echo -e "${COLOR_GREEN}AMD $(get_amd_cpu_model)${COLOR_RESET}" || echo "Intel/Other")"
-    echo -e "  ${COLOR_GRAY}GPU:${COLOR_RESET} $(get_gpu_info)"
-    echo -e "  ${COLOR_GRAY}IOMMU:${COLOR_RESET} $(check_iommu && echo -e "${COLOR_GREEN}Enabled${COLOR_RESET}" || echo -e "${COLOR_YELLOW}Disabled${COLOR_RESET}")"
-    echo -e "  ${COLOR_GRAY}Memory:${COLOR_RESET} $(free -h | awk '/^Mem:/{print $3 "/" $2 " used"}')"
-    echo -e "  ${COLOR_GRAY}Disk:${COLOR_RESET} $(df -h / | awk 'NR==2 {print $4 " free"}')"
-    
-    # AMD-specific info
-    if detect_amd_cpu; then
-        echo -e "\n${COLOR_WHITE}AMD Optimizations:${COLOR_RESET}"
-        echo -e "  ${COLOR_GRAY}CPU Model:${COLOR_RESET} EPYC-v4"
-        echo -e "  ${COLOR_GRAY}Features:${COLOR_RESET} L3 Cache, Topology Extensions"
-        if [ -d "/dev/hugepages" ]; then
-            echo -e "  ${COLOR_GRAY}Huge Pages:${COLOR_RESET} Enabled"
-        fi
-    fi
-    
-    echo
-    read -p "$(print_status "INPUT" "Press Enter to continue...")"
-}
-
-# Function to manage templates
-manage_templates() {
-    display_header
-    section_header "MANAGE TEMPLATES"
-    
-    local templates=($(find "$TEMPLATES_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort))
-    local template_count=${#templates[@]}
-    
-    if [ $template_count -gt 0 ]; then
-        print_status "INFO" "Available templates:"
-        for i in "${!templates[@]}"; do
-            printf "  %2d) %s\n" $((i+1)) "${templates[$i]}"
-        done
-        echo
         
-        echo "Template Options:"
-        echo "  1) Clone template to new VM"
-        echo "  2) Delete template"
-        echo "  0) Back to main menu"
-        
-        read -p "$(print_status "INPUT" "Enter your choice: ")" choice
-        
-        case $choice in
-            1)
-                if [ $template_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter template number to clone: ")" template_num
-                    if [[ "$template_num" =~ ^[0-9]+$ ]] && [ "$template_num" -ge 1 ] && [ "$template_num" -le $template_count ]; then
-                        clone_from_template "${templates[$((template_num-1))]}"
-                    fi
-                fi
-                ;;
-            2)
-                if [ $template_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter template number to delete: ")" template_num
-                    if [[ "$template_num" =~ ^[0-9]+$ ]] && [ "$template_num" -ge 1 ] && [ "$template_num" -le $template_count ]; then
-                        local template_name="${templates[$((template_num-1))]}"
-                        print_status "WARN" "Delete template '$template_name'?"
-                        read -p "$(print_status "INPUT" "Type 'DELETE' to confirm: ")" confirm
-                        if [[ "$confirm" == "DELETE" ]]; then
-                            rm -rf "$TEMPLATES_DIR/$template_name"
-                            print_status "SUCCESS" "Template '$template_name' deleted"
-                        fi
-                    fi
-                fi
-                ;;
-        esac
-    else
-        echo -e "  ${COLOR_GRAY}No templates found.${COLOR_RESET}"
-        echo
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
     fi
 }
 
-# Main menu function
+# ================================================
+# VM MANAGEMENT FUNCTIONS
+# ================================================
+
+edit_vm_config() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        if is_vm_running "$vm_name"; then
+            print_status "ERROR" "Cannot edit configuration while VM is running"
+            return 1
+        fi
+        
+        print_status "INFO" "Editing VM: $vm_name"
+        
+        while true; do
+            echo ""
+            echo "Edit Options:"
+            echo "  1) Hostname (Current: $HOSTNAME)"
+            echo "  2) Username (Current: $USERNAME)"
+            echo "  3) Password (Current: ****)"
+            echo "  4) SSH Port (Current: $SSH_PORT)"
+            echo "  5) Memory (Current: ${MEMORY}MB)"
+            echo "  6) vCPUs (Current: $CPUS)"
+            echo "  7) GUI Mode (Current: $GUI_MODE)"
+            echo "  8) Port Forwards (Current: ${PORT_FORWARDS:-None})"
+            echo "  9) Performance Settings"
+            echo "  0) Save and Return"
+            echo ""
+            
+            read -p "$(print_status "INPUT" "Select option to edit: ")" edit_choice
+            
+            case $edit_choice in
+                1)
+                    while true; do
+                        read -p "$(print_status "INPUT" "New hostname [$HOSTNAME]: ")" new_hostname
+                        new_hostname="${new_hostname:-$HOSTNAME}"
+                        if validate_input "name" "$new_hostname"; then
+                            HOSTNAME="$new_hostname"
+                            break
+                        fi
+                    done
+                    ;;
+                2)
+                    while true; do
+                        read -p "$(print_status "INPUT" "New username [$USERNAME]: ")" new_username
+                        new_username="${new_username:-$USERNAME}"
+                        if validate_input "username" "$new_username"; then
+                            USERNAME="$new_username"
+                            break
+                        fi
+                    done
+                    ;;
+                3)
+                    while true; do
+                        read -s -p "$(print_status "INPUT" "New password (press Enter to keep current): ")" new_password
+                        echo
+                        if [ -n "$new_password" ]; then
+                            PASSWORD="$new_password"
+                            break
+                        else
+                            break
+                        fi
+                    done
+                    ;;
+                4)
+                    while true; do
+                        read -p "$(print_status "INPUT" "New SSH port [$SSH_PORT]: ")" new_port
+                        new_port="${new_port:-$SSH_PORT}"
+                        if validate_input "port" "$new_port" && check_port_available "$new_port"; then
+                            SSH_PORT="$new_port"
+                            break
+                        fi
+                    done
+                    ;;
+                5)
+                    while true; do
+                        read -p "$(print_status "INPUT" "New memory in MB [$MEMORY]: ")" new_mem
+                        new_mem="${new_mem:-$MEMORY}"
+                        if validate_input "number" "$new_mem"; then
+                            MEMORY="$new_mem"
+                            break
+                        fi
+                    done
+                    ;;
+                6)
+                    while true; do
+                        read -p "$(print_status "INPUT" "New vCPU count [$CPUS]: ")" new_cpus
+                        new_cpus="${new_cpus:-$CPUS}"
+                        if validate_input "number" "$new_cpus"; then
+                            CPUS="$new_cpus"
+                            break
+                        fi
+                    done
+                    ;;
+                7)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enable GUI? (y/n) [$GUI_MODE]: ")" gui_input
+                        gui_input="${gui_input:-}"
+                        if [[ "$gui_input" =~ ^[Yy]$ ]]; then
+                            GUI_MODE=true
+                            break
+                        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
+                            GUI_MODE=false
+                            break
+                        elif [ -z "$gui_input" ]; then
+                            break
+                        fi
+                    done
+                    ;;
+                8)
+                    read -p "$(print_status "INPUT" "New port forwards [$PORT_FORWARDS]: ")" new_forwards
+                    PORT_FORWARDS="${new_forwards:-$PORT_FORWARDS}"
+                    ;;
+                9)
+                    echo ""
+                    echo "Performance Settings:"
+                    echo "  1) HugePages: $ENABLE_HUGEPAGES"
+                    echo "  2) NUMA: $ENABLE_NUMA"
+                    read -p "$(print_status "INPUT" "Select performance setting: ")" perf_choice
+                    
+                    case $perf_choice in
+                        1)
+                            while true; do
+                                read -p "$(print_status "INPUT" "Enable HugePages? (y/n) [$ENABLE_HUGEPAGES]: ")" hp_input
+                                hp_input="${hp_input:-}"
+                                if [[ "$hp_input" =~ ^[Yy]$ ]]; then
+                                    ENABLE_HUGEPAGES=true
+                                    break
+                                elif [[ "$hp_input" =~ ^[Nn]$ ]]; then
+                                    ENABLE_HUGEPAGES=false
+                                    break
+                                elif [ -z "$hp_input" ]; then
+                                    break
+                                fi
+                            done
+                            ;;
+                        2)
+                            while true; do
+                                read -p "$(print_status "INPUT" "Enable NUMA? (y/n) [$ENABLE_NUMA]: ")" numa_input
+                                numa_input="${numa_input:-}"
+                                if [[ "$numa_input" =~ ^[Yy]$ ]]; then
+                                    ENABLE_NUMA=true
+                                    break
+                                elif [[ "$numa_input" =~ ^[Nn]$ ]]; then
+                                    ENABLE_NUMA=false
+                                    break
+                                elif [ -z "$numa_input" ]; then
+                                    break
+                                fi
+                            done
+                            ;;
+                    esac
+                    ;;
+                0)
+                    # Recreate seed image if user/password/hostname changed
+                    print_status "INFO" "Updating cloud-init configuration..."
+                    setup_vm_image
+                    save_vm_config
+                    print_status "SUCCESS" "Configuration updated successfully"
+                    return 0
+                    ;;
+                *)
+                    print_status "ERROR" "Invalid option"
+                    ;;
+            esac
+        done
+    fi
+}
+
+resize_vm_disk() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        if is_vm_running "$vm_name"; then
+            print_status "ERROR" "Cannot resize disk while VM is running"
+            return 1
+        fi
+        
+        print_status "INFO" "Current disk size: $DISK_SIZE"
+        
+        while true; do
+            read -p "$(print_status "INPUT" "Enter new disk size (e.g., 100G): ")" new_disk_size
+            if validate_input "size" "$new_disk_size"; then
+                if [[ "$new_disk_size" == "$DISK_SIZE" ]]; then
+                    print_status "INFO" "Disk size unchanged"
+                    return 0
+                fi
+                
+                # Check if shrinking (warn)
+                local current_num=${DISK_SIZE%[GgMm]}
+                local new_num=${new_disk_size%[GgMm]}
+                local current_unit=${DISK_SIZE: -1}
+                local new_unit=${new_disk_size: -1}
+                
+                # Convert to MB for comparison
+                if [[ "${current_unit^^}" == "G" ]]; then
+                    current_num=$((current_num * 1024))
+                fi
+                if [[ "${new_unit^^}" == "G" ]]; then
+                    new_num=$((new_num * 1024))
+                fi
+                
+                if [[ $new_num -lt $current_num ]]; then
+                    print_status "WARN" "WARNING: Shrinking disk may cause DATA LOSS!"
+                    read -p "$(print_status "INPUT" "Type 'SHRINK' to confirm: ")" confirm
+                    if [[ "$confirm" != "SHRINK" ]]; then
+                        print_status "INFO" "Disk resize cancelled"
+                        return 0
+                    fi
+                fi
+                
+                # Resize disk
+                print_status "INFO" "Resizing disk to $new_disk_size..."
+                if qemu-img resize -f qcow2 "$IMG_FILE" "$new_disk_size"; then
+                    DISK_SIZE="$new_disk_size"
+                    save_vm_config
+                    print_status "SUCCESS" "Disk resized successfully to $new_disk_size"
+                    log_message "RESIZE" "Resized disk for $vm_name to $new_disk_size"
+                else
+                    print_status "ERROR" "Failed to resize disk"
+                    return 1
+                fi
+                break
+            fi
+        done
+    fi
+}
+
+show_vm_performance() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        echo ""
+        echo "┌─────────────────────────────────────────────────────┐"
+        echo "│           ZYNEXFORGE VM PERFORMANCE                 │"
+        echo "├─────────────────────────────────────────────────────┤"
+        
+        if is_vm_running "$vm_name"; then
+            local pid=$(cat "$VM_DIR/$vm_name.pid" 2>/dev/null)
+            if [[ -n "$pid" ]]; then
+                echo "│ QEMU Process Statistics:                          │"
+                echo "├─────────────────────────────────────────────────────┤"
+                ps -p "$pid" -o pid,%cpu,%mem,sz,rss,vsz,etime,cmd --no-headers | while read line; do
+                    printf "│ %-55s │\n" "$line"
+                done
+                echo "├─────────────────────────────────────────────────────┤"
+                
+                # Show system resources
+                echo "│ System Resources:                                  │"
+                echo "├─────────────────────────────────────────────────────┤"
+                free -h | while read line; do
+                    printf "│ %-55s │\n" "$line"
+                done
+                echo "├─────────────────────────────────────────────────────┤"
+                
+                # Show disk usage
+                echo "│ Disk Usage:                                        │"
+                echo "├─────────────────────────────────────────────────────┤"
+                df -h "$IMG_FILE" 2>/dev/null | while read line; do
+                    printf "│ %-55s │\n" "$line"
+                done
+                if ! df -h "$IMG_FILE" >/dev/null 2>&1; then
+                    du -h "$IMG_FILE" | while read line; do
+                        printf "│ %-55s │\n" "$line"
+                    done
+                fi
+            fi
+        else
+            echo "│ VM is not running                                    │"
+            echo "├─────────────────────────────────────────────────────┤"
+            echo "│ Configuration:                                      │"
+            printf "│ %-20s: %-30s │\n" "Memory" "${MEMORY}MB"
+            printf "│ %-20s: %-30s │\n" "vCPUs" "$CPUS"
+            printf "│ %-20s: %-30s │\n" "Disk" "$DISK_SIZE"
+            printf "│ %-20s: %-30s │\n" "HugePages" "$ENABLE_HUGEPAGES"
+            printf "│ %-20s: %-30s │\n" "NUMA" "$ENABLE_NUMA"
+        fi
+        echo "└─────────────────────────────────────────────────────┘"
+        echo ""
+        
+        read -p "$(print_status "INPUT" "Press Enter to continue...")"
+    fi
+}
+
+# ================================================
+# MAIN MENU
+# ================================================
+
 main_menu() {
     while true; do
-        display_header
+        display_banner
         
         local vms=($(get_vm_list))
         local vm_count=${#vms[@]}
         
+        # Show VM list if any exist
         if [ $vm_count -gt 0 ]; then
-            section_header "VIRTUAL MACHINES"
-            print_status "INFO" "Found $vm_count VM(s):"
-            echo
+            print_status "INFO" "Managed VMs ($vm_count):"
+            echo "┌────┬──────────────────────────────┬──────────────┐"
+            echo "│ #  │ VM Name                      │ Status       │"
+            echo "├────┼──────────────────────────────┼──────────────┤"
             
             for i in "${!vms[@]}"; do
-                local vm_name="${vms[$i]}"
-                local status="${COLOR_YELLOW}● Stopped${COLOR_RESET}"
-                if is_vm_running "$vm_name"; then
-                    status="${COLOR_GREEN}● Running${COLOR_RESET}"
+                local vm="${vms[$i]}"
+                local status="Stopped"
+                local color="31"  # Red
+                
+                if is_vm_running "$vm"; then
+                    status="Running"
+                    color="32"  # Green
                 fi
                 
-                # Load config to show GPU status
-                if load_vm_config "$vm_name" 2>/dev/null; then
-                    local gpu_status=""
-                    if [ "$GPU_PASSTHROUGH" = true ]; then
-                        gpu_status=" [GPU:${GPU_TYPE:0:1}]"
-                    fi
-                    printf "  %2d) %-20s %s%s\n" $((i+1)) "$vm_name" "$status" "$gpu_status"
-                else
-                    printf "  %2d) %-20s %s\n" $((i+1)) "$vm_name" "$status"
-                fi
+                printf "│ \033[1;%sm%2d\033[0m │ \033[1;%sm%-28s\033[0m │ \033[1;%sm%-12s\033[0m │\n" \
+                       "33" "$((i+1))" "37" "$vm" "$color" "$status"
             done
-            echo
+            echo "└────┴──────────────────────────────┴──────────────┘"
+            echo ""
         else
-            section_header "WELCOME"
-            echo -e "  ${COLOR_GRAY}No virtual machines found.${COLOR_RESET}"
-            echo
+            print_status "INFO" "No VMs found. Create your first VM to get started."
+            echo ""
         fi
         
-        section_header "MAIN MENU"
-        echo "  1) Create a new VM"
+        # Main menu options
+        echo "ZynexForge VM Engine v$SCRIPT_VERSION - Main Menu"
+        echo "─────────────────────────────────────────────────────"
+        echo "  1) Create new ZynexForge VM"
+        
         if [ $vm_count -gt 0 ]; then
-            echo "  2) Start/Manage a VM"
-            echo "  3) Stop a VM"
-            echo "  4) Show VM info"
-            echo "  5) Delete a VM"
-            echo "  6) Convert VM to Proxmox template"
-            echo "  7) Manage GPU passthrough"
-            echo "  8) System overview"
-            echo "  9) Manage templates"
+            echo "  2) Start VM"
+            echo "  3) Stop VM"
+            echo "  4) Show VM information"
+            echo "  5) Edit VM configuration"
+            echo "  6) Delete VM"
+            echo "  7) Resize VM disk"
+            echo "  8) Show VM performance"
+            echo "  9) System diagnostics"
         fi
+        
         echo "  0) Exit"
-        echo
+        echo ""
         
         read -p "$(print_status "INPUT" "Enter your choice: ")" choice
         
@@ -1648,7 +1168,7 @@ main_menu() {
                 ;;
             2)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to start: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         start_vm "${vms[$((vm_num-1))]}"
                     else
@@ -1668,7 +1188,7 @@ main_menu() {
                 ;;
             4)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to show info: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number for info: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         show_vm_info "${vms[$((vm_num-1))]}"
                     else
@@ -1678,6 +1198,16 @@ main_menu() {
                 ;;
             5)
                 if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to edit: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        edit_vm_config "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                fi
+                ;;
+            6)
+                if [ $vm_count -gt 0 ]; then
                     read -p "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         delete_vm "${vms[$((vm_num-1))]}"
@@ -1686,48 +1216,152 @@ main_menu() {
                     fi
                 fi
                 ;;
-            6)
-                if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to convert to template: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
-                        convert_to_proxmox_template "${vms[$((vm_num-1))]}"
-                    else
-                        print_status "ERROR" "Invalid selection"
-                    fi
-                fi
-                ;;
             7)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to manage GPU: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to resize disk: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
-                        toggle_gpu_passthrough "${vms[$((vm_num-1))]}"
+                        resize_vm_disk "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
                 fi
                 ;;
             8)
-                show_system_overview
+                if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number for performance: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        show_vm_performance "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                fi
                 ;;
             9)
-                manage_templates
+                system_diagnostics
                 ;;
             0)
-                print_status "INFO" "Goodbye!"
+                print_status "INFO" "Thank you for using ZynexForge VM Engine!"
                 exit 0
                 ;;
             *)
                 print_status "ERROR" "Invalid option"
                 ;;
         esac
+        
+        echo ""
+        read -p "$(print_status "INPUT" "Press Enter to continue...")"
     done
 }
 
-# Set trap to cleanup on exit
-trap cleanup EXIT
+system_diagnostics() {
+    display_banner
+    print_status "INFO" "System Diagnostics"
+    echo ""
+    
+    echo "┌─────────────────────────────────────────────────────┐"
+    echo "│              SYSTEM DIAGNOSTICS                     │"
+    echo "├─────────────────────────────────────────────────────┤"
+    
+    # CPU Information
+    echo "│ CPU Information:                                    │"
+    echo "├─────────────────────────────────────────────────────┤"
+    lscpu | grep -E "(Architecture|CPU\(s\)|Model name|Virtualization|Hypervisor)" | while read line; do
+        printf "│ %-55s │\n" "$line"
+    done
+    
+    # Memory Information
+    echo "├─────────────────────────────────────────────────────┤"
+    echo "│ Memory Information:                                 │"
+    echo "├─────────────────────────────────────────────────────┤"
+    free -h | while read line; do
+        printf "│ %-55s │\n" "$line"
+    done
+    
+    # HugePages Information
+    echo "├─────────────────────────────────────────────────────┤"
+    echo "│ HugePages:                                          │"
+    echo "├─────────────────────────────────────────────────────┤"
+    if [ -d /sys/kernel/mm/hugepages ]; then
+        for size in /sys/kernel/mm/hugepages/hugepages-*kB; do
+            local size_kb=${size##*-}
+            size_kb=${size_kb%kB}
+            local nr=$(cat "$size/nr_hugepages" 2>/dev/null)
+            local free=$(cat "$size/free_hugepages" 2>/dev/null)
+            if [[ -n "$nr" ]]; then
+                local size_mb=$((size_kb / 1024))
+                printf "│ %-55s │\n" "$size_mb MB pages: $nr total, $free free"
+            fi
+        done
+    else
+        printf "│ %-55s │\n" "HugePages not configured"
+    fi
+    
+    # KVM Status
+    echo "├─────────────────────────────────────────────────────┤"
+    echo "│ KVM Status:                                         │"
+    echo "├─────────────────────────────────────────────────────┤"
+    if lsmod | grep -q kvm; then
+        printf "│ %-55s │\n" "KVM module loaded: ✓"
+        if [ -e /dev/kvm ]; then
+            printf "│ %-55s │\n" "/dev/kvm accessible: ✓"
+        else
+            printf "│ %-55s │\n" "/dev/kvm NOT accessible: ✗"
+        fi
+    else
+        printf "│ %-55s │\n" "KVM module not loaded: ✗"
+    fi
+    
+    # QEMU Version
+    echo "├─────────────────────────────────────────────────────┤"
+    echo "│ QEMU Version:                                       │"
+    echo "├─────────────────────────────────────────────────────┤"
+    qemu-system-x86_64 --version | head -1 | while read line; do
+        printf "│ %-55s │\n" "$line"
+    done
+    
+    # Disk Space
+    echo "├─────────────────────────────────────────────────────┤"
+    echo "│ Disk Space:                                         │"
+    echo "├─────────────────────────────────────────────────────┤"
+    df -h "$VM_DIR" | while read line; do
+        printf "│ %-55s │\n" "$line"
+    done
+    
+    # Active VMs
+    echo "├─────────────────────────────────────────────────────┤"
+    echo "│ Active VMs:                                         │"
+    echo "├─────────────────────────────────────────────────────┤"
+    local active_count=0
+    for vm in $(get_vm_list); do
+        if is_vm_running "$vm"; then
+            ((active_count++))
+            printf "│ %-55s │\n" "$vm (Running)"
+        fi
+    done
+    if [ $active_count -eq 0 ]; then
+        printf "│ %-55s │\n" "No active VMs"
+    fi
+    
+    echo "└─────────────────────────────────────────────────────┘"
+    echo ""
+    
+    read -p "$(print_status "INPUT" "Press Enter to return to main menu...")"
+}
 
-# Check dependencies
+# ================================================
+# SCRIPT ENTRY POINT
+# ================================================
+
+# Cleanup function
+cleanup() {
+    rm -f /tmp/user-data /tmp/meta-data 2>/dev/null
+}
+
+# Set trap for cleanup
+trap cleanup EXIT INT TERM
+
+# Main execution
+init_directories
 check_dependencies
-
-# Start the main menu
+check_epyc_optimizations
 main_menu
