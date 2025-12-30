@@ -4,7 +4,7 @@ set -euo pipefail
 # ================================================
 # ZYNEXFORGE VM ENGINE
 # Advanced QEMU/KVM Virtualization Manager
-# Version: 6.0
+# Version: 6.1
 # Author: FaaizJohar
 # Optimized for AMD EPYC
 # ================================================
@@ -13,7 +13,7 @@ set -euo pipefail
 VM_DIR="${VM_DIR:-$HOME/zynexforge-vms}"
 CONFIG_DIR="$VM_DIR/configs"
 LOG_DIR="$VM_DIR/logs"
-SCRIPT_VERSION="6.0"
+SCRIPT_VERSION="6.1"
 BRAND_PREFIX="ZynexForge-"
 
 # EPYC CPU Optimizations
@@ -37,18 +37,33 @@ __________                             ___________
 /_______ \/ ____|___|  /\___  >__/\_ \  \___  / \____/|__|  \___  / \___  >
         \/\/         \/     \/      \/      \/             /_____/      \/ 
 
-        ZynexForge VM Engine v6.0 | AMD EPYC Optimized | Powered by FaaizXD
+        ZynexForge VM Engine v6.1 | AMD EPYC Optimized | Powered by FaaizXD
 ===============================================================================
 EOF
     echo ""
 }
 
-# Color functions
+# Color functions (improved from script 2)
 print_info() { echo -e "\033[1;34m[INFO]\033[0m $1"; }
 print_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
 print_error() { echo -e "\033[1;31m[ERROR]\033[0m $1"; }
 print_success() { echo -e "\033[1;32m[SUCCESS]\033[0m $1"; }
 print_input() { echo -e "\033[1;36m[INPUT]\033[0m $1"; }
+
+# Unified print_status function (from script 2)
+print_status() {
+    local type="$1"
+    local message="$2"
+    
+    case $type in
+        "INFO") echo -e "\033[1;34m[INFO]\033[0m $message" ;;
+        "WARN") echo -e "\033[1;33m[WARN]\033[0m $message" ;;
+        "ERROR") echo -e "\033[1;31m[ERROR]\033[0m $message" ;;
+        "SUCCESS") echo -e "\033[1;32m[SUCCESS]\033[0m $message" ;;
+        "INPUT") echo -e "\033[1;36m[INPUT]\033[0m $message" ;;
+        *) echo "[$type] $message" ;;
+    esac
+}
 
 # Logging
 log_message() {
@@ -65,9 +80,9 @@ init_dirs() {
     chmod 755 "$VM_DIR" "$CONFIG_DIR" "$LOG_DIR"
 }
 
-# Check dependencies
+# Enhanced dependency check (from script 2)
 check_deps() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "openssl")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "openssl" "ss")
     local missing=()
     
     for dep in "${deps[@]}"; do
@@ -77,8 +92,8 @@ check_deps() {
     done
     
     if [ ${#missing[@]} -ne 0 ]; then
-        print_error "Missing: ${missing[*]}"
-        print_info "Install: sudo apt install qemu-system cloud-image-utils wget openssl"
+        print_error "Missing dependencies: ${missing[*]}"
+        print_info "Install: sudo apt install qemu-system cloud-image-utils wget openssl iproute2"
         exit 1
     fi
 }
@@ -96,36 +111,56 @@ check_epyc() {
     fi
 }
 
-# Validation functions (improved from script 2)
+# Enhanced validation functions (from script 2)
 validate_input() {
     local type="$1"
     local value="$2"
     
     case $type in
         "number")
-            [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 1 ]
+            if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+                print_error "Must be a number"
+                return 1
+            fi
             ;;
         "size")
-            [[ "$value" =~ ^[0-9]+[GgMm]$ ]]
+            if ! [[ "$value" =~ ^[0-9]+[GgMm]$ ]]; then
+                print_error "Must be a size with unit (e.g., 100G, 512M)"
+                return 1
+            fi
             ;;
         "port")
-            [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 1024 ] && [ "$value" -le 65535 ]
+            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 23 ] || [ "$value" -gt 65535 ]; then
+                print_error "Must be a valid port number (23-65535)"
+                return 1
+            fi
             ;;
         "name")
-            [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]] && [ ${#1} -le 32 ]
+            if ! [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                print_error "VM name can only contain letters, numbers, hyphens, and underscores"
+                return 1
+            fi
             ;;
         "username")
-            [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]] && [ ${#1} -le 32 ]
+            if ! [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+                print_error "Username must start with a letter or underscore, and contain only letters, numbers, hyphens, and underscores"
+                return 1
+            fi
             ;;
         "ip")
-            [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                print_error "Invalid IP address format"
+                return 1
+            fi
             ;;
         *)
             return 1
             ;;
     esac
+    return 0
 }
 
+# Enhanced port check (from script 2)
 check_port_free() {
     ! ss -tln 2>/dev/null | grep -q ":$1 "
 }
@@ -154,7 +189,7 @@ declare -A OS_IMAGES=(
     ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
 )
 
-# Download image with retry - IMPROVED VERSION
+# Enhanced download function with better error handling (from script 2)
 download_image() {
     local url="$1"
     local output="$2"
@@ -248,7 +283,7 @@ EOF
     log_message "CONFIG" "Saved: $VM_NAME"
 }
 
-# Create VM (improved with better validation)
+# Enhanced VM creation with better networking setup (integrated from script 2)
 create_vm() {
     display_banner
     print_info "Creating new ZynexForge VM"
@@ -352,7 +387,7 @@ create_vm() {
         print_error "Must be a positive number"
     done
     
-    # SSH Port
+    # SSH Port with enhanced validation (from script 2)
     while true; do
         read -p "$(print_input "SSH Port (default: 2222): ")" SSH_PORT
         SSH_PORT="${SSH_PORT:-2222}"
@@ -363,7 +398,7 @@ create_vm() {
                 print_error "Port $SSH_PORT is already in use"
             fi
         else
-            print_error "Port must be between 1024-65535"
+            print_error "Port must be between 23-65535"
         fi
     done
     
@@ -382,7 +417,7 @@ create_vm() {
         fi
     done
     
-    # Network settings
+    # Enhanced Network settings (from script 2)
     print_info "Network Configuration:"
     while true; do
         read -p "$(print_input "VM IP Address (default: $DEFAULT_IP): ")" VM_IP
@@ -421,7 +456,7 @@ create_vm() {
         fi
     done
     
-    # Port forwards
+    # Enhanced port forwards (from script 2)
     read -p "$(print_input "Additional port forwards (e.g., 8080:80,8443:443): ")" PORT_FORWARDS
     
     # Set file paths
@@ -441,7 +476,7 @@ create_vm() {
     print_info "To start: Select VM from main menu"
 }
 
-# Setup VM image (improved with networking)
+# Enhanced VM image setup with better networking (from script 2)
 setup_vm() {
     print_info "Preparing VM image..."
     
@@ -459,14 +494,14 @@ setup_vm() {
         print_info "Image already exists, skipping download"
     fi
     
-    # Resize disk (improved from script 2)
+    # Enhanced disk resize (from script 2)
     print_info "Configuring disk to $DISK_SIZE..."
     if ! qemu-img resize -f qcow2 "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
         print_info "Creating new disk image with specified size..."
         qemu-img create -f qcow2 -o preallocation=metadata "$IMG_FILE" "$DISK_SIZE"
     fi
     
-    # Generate password hash using openssl (improved)
+    # Generate password hash using openssl
     local pass_hash
     if command -v openssl &> /dev/null; then
         pass_hash=$(openssl passwd -6 "$PASSWORD" 2>/dev/null || echo "$PASSWORD")
@@ -484,7 +519,7 @@ setup_vm() {
         dns_servers_yaml="${dns_servers_yaml}  - $(echo "$dns" | xargs)\n"
     done
     
-    # Cloud-init config with network configuration
+    # Enhanced cloud-init config with network configuration (from script 2)
     cat > /tmp/user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
@@ -559,7 +594,7 @@ EOF
     log_message "CREATE" "Created VM: $VM_NAME ($OS_TYPE)"
 }
 
-# Start VM (FIXED - runs in foreground with networking)
+# Enhanced VM startup with better networking (integrated from script 2)
 start_vm() {
     local vm="$1"
     
@@ -592,8 +627,7 @@ start_vm() {
         print_info "Gateway: $VM_GATEWAY"
         print_info "DNS: $VM_DNS"
         
-        # Build QEMU command with proper networking - FIXED DNS ISSUE
-        # Use Google DNS (8.8.8.8) instead of gateway for QEMU networking
+        # Enhanced QEMU command with proper networking (from script 2)
         local qemu_cmd=(
             qemu-system-x86_64
             -name "$vm"
@@ -603,17 +637,22 @@ start_vm() {
             -m "$MEMORY"
             -drive "file=$IMG_FILE,if=virtio,format=qcow2,cache=directsync"
             -drive "file=$SEED_FILE,if=virtio,format=raw,readonly=on"
-            -netdev "user,id=net0,net=10.0.2.0/24,host=10.0.2.2,dns=$QEMU_DNS,hostfwd=tcp::$SSH_PORT-:22"
-            -device "virtio-net-pci,netdev=net0,mac=52:54:00:$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256))):$(printf '%02x' $((RANDOM%256)))"
+            -boot order=c
             -device virtio-balloon-pci
             -object rng-random,filename=/dev/urandom,id=rng0
             -device virtio-rng-pci,rng=rng0
             -rtc base=utc,clock=host
             -nodefaults
-            -boot order=c
         )
         
-        # Add port forwards (improved from script 2)
+        # Enhanced network setup (from script 2)
+        # Primary network interface
+        qemu_cmd+=(
+            -device "virtio-net-pci,netdev=net0"
+            -netdev "user,id=net0,hostfwd=tcp::$SSH_PORT-:22,dns=$QEMU_DNS"
+        )
+        
+        # Add enhanced port forwards (from script 2)
         if [[ -n "$PORT_FORWARDS" ]]; then
             IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
             local net_id=1
@@ -639,7 +678,7 @@ start_vm() {
         print_info "══════════════════════════════════════════════════"
         print_info "VM '$vm' is now running!"
         print_info "SSH Connection: ssh -p $SSH_PORT $USERNAME@localhost"
-        print_info "VM IP: $VM_IP (internal network)"
+        print_info "VM IP: $VM_IP (static configuration)"
         print_info "Password: $PASSWORD"
         if [[ "$GUI_MODE" == false ]]; then
             print_info "To exit: Press 'Ctrl+A' then 'X'"
@@ -647,7 +686,7 @@ start_vm() {
         print_info "══════════════════════════════════════════════════"
         echo ""
         
-        # Run QEMU in FOREGROUND (like Script 2)
+        # Run QEMU in FOREGROUND
         "${qemu_cmd[@]}"
         
         # After QEMU exits (VM is shut down)
@@ -656,7 +695,7 @@ start_vm() {
     fi
 }
 
-# Stop VM (for use from menu when VM is running in background)
+# Enhanced VM stop (from script 2)
 stop_vm() {
     local vm="$1"
     
@@ -691,7 +730,7 @@ stop_vm() {
     fi
 }
 
-# Delete VM (improved)
+# Delete VM
 delete_vm() {
     local vm="$1"
     
@@ -765,7 +804,7 @@ show_vm_info() {
     fi
 }
 
-# Edit VM config (improved from script 2)
+# Enhanced VM config editor (from script 2)
 edit_vm() {
     local vm="$1"
     
@@ -952,7 +991,7 @@ edit_vm() {
     fi
 }
 
-# Resize disk (improved from script 2)
+# Enhanced disk resize (from script 2)
 resize_disk() {
     local vm="$1"
     
@@ -972,7 +1011,7 @@ resize_disk() {
                     return 0
                 fi
                 
-                # Check if shrinking (warn)
+                # Check if shrinking (warn) - enhanced from script 2
                 local current_num=${DISK_SIZE%[GgMm]}
                 local new_num=${new_disk_size%[GgMm]}
                 local current_unit=${DISK_SIZE: -1}
@@ -1013,7 +1052,7 @@ resize_disk() {
     fi
 }
 
-# Show VM performance metrics (from script 2)
+# Enhanced VM performance metrics (from script 2)
 show_vm_performance() {
     local vm="$1"
     
@@ -1027,7 +1066,7 @@ show_vm_performance() {
             if [[ -n "$qemu_pid" ]]; then
                 # Show process stats
                 echo "QEMU Process Stats:"
-                ps -p "$qemu_pid" -o pid,%cpu,%mem,sz,rss,vsz,cmd --no-headers
+                ps -p "$qemu_pid" -o pid=%cpu,%mem,sz,rss,vsz,cmd --no-headers
                 echo
                 
                 # Show memory usage
@@ -1038,6 +1077,12 @@ show_vm_performance() {
                 # Show disk usage
                 echo "Disk Usage:"
                 df -h "$IMG_FILE" 2>/dev/null || du -h "$IMG_FILE"
+                
+                # Show network stats
+                echo "Network Statistics:"
+                if command -v ss &> /dev/null; then
+                    ss -tln | grep -E ":$SSH_PORT|$(echo "$PORT_FORWARDS" | sed 's/:.*//g' | tr ',' '|')" | head -10
+                fi
             else
                 print_error "Could not find QEMU process for VM $vm"
             fi
@@ -1087,7 +1132,7 @@ upgrade_vm_config() {
     fi
 }
 
-# Main menu (improved)
+# Enhanced main menu (from script 2)
 main_menu() {
     while true; do
         display_banner
@@ -1136,7 +1181,7 @@ main_menu() {
             echo ""
         fi
         
-        # Menu options
+        # Enhanced menu options (from script 2)
         echo "ZynexForge VM Engine v$SCRIPT_VERSION - Main Menu"
         echo "══════════════════════════════════════════════════"
         echo "  1) Create new ZynexForge VM"
@@ -1249,9 +1294,10 @@ main_menu() {
     done
 }
 
-# Cleanup
+# Cleanup function (from script 2)
 cleanup() {
     rm -f /tmp/user-data /tmp/meta-data 2>/dev/null
+    log_message "INFO" "Script terminated"
 }
 
 # Main
