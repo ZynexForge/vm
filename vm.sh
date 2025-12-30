@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # ============================================================
-# Advanced VM Manager - Simple UI Edition
+# Advanced VM Manager - Fixed UI Edition
 # ============================================================
 
 # Global Configuration
-SCRIPT_VERSION="2.2"
+SCRIPT_VERSION="2.3"
 BASE_DIR="${BASE_DIR:-$HOME/vm-manager}"
 VM_DIR="$BASE_DIR/vms"
 CONFIG_DIR="$BASE_DIR/configs"
@@ -14,13 +14,12 @@ LOG_DIR="$BASE_DIR/logs"
 ISO_DIR="$BASE_DIR/isos"
 TEMP_DIR="/tmp/vm-manager-$$"
 
-# Color Configuration
+# Simple colors (no complex formatting)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # CPU Models Database
@@ -81,8 +80,8 @@ __________                             ___________
         \/\/         \/     \/      \/      \/             /_____/      \/ 
 EOF
     echo -e "${NC}"
-    echo -e "${WHITE}Advanced VM Manager v${SCRIPT_VERSION}${NC}"
-    echo -e "${BLUE}=================================================${NC}\n"
+    echo -e "Advanced VM Manager v${SCRIPT_VERSION}"
+    echo -e "=================================================\n"
 }
 
 print_error() {
@@ -95,10 +94,6 @@ print_success() {
 
 print_info() {
     echo -e "${CYAN}[INFO]${NC} $1"
-}
-
-print_input() {
-    echo -e "${BLUE}[INPUT]${NC} $1"
 }
 
 print_warn() {
@@ -142,30 +137,30 @@ check_dependencies() {
 # ============================================================
 
 show_menu() {
-    echo -e "${WHITE}╔══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║                 MAIN MENU                           ║${NC}"
-    echo -e "${WHITE}╠══════════════════════════════════════════════════════╣${NC}"
-    echo -e "${WHITE}║                                                      ║${NC}"
-    echo -e "${WHITE}║   1) ${GREEN}Create New VM${NC}                                  ║${NC}"
-    echo -e "${WHITE}║   2) ${CYAN}List VMs${NC}                                       ║${NC}"
-    echo -e "${WHITE}║   3) ${GREEN}Start VM${NC}                                       ║${NC}"
-    echo -e "${WHITE}║   4) ${RED}Stop VM${NC}                                        ║${NC}"
-    echo -e "${WHITE}║   5) ${RED}Delete VM${NC}                                      ║${NC}"
-    echo -e "${WHITE}║   6) ${CYAN}VM Information${NC}                                 ║${NC}"
-    echo -e "${WHITE}║   7) ${YELLOW}Hardware Info${NC}                                  ║${NC}"
-    echo -e "${WHITE}║   8) ${RED}Exit${NC}                                         ║${NC}"
-    echo -e "${WHITE}║                                                      ║${NC}"
-    echo -e "${WHITE}╚══════════════════════════════════════════════════════╝${NC}"
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║                 MAIN MENU                           ║"
+    echo "╠══════════════════════════════════════════════════════╣"
+    echo "║                                                      ║"
+    echo "║   1) Create New VM                                  ║"
+    echo "║   2) List VMs                                       ║"
+    echo "║   3) Start VM                                       ║"
+    echo "║   4) Stop VM                                        ║"
+    echo "║   5) Delete VM                                      ║"
+    echo "║   6) VM Information                                 ║"
+    echo "║   7) Hardware Info                                  ║"
+    echo "║   8) Exit                                           ║"
+    echo "║                                                      ║"
+    echo "╚══════════════════════════════════════════════════════╝"
     echo
 }
 
 get_menu_choice() {
     local choice
     while true; do
-        echo -n -e "${BLUE}[INPUT] Select option (1-8): ${NC}"
+        echo -n "Select option (1-8): "
         read -r choice
         
-        # Remove any extra spaces or newlines
+        # Remove any extra spaces
         choice=$(echo "$choice" | tr -d '[:space:]')
         
         if [[ "$choice" =~ ^[1-8]$ ]]; then
@@ -173,6 +168,7 @@ get_menu_choice() {
             return
         else
             print_error "Invalid option. Please enter a number between 1 and 8."
+            echo
         fi
     done
 }
@@ -182,7 +178,7 @@ get_menu_choice() {
 # ============================================================
 
 detect_hardware() {
-    echo -e "\n${WHITE}=== HARDWARE INFORMATION ===${NC}\n"
+    echo -e "\n=== HARDWARE INFORMATION ===\n"
     
     # CPU Info
     if grep -q "AuthenticAMD" /proc/cpuinfo; then
@@ -217,7 +213,7 @@ detect_hardware() {
     print_info "Total Memory: ${TOTAL_MEM}MB"
     
     echo
-    read -p "$(print_input "Press Enter to continue...")"
+    read -p "Press Enter to continue..."
 }
 
 # ============================================================
@@ -232,7 +228,7 @@ create_vm() {
     # VM Name
     local vm_name
     while true; do
-        read -p "$(print_input "Enter VM name: ")" vm_name
+        read -p "Enter VM name: " vm_name
         if [[ -n "$vm_name" ]]; then
             if [[ -f "$CONFIG_DIR/$vm_name.conf" ]]; then
                 print_error "VM '$vm_name' already exists"
@@ -245,7 +241,7 @@ create_vm() {
     done
     
     # OS Selection
-    echo -e "\n${WHITE}=== OS SELECTION ===${NC}"
+    echo -e "\n=== OS SELECTION ==="
     local i=1
     local os_names=()
     
@@ -257,7 +253,7 @@ create_vm() {
     
     local os_choice
     while true; do
-        read -p "$(print_input "Select OS (1-$((i-1))): ")" os_choice
+        read -p "Select OS (1-$((i-1))): " os_choice
         if [[ "$os_choice" =~ ^[0-9]+$ ]] && [[ $os_choice -ge 1 ]] && [[ $os_choice -lt $i ]]; then
             SELECTED_OS="${os_names[$os_choice]}"
             IFS='|' read -r OS_TYPE OS_CODENAME IMG_URL <<< "${OS_IMAGES[$SELECTED_OS]}"
@@ -267,12 +263,12 @@ create_vm() {
     done
     
     # Resource Configuration
-    echo -e "\n${WHITE}=== RESOURCE CONFIGURATION ===${NC}"
+    echo -e "\n=== RESOURCE CONFIGURATION ==="
     
     # Memory
     local memory
     while true; do
-        read -p "$(print_input "Memory in MB (default: 4096): ")" memory
+        read -p "Memory in MB (default: 4096): " memory
         memory="${memory:-4096}"
         if [[ "$memory" =~ ^[0-9]+$ ]] && [[ $memory -gt 0 ]]; then
             break
@@ -283,7 +279,7 @@ create_vm() {
     # CPU Cores
     local cpus
     while true; do
-        read -p "$(print_input "CPU cores (default: 4): ")" cpus
+        read -p "CPU cores (default: 4): " cpus
         cpus="${cpus:-4}"
         if [[ "$cpus" =~ ^[0-9]+$ ]] && [[ $cpus -gt 0 ]]; then
             break
@@ -294,7 +290,7 @@ create_vm() {
     # Disk Size
     local disk_size
     while true; do
-        read -p "$(print_input "Disk size (e.g., 50G, default: 50G): ")" disk_size
+        read -p "Disk size (e.g., 50G, default: 50G): " disk_size
         disk_size="${disk_size:-50G}"
         if [[ "$disk_size" =~ ^[0-9]+[GgMm]$ ]]; then
             break
@@ -303,19 +299,19 @@ create_vm() {
     done
     
     # Network
-    echo -e "\n${WHITE}=== NETWORK CONFIGURATION ===${NC}"
+    echo -e "\n=== NETWORK CONFIGURATION ==="
     echo "  1) User-mode NAT (Default)"
     echo "  2) Bridge networking"
     
     local net_choice
     while true; do
-        read -p "$(print_input "Select network type (1-2): ")" net_choice
+        read -p "Select network type (1-2): " net_choice
         case $net_choice in
             1)
                 NET_TYPE="user"
                 local ssh_port
                 while true; do
-                    read -p "$(print_input "SSH port (default: 2222): ")" ssh_port
+                    read -p "SSH port (default: 2222): " ssh_port
                     ssh_port="${ssh_port:-2222}"
                     if [[ "$ssh_port" =~ ^[0-9]+$ ]] && [[ $ssh_port -ge 1024 ]] && [[ $ssh_port -le 65535 ]]; then
                         # Check if port is in use
@@ -333,7 +329,7 @@ create_vm() {
                 ;;
             2)
                 NET_TYPE="bridge"
-                read -p "$(print_input "Bridge interface (default: br0): ")" BRIDGE_IFACE
+                read -p "Bridge interface (default: br0): " BRIDGE_IFACE
                 BRIDGE_IFACE="${BRIDGE_IFACE:-br0}"
                 SSH_PORT=""
                 break
@@ -345,7 +341,7 @@ create_vm() {
     done
     
     # CPU Selection
-    echo -e "\n${WHITE}=== CPU SELECTION ===${NC}"
+    echo -e "\n=== CPU SELECTION ==="
     
     # Group CPUs
     declare -A cpu_groups
@@ -358,7 +354,7 @@ create_vm() {
     declare -A cpu_map
     
     for group in "AMD Ryzen" "AMD EPYC" "Intel" "Generic"; do
-        echo -e "\n${YELLOW}$group:${NC}"
+        echo -e "\n$group:"
         for cpu in ${cpu_groups[$group]}; do
             printf "  %2d) %s\n" "$i" "$cpu"
             cpu_map[$i]="$cpu"
@@ -368,7 +364,7 @@ create_vm() {
     
     local cpu_choice
     while true; do
-        read -p "$(print_input "Select CPU model (1-$((i-1))): ")" cpu_choice
+        read -p "Select CPU model (1-$((i-1))): " cpu_choice
         if [[ "$cpu_choice" =~ ^[0-9]+$ ]] && [[ $cpu_choice -ge 1 ]] && [[ $cpu_choice -lt $i ]]; then
             SELECTED_CPU="${cpu_map[$cpu_choice]}"
             CPU_MODEL="${CPU_MODELS[$SELECTED_CPU]}"
@@ -378,15 +374,15 @@ create_vm() {
     done
     
     # User Configuration
-    echo -e "\n${WHITE}=== USER CONFIGURATION ===${NC}"
+    echo -e "\n=== USER CONFIGURATION ==="
     
     local username
-    read -p "$(print_input "Username (default: user): ")" username
+    read -p "Username (default: user): " username
     username="${username:-user}"
     
     local password
     while true; do
-        read -s -p "$(print_input "Password: ")" password
+        read -s -p "Password: " password
         echo
         if [[ -n "$password" ]]; then
             break
@@ -395,14 +391,14 @@ create_vm() {
     done
     
     # GPU Configuration
-    echo -e "\n${WHITE}=== GPU CONFIGURATION ===${NC}"
+    echo -e "\n=== GPU CONFIGURATION ==="
     echo "  1) VirtIO-GPU (Recommended)"
     echo "  2) QXL"
     echo "  3) None"
     
     local gpu_choice
     while true; do
-        read -p "$(print_input "Select GPU type (1-3): ")" gpu_choice
+        read -p "Select GPU type (1-3): " gpu_choice
         case $gpu_choice in
             1) VGPU_TYPE="virtio"; break ;;
             2) VGPU_TYPE="qxl"; break ;;
@@ -479,7 +475,7 @@ EOF
     print_success "VM '$vm_name' created successfully!"
     
     # Show summary
-    echo -e "\n${WHITE}=== VM SUMMARY ===${NC}"
+    echo -e "\n=== VM SUMMARY ==="
     echo "Name: $vm_name"
     echo "OS: $SELECTED_OS"
     echo "Memory: ${memory}MB"
@@ -493,7 +489,7 @@ EOF
     fi
     
     echo
-    read -p "$(print_input "Press Enter to continue...")"
+    read -p "Press Enter to continue..."
 }
 
 # ============================================================
@@ -502,19 +498,19 @@ EOF
 
 list_vms() {
     show_banner
-    echo -e "${WHITE}=== VIRTUAL MACHINES ===${NC}\n"
+    echo -e "\n=== VIRTUAL MACHINES ===\n"
     
     local vms=($(find "$CONFIG_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort))
     
     if [[ ${#vms[@]} -eq 0 ]]; then
         print_info "No VMs found"
         echo
-        read -p "$(print_input "Press Enter to continue...")"
+        read -p "Press Enter to continue..."
         return
     fi
     
-    echo -e "${CYAN}No.  Name              Status        OS${NC}"
-    echo -e "${BLUE}────────────────────────────────────────────${NC}"
+    echo "No.  Name              Status        OS"
+    echo "────────────────────────────────────────────"
     
     local i=1
     for vm in "${vms[@]}"; do
@@ -523,9 +519,9 @@ list_vms() {
             source "$config_file" 2>/dev/null
             
             # Check if running
-            local status="${RED}Stopped${NC}"
+            local status="Stopped"
             if pgrep -f "qemu-system.*$vm" &>/dev/null; then
-                status="${GREEN}Running${NC}"
+                status="Running"
             fi
             
             printf "%2d)  %-15s  %-12s  %s\n" "$i" "$vm" "$status" "$SELECTED_OS"
@@ -534,7 +530,7 @@ list_vms() {
     done
     
     echo
-    read -p "$(print_input "Press Enter to continue...")"
+    read -p "Press Enter to continue..."
 }
 
 start_vm() {
@@ -548,7 +544,7 @@ start_vm() {
     fi
     
     local vm_num
-    read -p "$(print_input "Enter VM number to start: ")" vm_num
+    read -p "Enter VM number to start: " vm_num
     
     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [[ $vm_num -ge 1 ]] && [[ $vm_num -le ${#vms[@]} ]]; then
         local vm_name="${vms[$((vm_num-1))]}"
@@ -556,7 +552,7 @@ start_vm() {
         # Check if already running
         if pgrep -f "qemu-system.*$vm_name" &>/dev/null; then
             print_error "VM '$vm_name' is already running"
-            read -p "$(print_input "Press Enter to continue...")"
+            read -p "Press Enter to continue..."
             return
         fi
         
@@ -625,18 +621,18 @@ start_vm() {
         if pgrep -f "qemu-system.*$vm_name" &>/dev/null; then
             print_success "VM '$vm_name' started"
             if [[ "$NET_TYPE" == "user" ]]; then
-                echo -e "${CYAN}SSH:${NC} ssh -p $SSH_PORT $USERNAME@localhost"
-                echo -e "${CYAN}Password:${NC} $PASSWORD"
+                echo "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
+                echo "Password: $PASSWORD"
             fi
         else
             print_error "Failed to start VM"
         fi
         
         echo
-        read -p "$(print_input "Press Enter to continue...")"
+        read -p "Press Enter to continue..."
     else
         print_error "Invalid selection"
-        read -p "$(print_input "Press Enter to continue...")"
+        read -p "Press Enter to continue..."
     fi
 }
 
@@ -651,7 +647,7 @@ stop_vm() {
     fi
     
     local vm_num
-    read -p "$(print_input "Enter VM number to stop: ")" vm_num
+    read -p "Enter VM number to stop: " vm_num
     
     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [[ $vm_num -ge 1 ]] && [[ $vm_num -le ${#vms[@]} ]]; then
         local vm_name="${vms[$((vm_num-1))]}"
@@ -675,10 +671,10 @@ stop_vm() {
         fi
         
         echo
-        read -p "$(print_input "Press Enter to continue...")"
+        read -p "Press Enter to continue..."
     else
         print_error "Invalid selection"
-        read -p "$(print_input "Press Enter to continue...")"
+        read -p "Press Enter to continue..."
     fi
 }
 
@@ -693,12 +689,12 @@ delete_vm() {
     fi
     
     local vm_num
-    read -p "$(print_input "Enter VM number to delete: ")" vm_num
+    read -p "Enter VM number to delete: " vm_num
     
     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [[ $vm_num -ge 1 ]] && [[ $vm_num -le ${#vms[@]} ]]; then
         local vm_name="${vms[$((vm_num-1))]}"
         
-        read -p "$(print_input "Are you sure you want to delete '$vm_name'? (y/N): ")" confirm
+        read -p "Are you sure you want to delete '$vm_name'? (y/N): " confirm
         
         if [[ "$confirm" =~ ^[Yy]$ ]]; then
             # Stop if running
@@ -720,10 +716,10 @@ delete_vm() {
         fi
         
         echo
-        read -p "$(print_input "Press Enter to continue...")"
+        read -p "Press Enter to continue..."
     else
         print_error "Invalid selection"
-        read -p "$(print_input "Press Enter to continue...")"
+        read -p "Press Enter to continue..."
     fi
 }
 
@@ -738,7 +734,7 @@ show_vm_info() {
     fi
     
     local vm_num
-    read -p "$(print_input "Enter VM number for info: ")" vm_num
+    read -p "Enter VM number for info: " vm_num
     
     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [[ $vm_num -ge 1 ]] && [[ $vm_num -le ${#vms[@]} ]]; then
         local vm_name="${vms[$((vm_num-1))]}"
@@ -748,37 +744,37 @@ show_vm_info() {
             source "$config_file"
             
             show_banner
-            echo -e "${WHITE}=== VM INFORMATION ===${NC}\n"
+            echo -e "\n=== VM INFORMATION ===\n"
             
             # Status
-            local status="${RED}Stopped${NC}"
+            local status="Stopped"
             if pgrep -f "qemu-system.*$vm_name" &>/dev/null; then
-                status="${GREEN}Running${NC}"
+                status="Running"
             fi
             
-            echo -e "${CYAN}Name:${NC} $vm_name"
-            echo -e "${CYAN}Status:${NC} $status"
-            echo -e "${CYAN}Created:${NC} $CREATED"
-            echo -e "${CYAN}OS:${NC} $SELECTED_OS"
-            echo -e "${CYAN}CPU:${NC} $SELECTED_CPU ($VM_CPUS cores)"
-            echo -e "${CYAN}Memory:${NC} $VM_MEMORY MB"
-            echo -e "${CYAN}Disk:${NC} $DISK_SIZE"
-            echo -e "${CYAN}Network:${NC} $NET_TYPE"
+            echo "Name: $vm_name"
+            echo "Status: $status"
+            echo "Created: $CREATED"
+            echo "OS: $SELECTED_OS"
+            echo "CPU: $SELECTED_CPU ($VM_CPUS cores)"
+            echo "Memory: $VM_MEMORY MB"
+            echo "Disk: $DISK_SIZE"
+            echo "Network: $NET_TYPE"
             
             if [[ "$NET_TYPE" == "user" ]]; then
-                echo -e "${CYAN}SSH Port:${NC} $SSH_PORT"
-                echo -e "${CYAN}Username:${NC} $USERNAME"
-                echo -e "${CYAN}SSH Command:${NC} ssh -p $SSH_PORT $USERNAME@localhost"
+                echo "SSH Port: $SSH_PORT"
+                echo "Username: $USERNAME"
+                echo "SSH Command: ssh -p $SSH_PORT $USERNAME@localhost"
             fi
             
-            echo -e "${CYAN}GPU:${NC} $VGPU_TYPE"
+            echo "GPU: $VGPU_TYPE"
             
             echo
-            read -p "$(print_input "Press Enter to continue...")"
+            read -p "Press Enter to continue..."
         fi
     else
         print_error "Invalid selection"
-        read -p "$(print_input "Press Enter to continue...")"
+        read -p "Press Enter to continue..."
     fi
 }
 
