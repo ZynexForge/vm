@@ -115,7 +115,7 @@ check_port_free() {
     ! ss -tln 2>/dev/null | grep -q ":$1 "
 }
 
-# OS Options with the exact format you want
+# OS Options
 declare -A OS_IMAGES=(
     ["Ubuntu 22.04"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
     ["Ubuntu 24.04"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
@@ -129,7 +129,7 @@ declare -A OS_IMAGES=(
     ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
 )
 
-# Download image with retry
+# Download image with retry - SIMPLIFIED VERSION
 download_image() {
     local url="$1"
     local output="$2"
@@ -139,10 +139,10 @@ download_image() {
     # Ensure directory exists
     mkdir -p "$(dirname "$output")"
     
+    print_info "Downloading: $(basename "$url")"
+    
     while [ $retry_count -lt $max_retries ]; do
-        print_info "Download attempt $((retry_count + 1))/$max_retries..."
-        
-        if wget --progress=bar:force --timeout=60 --tries=3 "$url" -O "$output.tmp"; then
+        if wget -q --show-progress --timeout=60 --tries=3 "$url" -O "$output.tmp"; then
             mv "$output.tmp" "$output"
             print_success "Download completed: $(basename "$output")"
             return 0
@@ -151,8 +151,8 @@ download_image() {
         ((retry_count++))
         
         if [ $retry_count -lt $max_retries ]; then
-            print_warn "Download failed, retrying in 5 seconds..."
-            sleep 5
+            print_warn "Download failed, retrying ($retry_count/$max_retries)..."
+            sleep 2
         fi
     done
     
@@ -338,13 +338,13 @@ setup_vm() {
     print_info "Preparing VM image..."
     
     # Ensure directories exist
-    mkdir -p "$VM_DIR/disks" "$VM_DIR/isos"
+    mkdir -p "$(dirname "$IMG_FILE")" "$(dirname "$SEED_FILE")"
     
     # Download image if not exists
     if [[ ! -f "$IMG_FILE" ]]; then
         print_info "Downloading OS image: $OS_TYPE"
         if ! download_image "$IMG_URL" "$IMG_FILE"; then
-            print_error "Failed to download image. Please check your internet connection."
+            print_error "Failed to download image. Please check your internet connection and try again."
             exit 1
         fi
     else
