@@ -458,7 +458,7 @@ EOF
     log_message "CREATE" "Created VM: $VM_NAME ($OS_TYPE)"
 }
 
-# Start VM (improved)
+# Start VM (FIXED - no hanging issue)
 start_vm() {
     local vm="$1"
     
@@ -533,18 +533,19 @@ start_vm() {
         local log_file="$LOG_DIR/$vm-$(date '+%Y%m%d-%H%M%S').log"
         print_info "Starting QEMU with EPYC optimizations..."
         
-        # Run QEMU in background
+        # Run QEMU in background with proper redirection
         if [[ "$GUI_MODE" == true ]]; then
-            "${qemu_cmd[@]}" 2>&1 | tee "$log_file" &
+            "${qemu_cmd[@]}" > "$log_file" 2>&1 &
         else
-            "${qemu_cmd[@]}" 2>&1 | tee "$log_file" >/dev/null &
+            # For console mode, run in background and disconnect from terminal
+            nohup "${qemu_cmd[@]}" > "$log_file" 2>&1 &
         fi
         
         local pid=$!
         echo "$pid" > "$VM_DIR/$vm.pid"
         
         # Check if started successfully
-        sleep 3
+        sleep 2
         if kill -0 "$pid" 2>/dev/null; then
             print_success "VM '$vm' started successfully (PID: $pid)"
             log_message "START" "Started VM: $vm (PID: $pid)"
@@ -558,10 +559,14 @@ start_vm() {
             echo ""
             
             if [[ "$GUI_MODE" == false ]]; then
-                print_info "To stop this VM: Press 'Ctrl+A' then 'X'"
+                print_info "To stop this VM: Use 'Stop VM' option from main menu"
                 print_info "To SSH into VM from another terminal:"
                 print_info "  ssh -p $SSH_PORT $USERNAME@localhost"
+                print_info "Log file: $log_file"
             fi
+            
+            # Don't wait for user input here - return to main menu immediately
+            return 0
         else
             print_error "Failed to start VM"
             print_info "Check log file for details: $log_file"
@@ -983,7 +988,10 @@ main_menu() {
                 if [ $vm_count -gt 0 ]; then
                     read -p "$(print_input "Enter VM number to start: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        # Don't wait for input after starting VM
                         start_vm "${vms[$((vm_num-1))]}"
+                        # Skip the "Press Enter to continue" prompt
+                        continue
                     else
                         print_error "Invalid selection"
                     fi
@@ -1058,8 +1066,11 @@ main_menu() {
                 ;;
         esac
         
-        echo ""
-        read -p "$(print_input "Press Enter to continue...")"
+        # Only show "Press Enter to continue" if we didn't just start a VM
+        if [[ "$choice" != "2" ]]; then
+            echo ""
+            read -p "$(print_input "Press Enter to continue...")"
+        fi
     done
 }
 
