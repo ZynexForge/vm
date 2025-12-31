@@ -823,13 +823,13 @@ main_menu() {
             echo
         fi
         
-                echo "Main Menu:"
+        echo "Main Menu:"
         echo "  1) Create a new VM"
         if [ $vm_count -gt 0 ]; then
             echo "  2) Start a VM"
             echo "  3) Stop a VM"
             echo "  4) Show VM info"
-            echo "  5) Edit VM configuration"  # Fixed: Added missing double quote
+            echo "  5) Edit VM configuration"
             echo "  6) Delete a VM"
             echo "  7) Resize VM disk"
             echo "  8) Show VM performance"
