@@ -362,7 +362,7 @@ create_new_vm() {
                 9) OS_TYPE="Debian 12"; IMG_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"; DEFAULT_HOSTNAME="debian12"; DEFAULT_USERNAME="debian"; DEFAULT_PASSWORD="debian123" ;;
                 10) OS_TYPE="AlmaLinux 9"; IMG_URL="https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"; DEFAULT_HOSTNAME="almalinux9"; DEFAULT_USERNAME="alma"; DEFAULT_PASSWORD="alma123" ;;
                 11) OS_TYPE="Ubuntu 24.04"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="ubuntu24"; DEFAULT_USERNAME="ubuntu"; DEFAULT_PASSWORD="ubuntu123" ;;
-                12) OS_TYPE="Proxmox"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="proxmox-vm"; DEFAULT_USERNAME="proxmox"; DEFAULT_PASSWORD="proxmox123" ;;
+                12) OS_TYPE="Proxmox"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="proxmox-vm"; DEFAULT_USERNAME="root"; DEFAULT_PASSWORD="root" ;;
             esac
             break
         else
@@ -575,17 +575,11 @@ build_qemu_command() {
         fi
     fi
     
-    # Disk configuration
+    # Disk configuration - SIMPLIFIED to fix the error
     qemu_cmd+=(
         -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=$DISK_CACHE"
         -drive "file=$SEED_FILE,format=raw,if=virtio,readonly=on"
     )
-    
-    # IO Uring for fast I/O
-    if [[ "$IO_URING" == true ]]; then
-        qemu_cmd+=(-object iothread,id=iothread0)
-        qemu_cmd+=(-device virtio-blk-pci,drive=drive0,iothread=iothread0)
-    fi
     
     # Network configuration
     qemu_cmd+=(
@@ -596,14 +590,26 @@ build_qemu_command() {
     # Add port forwards if specified
     if [[ -n "$PORT_FORWARDS" ]]; then
         IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
+        local net_idx=1
         for forward in "${forwards[@]}"; do
             IFS=':' read -r host_port guest_port <<< "$forward"
-            qemu_cmd+=(-netdev "user,id=net${#qemu_cmd[@]},hostfwd=tcp::$host_port-:$guest_port")
-            qemu_cmd+=(-device "virtio-net-pci,netdev=net${#qemu_cmd[@]}")
+            qemu_cmd+=(-netdev "user,id=net$net_idx,hostfwd=tcp::$host_port-:$guest_port")
+            qemu_cmd+=(-device "virtio-net-pci,netdev=net$net_idx")
+            ((net_idx++))
         done
     fi
     
-    # Additional devices
+    # Additional devices - only add if IO_URING is enabled
+    if [[ "$IO_URING" == true ]]; then
+        qemu_cmd+=(
+            -object iothread,id=iothread0
+            -device virtio-blk-pci,drive=drive0,iothread=iothread0
+        )
+        # Add the drive0 definition
+        qemu_cmd+=(-drive "if=none,id=drive0,file=$IMG_FILE,format=qcow2,cache=$DISK_CACHE")
+    fi
+    
+    # Add other devices
     qemu_cmd+=(
         -device virtio-balloon-pci
         -object rng-random,filename=/dev/urandom,id=rng0
