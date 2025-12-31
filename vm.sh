@@ -11,6 +11,19 @@ DEFAULT_CPUS="8"          # 8 CPU cores
 DEFAULT_DISK="500G"       # 500GB Disk
 DEFAULT_CPU_MODEL="host"  # Auto CPU features
 
+# Check KVM availability
+check_kvm() {
+    if [ ! -c /dev/kvm ]; then
+        echo -e "\033[1;33m[WARNING] KVM not available. Using software acceleration.\033[0m"
+        echo -e "\033[1;33m[INFO] For better performance, enable KVM:\033[0m"
+        echo -e "\033[1;33m[INFO]   sudo modprobe kvm\033[0m"
+        echo -e "\033[1;33m[INFO]   sudo modprobe kvm_intel (or kvm_amd)\033[0m"
+        echo -e "\033[1;33m[INFO]   sudo adduser $USER kvm\033[0m"
+        return 1
+    fi
+    return 0
+}
+
 # Function to display header
 display_header() {
     clear
@@ -29,7 +42,13 @@ __________                           ___________
 EOF
     echo -e "\033[1;36mZynexForge v2.0 | Recommended: 24GB RAM | 8 Cores | 500GB Disk\033[0m"
     echo -e "\033[1;33mHost: KVM/QEMU (Standard PC (i440FX + PIIX, 1996))\033[0m"
-    echo -e "\033[1;35mPerformance Mode: ZORVIX OPTIMIZED\033[0m"
+    
+    # Show KVM status
+    if check_kvm; then
+        echo -e "\033[1;32mPerformance Mode: KVM ACCELERATED\033[0m"
+    else
+        echo -e "\033[1;33mPerformance Mode: SOFTWARE EMULATION\033[0m"
+    fi
     echo "========================================================================="
     echo
 }
@@ -106,6 +125,9 @@ check_dependencies() {
         print_status "INFO" "On Ubuntu/Debian, try: sudo apt install qemu-system cloud-image-utils wget"
         exit 1
     fi
+    
+    # Check KVM
+    check_kvm
 }
 
 # Function to cleanup temporary files
@@ -225,173 +247,7 @@ EOF
     print_status "SUCCESS" "VM '$VM_NAME' created successfully."
 }
 
-# Function to create new VM
-create_new_vm() {
-    display_header
-    print_status "INFO" "Creating a new VM"
-    
-    # Get VM name
-    while true; do
-        read -p "$(print_status "INPUT" "Enter VM name: ")" VM_NAME
-        if validate_input "name" "$VM_NAME"; then
-            if [[ -f "$VM_DIR/$VM_NAME.conf" ]]; then
-                print_status "ERROR" "VM '$VM_NAME' already exists"
-            else
-                break
-            fi
-        fi
-    done
-    
-    # OS Selection
-    print_status "INFO" "Select an OS to set up:"
-    local os_options=()
-    local i=1
-    for os in "${!OS_OPTIONS[@]}"; do
-        echo "  $i) $os"
-        os_options[$i]="$os"
-        ((i++))
-    done
-    
-    while true; do
-        read -p "$(print_status "INPUT" "Enter your choice (1-${#OS_OPTIONS[@]}): ")" choice
-        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#OS_OPTIONS[@]} ]; then
-            local os="${os_options[$choice]}"
-            IFS='|' read -r OS_TYPE CODENAME IMG_URL DEFAULT_HOSTNAME DEFAULT_USERNAME DEFAULT_PASSWORD <<< "${OS_OPTIONS[$os]}"
-            break
-        else
-            print_status "ERROR" "Invalid selection. Try again."
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "Enter hostname (default: $VM_NAME): ")" HOSTNAME
-        HOSTNAME="${HOSTNAME:-$VM_NAME}"
-        if validate_input "name" "$HOSTNAME"; then
-            break
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "Enter username (default: $DEFAULT_USERNAME): ")" USERNAME
-        USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
-        if validate_input "username" "$USERNAME"; then
-            break
-        fi
-    done
-
-    while true; do
-        read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
-        PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
-        echo
-        if [ -n "$PASSWORD" ]; then
-            break
-        else
-            print_status "ERROR" "Password cannot be empty"
-        fi
-    done
-
-    # Customizable Hardware Configuration
-    echo
-    print_status "PERF" "=== Hardware Configuration ==="
-    print_status "INFO" "Recommended: ${DEFAULT_MEMORY}MB RAM, ${DEFAULT_CPUS} CPUs, ${DEFAULT_DISK} Disk"
-    echo
-
-    # Memory Configuration
-    while true; do
-        read -p "$(print_status "INPUT" "Memory in MB (default: $DEFAULT_MEMORY): ")" MEMORY
-        MEMORY="${MEMORY:-$DEFAULT_MEMORY}"
-        if validate_input "number" "$MEMORY"; then
-            print_status "PERF" "RAM set to: ${MEMORY}MB ($((MEMORY/1024))GB)"
-            break
-        fi
-    done
-
-    # CPU Configuration
-    while true; do
-        read -p "$(print_status "INPUT" "Number of CPUs (default: $DEFAULT_CPUS): ")" CPUS
-        CPUS="${CPUS:-$DEFAULT_CPUS}"
-        if validate_input "number" "$CPUS"; then
-            print_status "PERF" "CPUs set to: ${CPUS}"
-            break
-        fi
-    done
-
-    # Disk Configuration
-    while true; do
-        read -p "$(print_status "INPUT" "Disk size (default: $DEFAULT_DISK): ")" DISK_SIZE
-        DISK_SIZE="${DISK_SIZE:-$DEFAULT_DISK}"
-        if validate_input "size" "$DISK_SIZE"; then
-            print_status "PERF" "Disk set to: ${DISK_SIZE}"
-            break
-        fi
-    done
-
-    # Network Configuration
-    while true; do
-        read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
-        SSH_PORT="${SSH_PORT:-2222}"
-        if validate_input "port" "$SSH_PORT"; then
-            # Check if port is already in use
-            if ss -tln 2>/dev/null | grep -q ":$SSH_PORT "; then
-                print_status "ERROR" "Port $SSH_PORT is already in use"
-            else
-                break
-            fi
-        fi
-    done
-
-    # GUI Mode
-    while true; do
-        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
-        GUI_MODE=false
-        gui_input="${gui_input:-n}"
-        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
-            GUI_MODE=true
-            break
-        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
-            break
-        else
-            print_status "ERROR" "Please answer y or n"
-        fi
-    done
-
-    # Additional network options
-    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
-
-    # Summary
-    echo
-    print_status "PERF" "=== Configuration Summary ==="
-    print_status "INFO" "VM Name: $VM_NAME"
-    print_status "INFO" "OS: $OS_TYPE"
-    print_status "INFO" "Hostname: $HOSTNAME"
-    print_status "INFO" "Username: $USERNAME"
-    print_status "INFO" "Memory: ${MEMORY}MB ($((MEMORY/1024))GB)"
-    print_status "INFO" "CPUs: $CPUS"
-    print_status "INFO" "Disk: $DISK_SIZE"
-    print_status "INFO" "SSH Port: $SSH_PORT"
-    print_status "INFO" "GUI Mode: $GUI_MODE"
-    print_status "INFO" "Port Forwards: ${PORT_FORWARDS:-None}"
-    echo
-
-    # Confirm
-    read -p "$(print_status "INPUT" "Create VM with these settings? (y/N): ")" confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        print_status "INFO" "VM creation cancelled"
-        return
-    fi
-
-    IMG_FILE="$VM_DIR/$VM_NAME.img"
-    SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
-    CREATED="$(date)"
-
-    # Download and setup VM image
-    setup_vm_image
-    
-    # Save configuration
-    save_vm_config
-}
-
-# Function to start a VM
+# Function to start a VM with KVM fallback
 start_vm() {
     local vm_name=$1
     
@@ -413,13 +269,26 @@ start_vm() {
             setup_vm_image
         fi
         
-        # Base QEMU command with auto CPU features
+        # Check KVM availability
+        local kvm_enabled=""
+        if [ -c /dev/kvm ]; then
+            kvm_enabled="-enable-kvm"
+            print_status "PERF" "Using KVM acceleration"
+        else
+            print_status "WARN" "KVM not available, using software emulation"
+            print_status "INFO" "Performance will be limited. To enable KVM:"
+            print_status "INFO" "  1. Check if virtualization is enabled in BIOS"
+            print_status "INFO" "  2. Run: sudo modprobe kvm_intel (or kvm_amd)"
+            print_status "INFO" "  3. Run: sudo adduser $USER kvm"
+        fi
+        
+        # Base QEMU command with KVM fallback
         local qemu_cmd=(
             qemu-system-x86_64
-            -enable-kvm
+            $kvm_enabled
             -m "$MEMORY"
             -smp "$CPUS"
-            -cpu "$DEFAULT_CPU_MODEL"
+            -cpu "qemu64"
             -drive "file=$IMG_FILE,format=qcow2,if=virtio"
             -drive "file=$SEED_FILE,format=raw,if=virtio"
             -boot order=c
@@ -439,7 +308,7 @@ start_vm() {
 
         # Add GUI or console mode
         if [[ "$GUI_MODE" == true ]]; then
-            qemu_cmd+=(-vga virtio -display gtk,gl=on)
+            qemu_cmd+=(-vga std -display gtk)
         else
             qemu_cmd+=(-nographic -serial mon:stdio)
         fi
@@ -452,9 +321,53 @@ start_vm() {
         )
 
         print_status "INFO" "Starting QEMU..."
-        "${qemu_cmd[@]}"
         
-        print_status "INFO" "VM $vm_name has been shut down"
+        # Run QEMU in background and capture output
+        "${qemu_cmd[@]}" 2>&1 &
+        local qemu_pid=$!
+        
+        # Wait a bit to see if it starts successfully
+        sleep 2
+        
+        if ps -p $qemu_pid > /dev/null; then
+            print_status "SUCCESS" "VM started successfully (PID: $qemu_pid)"
+            echo $qemu_pid > "$VM_DIR/$vm_name.pid"
+            
+            # Show connection info
+            echo
+            print_status "INFO" "=== Connection Information ==="
+            print_status "INFO" "SSH Command: ssh -p $SSH_PORT $USERNAME@localhost"
+            print_status "INFO" "Username: $USERNAME"
+            print_status "INFO" "Password: $PASSWORD"
+            print_status "INFO" "To stop VM: Use menu option or run: kill $qemu_pid"
+            echo
+            
+            # Wait for VM to finish
+            wait $qemu_pid
+            print_status "INFO" "VM $vm_name has been shut down"
+            rm -f "$VM_DIR/$vm_name.pid"
+        else
+            print_status "ERROR" "Failed to start VM"
+            
+            # Try without KVM flag if that was the issue
+            if [ -n "$kvm_enabled" ]; then
+                print_status "INFO" "Trying without KVM acceleration..."
+                qemu_cmd[1]=""  # Remove -enable-kvm
+                "${qemu_cmd[@]}" 2>&1 &
+                local qemu_pid2=$!
+                sleep 2
+                
+                if ps -p $qemu_pid2 > /dev/null; then
+                    print_status "SUCCESS" "VM started without KVM (PID: $qemu_pid2)"
+                    echo $qemu_pid2 > "$VM_DIR/$vm_name.pid"
+                    wait $qemu_pid2
+                    print_status "INFO" "VM $vm_name has been shut down"
+                    rm -f "$VM_DIR/$vm_name.pid"
+                else
+                    print_status "ERROR" "Failed to start VM even without KVM"
+                fi
+            fi
+        fi
     fi
 }
 
@@ -467,7 +380,7 @@ delete_vm() {
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         if load_vm_config "$vm_name"; then
-            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
+            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf" "$VM_DIR/$vm_name.pid" 2>/dev/null
             print_status "SUCCESS" "VM '$vm_name' has been deleted"
         fi
     else
@@ -498,6 +411,20 @@ show_vm_info() {
         echo "Seed File: $SEED_FILE"
         echo "=========================================="
         echo
+        
+        # Check if VM is running
+        if [ -f "$VM_DIR/$vm_name.pid" ]; then
+            local pid=$(cat "$VM_DIR/$vm_name.pid")
+            if ps -p "$pid" > /dev/null; then
+                print_status "INFO" "Status: 🟢 RUNNING (PID: $pid)"
+            else
+                print_status "INFO" "Status: 🔴 STOPPED"
+                rm -f "$VM_DIR/$vm_name.pid"
+            fi
+        else
+            print_status "INFO" "Status: 🔴 STOPPED"
+        fi
+        
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
     fi
 }
@@ -505,6 +432,17 @@ show_vm_info() {
 # Function to check if VM is running
 is_vm_running() {
     local vm_name=$1
+    
+    if [ -f "$VM_DIR/$vm_name.pid" ]; then
+        local pid=$(cat "$VM_DIR/$vm_name.pid")
+        if ps -p "$pid" > /dev/null; then
+            return 0
+        else
+            rm -f "$VM_DIR/$vm_name.pid"
+        fi
+    fi
+    
+    # Fallback check
     if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null; then
         return 0
     else
@@ -519,13 +457,31 @@ stop_vm() {
     if load_vm_config "$vm_name"; then
         if is_vm_running "$vm_name"; then
             print_status "INFO" "Stopping VM: $vm_name"
-            pkill -f "qemu-system-x86_64.*$IMG_FILE"
-            sleep 2
-            if is_vm_running "$vm_name"; then
-                print_status "WARN" "VM did not stop gracefully, forcing termination..."
-                pkill -9 -f "qemu-system-x86_64.*$IMG_FILE"
+            
+            if [ -f "$VM_DIR/$vm_name.pid" ]; then
+                local pid=$(cat "$VM_DIR/$vm_name.pid")
+                kill -TERM "$pid" 2>/dev/null
+                sleep 3
+                
+                if ps -p "$pid" > /dev/null; then
+                    print_status "WARN" "VM did not stop gracefully, forcing termination..."
+                    kill -9 "$pid" 2>/dev/null
+                fi
+                
+                rm -f "$VM_DIR/$vm_name.pid"
+            else
+                # Fallback kill method
+                pkill -f "qemu-system-x86_64.*$IMG_FILE"
             fi
-            print_status "SUCCESS" "VM $vm_name stopped"
+            
+            sleep 2
+            
+            if is_vm_running "$vm_name"; then
+                print_status "ERROR" "Failed to stop VM $vm_name"
+                return 1
+            else
+                print_status "SUCCESS" "VM $vm_name stopped successfully"
+            fi
         else
             print_status "INFO" "VM $vm_name is not running"
         fi
@@ -769,7 +725,6 @@ show_vm_performance() {
             echo "  Memory: $MEMORY MB"
             echo "  CPUs: $CPUS"
             echo "  Disk: $DISK_SIZE"
-            echo "  CPU Model: $DEFAULT_CPU_MODEL (auto-configured)"
         fi
         echo "=========================================="
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
@@ -787,9 +742,9 @@ main_menu() {
         if [ $vm_count -gt 0 ]; then
             print_status "INFO" "Found $vm_count existing VM(s):"
             for i in "${!vms[@]}"; do
-                local status="Stopped"
+                local status="🔴 Stopped"
                 if is_vm_running "${vms[$i]}"; then
-                    status="Running"
+                    status="🟢 Running"
                 fi
                 printf "  %2d) %s (%s)\n" $((i+1)) "${vms[$i]}" "$status"
             done
@@ -807,6 +762,7 @@ main_menu() {
             echo "  7) Resize VM disk"
             echo "  8) Show VM performance"
         fi
+        echo "  9) KVM Status"
         echo "  0) Exit"
         echo
         
@@ -885,6 +841,51 @@ main_menu() {
                         print_status "ERROR" "Invalid selection"
                     fi
                 fi
+                ;;
+            9)
+                display_header
+                print_status "INFO" "KVM Status Check"
+                echo "=========================================="
+                if [ -c /dev/kvm ]; then
+                    print_status "SUCCESS" "✅ KVM is available and enabled"
+                    echo "Device: /dev/kvm"
+                    echo "Permissions: $(ls -l /dev/kvm)"
+                    
+                    # Check CPU virtualization support
+                    if grep -q -E "vmx|svm" /proc/cpuinfo; then
+                        print_status "SUCCESS" "✅ CPU virtualization extensions detected"
+                        if grep -q "vmx" /proc/cpuinfo; then
+                            echo "Type: Intel VT-x"
+                        elif grep -q "svm" /proc/cpuinfo; then
+                            echo "Type: AMD-V"
+                        fi
+                    else
+                        print_status "WARN" "⚠ CPU virtualization extensions NOT detected"
+                    fi
+                    
+                    # Check if user is in kvm group
+                    if groups $USER | grep -q '\bkvm\b'; then
+                        print_status "SUCCESS" "✅ User is in kvm group"
+                    else
+                        print_status "WARN" "⚠ User is NOT in kvm group"
+                        echo "To add yourself: sudo adduser $USER kvm"
+                        echo "Then logout and login again"
+                    fi
+                else
+                    print_status "ERROR" "❌ KVM is NOT available"
+                    echo
+                    print_status "INFO" "Troubleshooting steps:"
+                    echo "1. Check if virtualization is enabled in BIOS/UEFI"
+                    echo "2. Load KVM modules:"
+                    echo "   sudo modprobe kvm"
+                    echo "   sudo modprobe kvm_intel  # for Intel CPUs"
+                    echo "   sudo modprobe kvm_amd    # for AMD CPUs"
+                    echo "3. Add your user to kvm group:"
+                    echo "   sudo adduser $USER kvm"
+                    echo "4. Reboot your system"
+                fi
+                echo "=========================================="
+                read -p "$(print_status "INPUT" "Press Enter to continue...")"
                 ;;
             0)
                 print_status "INFO" "Goodbye!"
