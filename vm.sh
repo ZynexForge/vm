@@ -321,8 +321,33 @@ setup_vm_image() {
         fi
     fi
 
-    # cloud-init configuration
-    cat > user-data <<EOF
+    # Special handling for Proxmox ISO - create bootable ISO
+    if [[ "$OS_TYPE" == *"Proxmox"* ]]; then
+        print_status "INFO" "Setting up Proxmox VE installation..."
+        
+        # For Proxmox, we need to create a bootable VM with the ISO
+        # Remove the seed file since Proxmox doesn't use cloud-init
+        if [[ -f "$SEED_FILE" ]]; then
+            rm -f "$SEED_FILE"
+        fi
+        
+        # Create a larger disk for Proxmox (minimum 32GB recommended)
+        if [[ "$DISK_SIZE" < "32G" ]]; then
+            print_status "INFO" "Proxmox VE requires at least 32GB disk. Setting to 32G..."
+            DISK_SIZE="32G"
+            qemu-img resize -f qcow2 "$IMG_FILE" "$DISK_SIZE"
+        fi
+        
+        # Set recommended memory for Proxmox (4GB minimum)
+        if [[ "$MEMORY" -lt 4096 ]]; then
+            print_status "INFO" "Proxmox VE requires at least 4GB RAM. Setting to 4096MB..."
+            MEMORY=4096
+        fi
+        
+        print_status "SUCCESS" "Proxmox VE setup ready. Will boot from ISO for installation."
+    else
+        # cloud-init configuration for other OS
+        cat > user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
 ssh_pwauth: true
@@ -339,14 +364,15 @@ chpasswd:
   expire: false
 EOF
 
-    cat > meta-data <<EOF
+        cat > meta-data <<EOF
 instance-id: iid-$VM_NAME
 local-hostname: $HOSTNAME
 EOF
 
-    if ! cloud-localds "$SEED_FILE" user-data meta-data; then
-        print_status "ERROR" "Failed to create cloud-init seed image"
-        exit 1
+        if ! cloud-localds "$SEED_FILE" user-data meta-data; then
+            print_status "ERROR" "Failed to create cloud-init seed image"
+            exit 1
+        fi
     fi
     
     print_status "SUCCESS" "VM '$VM_NAME' created successfully."
@@ -367,12 +393,6 @@ start_vm() {
             return 1
         fi
         
-        # Check if seed file exists
-        if [[ ! -f "$SEED_FILE" ]]; then
-            print_status "WARN" "Seed file not found, recreating..."
-            setup_vm_image
-        fi
-        
         # Base QEMU command
         local qemu_cmd=(
             qemu-system-x86_64
@@ -381,11 +401,15 @@ start_vm() {
             -smp "$CPUS"
             -cpu host
             -drive "file=$IMG_FILE,format=qcow2,if=virtio"
-            -drive "file=$SEED_FILE,format=raw,if=virtio"
             -boot order=c
             -device virtio-net-pci,netdev=n0
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
+
+        # Add seed file for cloud-init OS (not for Proxmox)
+        if [[ "$OS_TYPE" != *"Proxmox"* ]] && [[ -f "$SEED_FILE" ]]; then
+            qemu_cmd+=(-drive "file=$SEED_FILE,format=raw,if=virtio")
+        fi
 
         # Add port forwards if specified
         if [[ -n "$PORT_FORWARDS" ]]; then
@@ -410,6 +434,20 @@ start_vm() {
             -object rng-random,filename=/dev/urandom,id=rng0
             -device virtio-rng-pci,rng=rng0
         )
+
+        # Special instructions for Proxmox
+        if [[ "$OS_TYPE" == *"Proxmox"* ]]; then
+            print_status "INFO" "=================================================================="
+            print_status "INFO" "PROXMOX VE INSTALLATION INSTRUCTIONS:"
+            print_status "INFO" "1. Wait for Proxmox boot screen"
+            print_status "INFO" "2. Select 'Install Proxmox VE'"
+            print_status "INFO" "3. Follow installation wizard"
+            print_status "INFO" "4. For disk: Select the VirtIO disk"
+            print_status "INFO" "5. Set root password during installation"
+            print_status "INFO" "6. After installation, VM will reboot"
+            print_status "INFO" "7. Access Web UI: https://localhost:8006"
+            print_status "INFO" "=================================================================="
+        fi
 
         print_status "INFO" "Starting QEMU..."
         "${qemu_cmd[@]}"
@@ -455,7 +493,7 @@ show_vm_info() {
         echo "Port Forwards: ${PORT_FORWARDS:-None}"
         echo "Created: $CREATED"
         echo "Image File: $IMG_FILE"
-        echo "Seed File: $SEED_FILE"
+        echo "Seed File: ${SEED_FILE:-Not applicable for Proxmox}"
         echo "=========================================="
         echo
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
@@ -872,7 +910,7 @@ check_dependencies
 VM_DIR="${VM_DIR:-$HOME/vms}"
 mkdir -p "$VM_DIR"
 
-# Supported OS list - Including real Proxmox VE
+# Supported OS list - WITH REAL PROXMOX VE ISO
 declare -A OS_OPTIONS=(
     ["Ubuntu 22.04 LTS"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
     ["Ubuntu 24.04 LTS"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
@@ -882,9 +920,11 @@ declare -A OS_OPTIONS=(
     ["CentOS Stream 9"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
     ["AlmaLinux 9"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
     ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
-    # Proxmox VE - Using Debian 12 as base since Proxmox is based on Debian
-    ["Proxmox VE 8"]="proxmox|ve8|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|proxmox-ve8|root|proxmox123"
-    ["Proxmox VE 7"]="proxmox|ve7|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|proxmox-ve7|root|proxmox123"
+    # REAL PROXMOX VE ISO IMAGES (Official Downloads)
+    ["Proxmox VE 8.2"]="proxmox|ve82|https://download.proxmox.com/iso/proxmox-ve_8.2-1.iso|proxmox-ve8|root|proxmox123"
+    ["Proxmox VE 8.1"]="proxmox|ve81|https://download.proxmox.com/iso/proxmox-ve_8.1-1.iso|proxmox-ve81|root|proxmox123"
+    ["Proxmox VE 8.0"]="proxmox|ve80|https://download.proxmox.com/iso/proxmox-ve_8.0-2.iso|proxmox-ve80|root|proxmox123"
+    ["Proxmox VE 7.4"]="proxmox|ve74|https://download.proxmox.com/iso/proxmox-ve_7.4-1.iso|proxmox-ve74|root|proxmox123"
 )
 
 # Start the main menu
