@@ -11,7 +11,7 @@ display_header() {
     clear
     cat << "EOF"
 __________                           ___________                         
-\____    /___.__. ____   ____ ___  __\_   _____/__________  ____   ____  
+\____    /__>.__. ____   ____ ___  __\_   _____/__________  ____   ____  
   /     /<   |  |/    \_/ __ \\  \/  /|    __)/  _ \_  __ \/ ___\_/ __ \ 
  /     /_ \___  |   |  \  ___/ >    < |     \(  <_> )  | \/ /_/  >  ___/ 
 /_______ \/ ____|___|  /\___  >__/\_ \\___  / \____/|__|  \___  / \___  >
@@ -204,8 +204,8 @@ setup_network() {
     read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80,443:443, press Enter for none): ")" PORT_FORWARDS
 }
 
-# Function to setup CPU optimizations using available tools
-setup_cpu() {
+# Function to AUTOMATICALLY setup CPU optimizations using available tools
+auto_setup_cpu() {
     print_status "CPU" "Configuring CPU optimizations"
     
     # Get CPU info using available tools
@@ -214,41 +214,53 @@ setup_cpu() {
         cpuid 2>/dev/null | grep -E "(AMD|Intel|vendor|family|model)" | head -5 || true
     fi
     
-    # Simple CPU configuration - using host model for best performance
+    # AUTOMATIC CPU configuration
     print_status "INFO" "Using host CPU model for best performance"
     
-    # Get available CPU cores
+    # AUTOMATIC: Get available CPU cores and allocate 75% for VM
     local total_cores=$(nproc 2>/dev/null || echo 2)
-    local max_cpus=$((total_cores > 1 ? total_cores - 1 : 1))
+    local allocated_cores=$((total_cores * 3 / 4))
     
-    while true; do
-        read -p "$(print_status "INPUT" "Number of CPUs (1-$max_cpus, default: 2): ")" CPUS
-        CPUS="${CPUS:-2}"
-        if validate_input "number" "$CPUS" && [ "$CPUS" -ge 1 ] && [ "$CPUS" -le "$max_cpus" ]; then
-            break
-        fi
-    done
+    # Ensure at least 1 core but not more than available
+    if [ $allocated_cores -lt 1 ]; then
+        allocated_cores=1
+    elif [ $allocated_cores -gt $total_cores ]; then
+        allocated_cores=$total_cores
+    fi
     
-    # Memory configuration
+    CPUS=$allocated_cores
+    print_status "CPU" "Automatically allocated $CPUS CPU cores (out of $total_cores total)"
+    
+    # AUTOMATIC: Memory configuration - allocate 75% of available RAM
     local total_mem=4096
     if command -v free &> /dev/null; then
         total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 4096)
     fi
-    local max_mem=$((total_mem - 1024)) # Leave 1GB for host
-    if [ $max_mem -lt 512 ]; then
-        max_mem=512
+    local allocated_mem=$((total_mem * 3 / 4))
+    
+    # Ensure reasonable min/max bounds
+    if [ $allocated_mem -lt 512 ]; then
+        allocated_mem=512
+        print_status "WARN" "Low memory system, allocating minimum 512MB"
+    elif [ $allocated_mem -gt 16384 ]; then
+        allocated_mem=16384
+        print_status "INFO" "Large memory system, capped at 16GB"
     fi
     
-    while true; do
-        read -p "$(print_status "INPUT" "Memory in MB (256-$max_mem, default: 2048): ")" MEMORY
-        MEMORY="${MEMORY:-2048}"
-        if validate_input "number" "$MEMORY" && [ "$MEMORY" -ge 256 ] && [ "$MEMORY" -le "$max_mem" ]; then
-            break
-        fi
-    done
+    MEMORY=$allocated_mem
+    print_status "CPU" "Automatically allocated ${MEMORY}MB RAM (out of ${total_mem}MB total)"
+    
+    # AUTOMATIC: Check if we should enable GUI mode based on available memory
+    if [ $MEMORY -ge 2048 ]; then
+        GUI_MODE=true
+        print_status "INFO" "Enabling GUI mode (sufficient memory available)"
+    else
+        GUI_MODE=false
+        print_status "INFO" "Disabling GUI mode (insufficient memory)"
+    fi
 }
 
-# Function to create new VM
+# Function to create new VM with automatic CPU configuration
 create_new_vm() {
     print_status "INFO" "Creating a new VM with ZynexForge"
     
@@ -324,24 +336,27 @@ create_new_vm() {
         fi
     done
 
-    # Hardware Configuration
-    setup_cpu
+    # AUTOMATIC Hardware Configuration
+    auto_setup_cpu
     setup_network
 
-    # GUI Mode
-    while true; do
-        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
-        GUI_MODE=false
-        gui_input="${gui_input:-n}"
-        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
-            GUI_MODE=true
-            break
-        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
-            break
-        else
-            print_status "ERROR" "Please answer y or n"
-        fi
-    done
+    # Show automatic configuration summary
+    echo
+    print_status "SUCCESS" "Automatic Configuration Summary:"
+    echo "┌─────────────────────────────────────────────────────────────┐"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPU Cores" "$CPUS"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Memory" "${MEMORY}MB"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "GUI Mode" "$GUI_MODE"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "SSH Port" "$SSH_PORT"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Port Forwards" "${PORT_FORWARDS:-None}"
+    echo "└─────────────────────────────────────────────────────────────┘"
+    
+    # Ask for confirmation
+    read -p "$(print_status "INPUT" "Press Enter to continue with this configuration, or 'n' to cancel: ")" confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        print_status "INFO" "VM creation cancelled"
+        return
+    fi
 
     IMG_FILE="$VM_DIR/$VM_NAME.img"
     SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
