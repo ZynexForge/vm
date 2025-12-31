@@ -290,7 +290,7 @@ create_new_vm() {
     save_vm_config
 }
 
-# Function to setup VM image
+# Function to setup VM image - FIXED with no-check-certificate
 setup_vm_image() {
     print_status "INFO" "Downloading and preparing image..."
     
@@ -302,11 +302,38 @@ setup_vm_image() {
         print_status "INFO" "Image file already exists. Skipping download."
     else
         print_status "INFO" "Downloading image from $IMG_URL..."
-        if ! wget --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp"; then
-            print_status "ERROR" "Failed to download image from $IMG_URL"
+        
+        # Try with curl first, then wget with --no-check-certificate
+        if command -v curl &> /dev/null; then
+            # Try curl with -k for insecure connection
+            if curl -k -L --progress-bar "$IMG_URL" -o "$IMG_FILE.tmp"; then
+                mv "$IMG_FILE.tmp" "$IMG_FILE"
+                print_status "SUCCESS" "Image downloaded successfully with curl"
+            else
+                print_status "ERROR" "Failed to download image with curl"
+                exit 1
+            fi
+        elif command -v wget &> /dev/null; then
+            # Use wget with --no-check-certificate for SSL issues
+            if wget --no-check-certificate --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp"; then
+                mv "$IMG_FILE.tmp" "$IMG_FILE"
+                print_status "SUCCESS" "Image downloaded successfully"
+            else
+                print_status "ERROR" "Failed to download image from $IMG_URL"
+                print_status "INFO" "Trying alternative method..."
+                # Try without certificate check
+                if wget --no-check-certificate "$IMG_URL" -O "$IMG_FILE.tmp"; then
+                    mv "$IMG_FILE.tmp" "$IMG_FILE"
+                    print_status "SUCCESS" "Image downloaded (insecure mode)"
+                else
+                    print_status "ERROR" "Failed to download image. Please check your internet connection."
+                    exit 1
+                fi
+            fi
+        else
+            print_status "ERROR" "Neither curl nor wget found. Cannot download image."
             exit 1
         fi
-        mv "$IMG_FILE.tmp" "$IMG_FILE"
     fi
     
     # Resize the disk image if needed
@@ -321,18 +348,18 @@ setup_vm_image() {
         fi
     fi
 
-    # Special handling for Proxmox ISO - create bootable ISO
+    # Special handling for Proxmox ISO
     if [[ "$OS_TYPE" == *"Proxmox"* ]]; then
         print_status "INFO" "Setting up Proxmox VE installation..."
         
-        # For Proxmox, we need to create a bootable VM with the ISO
-        # Remove the seed file since Proxmox doesn't use cloud-init
+        # For Proxmox, we don't need seed file
         if [[ -f "$SEED_FILE" ]]; then
             rm -f "$SEED_FILE"
         fi
         
         # Create a larger disk for Proxmox (minimum 32GB recommended)
-        if [[ "$DISK_SIZE" < "32G" ]]; then
+        local disk_size_num=${DISK_SIZE%[Gg]}
+        if [[ "$disk_size_num" -lt 32 ]] && [[ "$DISK_SIZE" =~ [Gg]$ ]]; then
             print_status "INFO" "Proxmox VE requires at least 32GB disk. Setting to 32G..."
             DISK_SIZE="32G"
             qemu-img resize -f qcow2 "$IMG_FILE" "$DISK_SIZE"
@@ -802,7 +829,7 @@ main_menu() {
             echo "  2) Start a VM"
             echo "  3) Stop a VM"
             echo "  4) Show VM info"
-            echo "  5) Edit VM configuration"
+            echo "  5) Edit VM configuration
             echo "  6) Delete a VM"
             echo "  7) Resize VM disk"
             echo "  8) Show VM performance"
@@ -920,7 +947,7 @@ declare -A OS_OPTIONS=(
     ["CentOS Stream 9"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
     ["AlmaLinux 9"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
     ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
-    # REAL PROXMOX VE ISO IMAGES (Official Downloads)
+    # REAL PROXMOX VE ISO IMAGES (Official Downloads) - using no-check-certificate
     ["Proxmox VE 8.2"]="proxmox|ve82|https://download.proxmox.com/iso/proxmox-ve_8.2-1.iso|proxmox-ve8|root|proxmox123"
     ["Proxmox VE 8.1"]="proxmox|ve81|https://download.proxmox.com/iso/proxmox-ve_8.1-1.iso|proxmox-ve81|root|proxmox123"
     ["Proxmox VE 8.0"]="proxmox|ve80|https://download.proxmox.com/iso/proxmox-ve_8.0-2.iso|proxmox-ve80|root|proxmox123"
