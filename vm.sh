@@ -203,6 +203,7 @@ load_vm_config() {
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
         unset PERF_BOOST CPU_PIN IO_URING VIRTIO_OPT DISK_CACHE NET_TYPE
         
+        # Load the configuration
         source "$config_file"
         return 0
     else
@@ -633,6 +634,29 @@ build_qemu_command() {
     echo "${qemu_cmd[@]}"
 }
 
+# Function to check if VM is running - FIXED VERSION
+is_vm_running() {
+    local vm_name=$1
+    local config_file="$VM_DIR/$vm_name.conf"
+    
+    if [[ -f "$config_file" ]]; then
+        # Load just the IMG_FILE from config without loading all variables
+        local vm_img_file=$(grep '^IMG_FILE=' "$config_file" | cut -d'=' -f2- | tr -d '"')
+        if [[ -n "$vm_img_file" ]]; then
+            if pgrep -f "qemu-system-x86_64.*$vm_img_file" >/dev/null 2>&1; then
+                return 0
+            fi
+        fi
+    fi
+    
+    # Alternative check by VM name
+    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    return 1
+}
+
 # Function to start a VM
 start_vm() {
     local vm_name=$1
@@ -688,12 +712,14 @@ delete_vm() {
     read -p "$(print_status "INPUT" "Are you sure? (y/N): ")" -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
+        # Check if VM is running
+        if is_vm_running "$vm_name"; then
+            print_status "ERROR" "VM '$vm_name' is running. Stop it first."
+            return 1
+        fi
+        
+        # Load config to get file paths
         if load_vm_config "$vm_name"; then
-            # Check if VM is running
-            if is_vm_running "$vm_name"; then
-                print_status "ERROR" "VM '$vm_name' is running. Stop it first."
-                return 1
-            fi
             rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
             print_status "SUCCESS" "VM '$vm_name' has been deleted"
         fi
@@ -734,34 +760,38 @@ show_vm_info() {
     fi
 }
 
-# Function to check if VM is running
-is_vm_running() {
-    local vm_name=$1
-    if pgrep -f "qemu-system-x86_64.*$VM_DIR/$vm_name" >/dev/null 2>&1 || \
-       pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
-}
-
 # Function to stop a running VM
 stop_vm() {
     local vm_name=$1
     
-    if load_vm_config "$vm_name"; then
-        if is_vm_running "$vm_name"; then
-            print_status "INFO" "Stopping VM: $vm_name"
-            pkill -f "qemu-system-x86_64.*$IMG_FILE"
-            sleep 2
-            if is_vm_running "$vm_name"; then
-                print_status "WARN" "VM did not stop gracefully, forcing termination..."
-                pkill -9 -f "qemu-system-x86_64.*$IMG_FILE"
+    if is_vm_running "$vm_name"; then
+        print_status "INFO" "Stopping VM: $vm_name"
+        
+        # Get the image file path
+        local config_file="$VM_DIR/$vm_name.conf"
+        if [[ -f "$config_file" ]]; then
+            local vm_img_file=$(grep '^IMG_FILE=' "$config_file" | cut -d'=' -f2- | tr -d '"')
+            if [[ -n "$vm_img_file" ]]; then
+                pkill -f "qemu-system-x86_64.*$vm_img_file"
+                sleep 2
+                if is_vm_running "$vm_name"; then
+                    print_status "WARN" "VM did not stop gracefully, forcing termination..."
+                    pkill -9 -f "qemu-system-x86_64.*$vm_img_file"
+                fi
+                print_status "SUCCESS" "VM $vm_name stopped"
+                return 0
             fi
-            print_status "SUCCESS" "VM $vm_name stopped"
-        else
-            print_status "INFO" "VM $vm_name is not running"
         fi
+        
+        # Fallback: kill by VM name
+        pkill -f "qemu-system-x86_64.*$vm_name"
+        sleep 2
+        if is_vm_running "$vm_name"; then
+            pkill -9 -f "qemu-system-x86_64.*$vm_name"
+        fi
+        print_status "SUCCESS" "VM $vm_name stopped"
+    else
+        print_status "INFO" "VM $vm_name is not running"
     fi
 }
 
@@ -923,18 +953,18 @@ resize_vm_disk() {
     if load_vm_config "$vm_name"; then
         print_status "INFO" "Current disk size: $DISK_SIZE"
         
+        # Check if VM is running
+        if is_vm_running "$vm_name"; then
+            print_status "ERROR" "Cannot resize disk while VM is running. Stop the VM first."
+            return 1
+        fi
+        
         while true; do
             read -p "$(print_status "INPUT" "Enter new disk size (e.g., 50G): ")" new_disk_size
             if validate_input "size" "$new_disk_size"; then
                 if [[ "$new_disk_size" == "$DISK_SIZE" ]]; then
                     print_status "INFO" "New disk size is the same as current size. No changes made."
                     return 0
-                fi
-                
-                # Check if VM is running
-                if is_vm_running "$vm_name"; then
-                    print_status "ERROR" "Cannot resize disk while VM is running. Stop the VM first."
-                    return 1
                 fi
                 
                 # Resize the disk
