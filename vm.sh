@@ -93,7 +93,6 @@ detect_cpu_advanced() {
         CPU_VENDOR=$(cpuid 2>/dev/null | grep -i "vendor" | head -1 | awk -F'"' '{print $2}' || echo "Unknown")
         CPU_FAMILY=$(cpuid 2>/dev/null | grep -i "family" | head -1 | awk '{print $3}' || echo "Unknown")
         CPU_MODEL=$(cpuid 2>/dev/null | grep -i "model" | head -1 | awk '{print $3}' || echo "Unknown")
-        CPU_BRAND=$(cpuid 2>/dev/null | grep -i "brand" | head -1 || echo "Unknown")
         
         printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Vendor" "$CPU_VENDOR"
         printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Family" "$CPU_FAMILY"
@@ -115,43 +114,26 @@ detect_cpu_advanced() {
                 CPU_TYPE="AMD Unknown"
                 printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "AMD Processor"
             fi
-            
-            # Check for AMD-V (SVM) support
-            if grep -q "svm" /proc/cpuinfo 2>/dev/null; then
-                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "AMD-V" "Enabled ✓"
-                SVM_SUPPORT=true
-            else
-                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "AMD-V" "Disabled ✗"
-                SVM_SUPPORT=false
-            fi
-            
-            # Check for Nested Virtualization
-            if [ -f "/sys/module/kvm_amd/parameters/nested" ]; then
-                NESTED_VIRT=$(cat /sys/module/kvm_amd/parameters/nested 2>/dev/null || echo "0")
-                if [ "$NESTED_VIRT" == "1" ] || [ "$NESTED_VIRT" == "Y" ]; then
-                    printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Nested Virt" "Enabled ✓"
-                else
-                    printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Nested Virt" "Disabled ✗"
-                fi
-            fi
         else
             IS_AMD=false
             printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "Intel/Other"
         fi
         
         # Get total cores and threads
-        TOTAL_CORES=$(nproc 2>/dev/null || echo "4")
+        TOTAL_CORES=$(nproc 2>/dev/null || echo "2")
         TOTAL_THREADS=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo "$TOTAL_CORES")
         
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Cores" "$TOTAL_CORES"
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Threads" "$TOTAL_THREADS"
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Physical Cores" "$TOTAL_CORES"
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Logical Cores" "$TOTAL_THREADS"
         
     else
         # Fallback to /proc/cpuinfo
         CPU_VENDOR=$(grep -i "vendor" /proc/cpuinfo 2>/dev/null | head -1 | awk '{print $3}' || echo "Unknown")
-        TOTAL_CORES=$(nproc 2>/dev/null || echo "4")
+        TOTAL_CORES=$(nproc 2>/dev/null || echo "2")
+        TOTAL_THREADS=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo "$TOTAL_CORES")
         printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Vendor" "$CPU_VENDOR"
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Cores" "$TOTAL_CORES"
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Physical Cores" "$TOTAL_CORES"
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Logical Cores" "$TOTAL_THREADS"
         IS_AMD=false
         if [[ "$CPU_VENDOR" == *"AMD"* ]] || grep -q "AMD" /proc/cpuinfo 2>/dev/null; then
             IS_AMD=true
@@ -161,8 +143,8 @@ detect_cpu_advanced() {
     
     # Get total system memory
     if command -v free &> /dev/null; then
-        TOTAL_MEM=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo "4096")
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Total RAM" "${TOTAL_MEM}MB"
+        TOTAL_MEM=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo "8192")
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "System RAM" "${TOTAL_MEM}MB"
     fi
     
     echo "└─────────────────────────────────────────────────────────────┘"
@@ -219,25 +201,10 @@ amd_cpu_optimizer() {
         done
         
         # AMD-specific optimizations
-        if [ "$SVM_SUPPORT" = true ]; then
-            CPU_OPTIONS="$CPU_OPTIONS,svm=on"
-            
-            # Ask about nested virtualization
-            read -p "$(print_status "INPUT" "Enable nested virtualization? (y/N): ")" enable_nested
-            if [[ "$enable_nested" =~ ^[Yy]$ ]]; then
-                CPU_OPTIONS="$CPU_OPTIONS,nested=1"
-                print_status "CPU" "Nested virtualization enabled"
-            fi
-        fi
-        
-        # Additional AMD optimizations
         CPU_OPTIONS="$CPU_OPTIONS,topoext=on"
         
         # Machine type for AMD
         MACHINE_TYPE="q35"
-        if [ "$amd_mode" == "1" ] || [ "$amd_mode" == "3" ]; then
-            MACHINE_TYPE="pc-q35-6.2"
-        fi
         
         print_status "SUCCESS" "AMD optimizations applied: $CPU_MODEL"
         
@@ -331,35 +298,53 @@ EOF
     print_status "SUCCESS" "Configuration saved to $config_file"
 }
 
-# Simple resource configuration function
-configure_resources_simple() {
+# UNLIMITED resource configuration function
+configure_resources_unlimited() {
     print_status "CPU" "Resource Configuration"
     echo "┌─────────────────────────────────────────────────────────────┐"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Available Cores" "$TOTAL_CORES"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Available RAM" "${TOTAL_MEM}MB"
+    printf "│ \033[1;33m%-20s\033[0m: %-35s │\n" "System Info" "You can allocate any values"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Physical Cores" "$TOTAL_CORES"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "System RAM" "${TOTAL_MEM}MB"
     echo "└─────────────────────────────────────────────────────────────┘"
     echo
-    
-    # CPU Configuration
+    print_status "WARN" "Warning: You can allocate more resources than physically available"
+    print_status "INFO" "Performance may be affected if you overallocate"
+    echo
+
+    # UNLIMITED CPU Configuration - no limits
     while true; do
-        read -p "$(print_status "INPUT" "Enter number of CPU cores (1-$TOTAL_CORES): ")" CPUS
-        if validate_input "number" "$CPUS" && [ "$CPUS" -ge 1 ] && [ "$CPUS" -le "$TOTAL_CORES" ]; then
+        read -p "$(print_status "INPUT" "Enter number of CPU cores (recommended: 1-16): ")" CPUS
+        if validate_input "number" "$CPUS" && [ "$CPUS" -ge 1 ]; then
+            if [ "$CPUS" -gt "$TOTAL_CORES" ]; then
+                print_status "WARN" "Warning: Allocating $CPUS cores but only $TOTAL_CORES physical cores available"
+                read -p "$(print_status "INPUT" "Continue anyway? (y/N): ")" confirm
+                if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                    continue
+                fi
+            fi
             break
         fi
     done
     
-    # Memory Configuration
+    # UNLIMITED Memory Configuration - no limits
     while true; do
-        read -p "$(print_status "INPUT" "Enter memory in MB (256-$TOTAL_MEM): ")" MEMORY
-        if validate_input "number" "$MEMORY" && [ "$MEMORY" -ge 256 ] && [ "$MEMORY" -le "$TOTAL_MEM" ]; then
+        read -p "$(print_status "INPUT" "Enter memory in MB (recommended: 1024-32768): ")" MEMORY
+        if validate_input "number" "$MEMORY" && [ "$MEMORY" -ge 256 ]; then
+            if [ "$MEMORY" -gt "$TOTAL_MEM" ]; then
+                print_status "WARN" "Warning: Allocating ${MEMORY}MB but only ${TOTAL_MEM}MB system RAM available"
+                read -p "$(print_status "INPUT" "Continue anyway? (y/N): ")" confirm
+                if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                    continue
+                fi
+            fi
             break
         fi
     done
     
-    # Disk Configuration
+    # Disk Configuration - no practical limits
     while true; do
-        read -p "$(print_status "INPUT" "Enter disk size (default: 40G): ")" DISK_SIZE
-        DISK_SIZE="${DISK_SIZE:-40G}"
+        read -p "$(print_status "INPUT" "Enter disk size (default: 500G): ")" DISK_SIZE
+        DISK_SIZE="${DISK_SIZE:-500G}"
         if validate_input "size" "$DISK_SIZE"; then
             break
         fi
@@ -475,8 +460,8 @@ create_new_vm() {
     # AMD CPU Optimization
     amd_cpu_optimizer
     
-    # Simple Resource Configuration
-    configure_resources_simple
+    # UNLIMITED Resource Configuration
+    configure_resources_unlimited
     
     # Simple Network Configuration
     configure_network_simple
@@ -495,7 +480,19 @@ create_new_vm() {
     printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "GUI Mode" "$GUI_MODE"
     echo "└─────────────────────────────────────────────────────────────┘"
     
-    # Confirmation
+    # Resource Warning Check
+    if [ "$CPUS" -gt "$TOTAL_CORES" ]; then
+        echo
+        print_status "WARN" "CPU Over-allocation: $CPUS cores vs $TOTAL_CORES physical cores"
+    fi
+    
+    if [ "$MEMORY" -gt "$TOTAL_MEM" ]; then
+        echo
+        print_status "WARN" "Memory Over-allocation: ${MEMORY}MB vs ${TOTAL_MEM}MB system RAM"
+    fi
+    
+    # Final Confirmation
+    echo
     read -p "$(print_status "INPUT" "Press Enter to create VM, or 'n' to cancel: ")" confirm
     if [[ "$confirm" =~ ^[Nn]$ ]]; then
         print_status "INFO" "VM creation cancelled"
@@ -609,6 +606,7 @@ start_vm() {
             qemu-system-x86_64
             -enable-kvm
             -machine "$MACHINE_TYPE,accel=kvm"
+            $CPU_OPTIONS
             -smp "$CPUS"
             -m "$MEMORY"
             -drive "file=$IMG_FILE,format=qcow2,if=virtio"
@@ -618,9 +616,6 @@ start_vm() {
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
 
-        # Add CPU options
-        qemu_cmd+=($CPU_OPTIONS)
-        
         # Add port forwards if specified
         if [[ -n "$PORT_FORWARDS" ]]; then
             IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
@@ -637,6 +632,12 @@ start_vm() {
             qemu_cmd+=(-device virtio-rng-pci,rng=rng0)
         fi
 
+        # Add performance optimizations
+        qemu_cmd+=(-device virtio-balloon-pci)
+        
+        # Disk performance optimizations
+        qemu_cmd+=(-drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,discard=unmap")
+
         # Add GUI or console mode
         if [[ "$GUI_MODE" == true ]]; then
             qemu_cmd+=(-vga virtio -display gtk,gl=on)
@@ -648,13 +649,12 @@ start_vm() {
 
         # AMD-specific optimizations
         if [ "$IS_AMD" = true ]; then
-            # Add IOMMU for AMD if available
-            qemu_cmd+=(-device "virtio-iommu")
             print_status "CPU" "Starting with AMD optimizations: $CPU_MODEL"
         fi
 
-        print_status "INFO" "Starting QEMU with configuration:"
-        echo "CPU: $CPU_MODEL | Cores: $CPUS | RAM: ${MEMORY}MB | Disk: $DISK_SIZE"
+        print_status "INFO" "Starting VM with:"
+        echo "CPU: $CPU_MODEL ($CPUS cores) | RAM: ${MEMORY}MB | Disk: $DISK_SIZE"
+        echo "SSH Port: $SSH_PORT | GUI: $GUI_MODE"
         echo
         
         # Run QEMU
@@ -673,7 +673,7 @@ delete_vm() {
     echo "│                     ⚠  WARNING  ⚠                         │"
     echo "├─────────────────────────────────────────────────────────────┤"
     echo "│  This action cannot be undone!                              │"
-    echo "│  All VM data including disk images will be deleted.         │"
+    echo "│  All VM data including disk images will be deleted.         │
     echo "└─────────────────────────────────────────────────────────────┘"
     
     read -p "$(print_status "INPUT" "Type 'DELETE' to confirm: ")" confirm
