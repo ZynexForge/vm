@@ -114,15 +114,18 @@ get_vm_list() {
     find "$VM_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort
 }
 
-# Function to load VM configuration
+# Function to load VM configuration with default values
 load_vm_config() {
     local vm_name=$1
     local config_file="$VM_DIR/$vm_name.conf"
     
     if [[ -f "$config_file" ]]; then
-        # Clear previous variables
+        # Clear previous variables and set defaults
         unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED INSTALL_DISK
+        
+        # Set defaults
+        INSTALL_DISK=""
         
         source "$config_file"
         return 0
@@ -138,9 +141,9 @@ save_vm_config() {
     
     cat > "$config_file" <<EOF
 VM_NAME="$VM_NAME"
-OS_TYPE="$OS_TYPE"
-CODENAME="$CODENAME"
-IMG_URL="$IMG_URL"
+OS_TYPE="${OS_TYPE:-}"
+CODENAME="${CODENAME:-}"
+IMG_URL="${IMG_URL:-}"
 HOSTNAME="$HOSTNAME"
 USERNAME="$USERNAME"
 PASSWORD="$PASSWORD"
@@ -149,11 +152,11 @@ MEMORY="$MEMORY"
 CPUS="$CPUS"
 SSH_PORT="$SSH_PORT"
 GUI_MODE="$GUI_MODE"
-PORT_FORWARDS="$PORT_FORWARDS"
+PORT_FORWARDS="${PORT_FORWARDS:-}"
 IMG_FILE="$IMG_FILE"
-SEED_FILE="$SEED_FILE"
+SEED_FILE="${SEED_FILE:-}"
 CREATED="$CREATED"
-INSTALL_DISK="$INSTALL_DISK"
+INSTALL_DISK="${INSTALL_DISK:-}"
 EOF
     
     print_status "SUCCESS" "Configuration saved to $config_file"
@@ -435,9 +438,13 @@ start_vm() {
             # ISO installation
             print_status "INFO" "Booting from ISO installation media"
             
-            if [[ ! -f "$INSTALL_DISK" ]]; then
-                print_status "INFO" "Creating installation disk..."
-                qemu-img create -f qcow2 "$INSTALL_DISK" "$DISK_SIZE"
+            # Set default INSTALL_DISK if not set
+            if [[ -z "$INSTALL_DISK" ]] || [[ ! -f "$INSTALL_DISK" ]]; then
+                INSTALL_DISK="${IMG_FILE%.*}.qcow2"
+                if [[ ! -f "$INSTALL_DISK" ]]; then
+                    print_status "INFO" "Creating installation disk..."
+                    qemu-img create -f qcow2 "$INSTALL_DISK" "$DISK_SIZE"
+                fi
             fi
             
             qemu_cmd+=(
@@ -517,7 +524,7 @@ start_vm() {
     fi
 }
 
-# Function to delete a VM
+# Function to delete a VM - FIXED to handle missing INSTALL_DISK
 delete_vm() {
     local vm_name=$1
     
@@ -526,8 +533,25 @@ delete_vm() {
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         if load_vm_config "$vm_name"; then
-            rm -f "$IMG_FILE" "$SEED_FILE" "$INSTALL_DISK" "$VM_DIR/$vm_name.conf"
+            # Delete all possible VM files
+            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
+            
+            # Delete INSTALL_DISK if it exists (handle missing variable)
+            if [[ -n "${INSTALL_DISK:-}" ]] && [[ -f "$INSTALL_DISK" ]]; then
+                rm -f "$INSTALL_DISK"
+            fi
+            
+            # Also try to delete common file patterns
+            rm -f "$VM_DIR/$vm_name.img" "$VM_DIR/$vm_name.iso" "$VM_DIR/$vm_name.qcow2" 2>/dev/null
+            rm -f "$VM_DIR/$vm_name-seed.iso" 2>/dev/null
+            
             print_status "SUCCESS" "VM '$vm_name' has been deleted"
+        else
+            # If config can't be loaded, try to delete common files
+            rm -f "$VM_DIR/$vm_name.conf" 2>/dev/null
+            rm -f "$VM_DIR/$vm_name.img" "$VM_DIR/$vm_name.iso" "$VM_DIR/$vm_name.qcow2" 2>/dev/null
+            rm -f "$VM_DIR/$vm_name-seed.iso" 2>/dev/null
+            print_status "SUCCESS" "VM '$vm_name' files have been deleted"
         fi
     else
         print_status "INFO" "Deletion cancelled"
@@ -542,7 +566,7 @@ show_vm_info() {
         echo
         print_status "INFO" "VM Information: $vm_name"
         echo "=========================================="
-        echo "OS: $OS_TYPE"
+        echo "OS: ${OS_TYPE:-Unknown}"
         echo "Hostname: $HOSTNAME"
         echo "Username: $USERNAME"
         echo "Password: $PASSWORD"
@@ -557,10 +581,10 @@ show_vm_info() {
         
         if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
             echo "Type: ISO Installation"
-            echo "Installation Disk: $INSTALL_DISK"
+            echo "Installation Disk: ${INSTALL_DISK:-Not created yet}"
         else
             echo "Type: Cloud Image"
-            echo "Seed File: $SEED_FILE"
+            echo "Seed File: ${SEED_FILE:-Not found}"
         fi
         
         # Check if VM is running
@@ -766,8 +790,13 @@ resize_vm_disk() {
         # Check if image is an ISO (can't resize ISO)
         if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
             print_status "ERROR" "Cannot resize ISO installation media"
-            print_status "INFO" "Resize the installation disk instead: $INSTALL_DISK"
-            local resize_disk="$INSTALL_DISK"
+            if [[ -n "${INSTALL_DISK:-}" ]] && [[ -f "$INSTALL_DISK" ]]; then
+                print_status "INFO" "Resize the installation disk instead: $INSTALL_DISK"
+                local resize_disk="$INSTALL_DISK"
+            else
+                print_status "INFO" "No installation disk found to resize"
+                return 1
+            fi
         else
             local resize_disk="$IMG_FILE"
         fi
@@ -887,7 +916,7 @@ fix_vm_config() {
                     print_status "SUCCESS" "Renamed to: $IMG_FILE"
                     
                     # Create installation disk if needed
-                    if [[ ! -f "$INSTALL_DISK" ]]; then
+                    if [[ -z "${INSTALL_DISK:-}" ]] || [[ ! -f "$INSTALL_DISK" ]]; then
                         INSTALL_DISK="${IMG_FILE%.*}.qcow2"
                         print_status "INFO" "Creating installation disk: $INSTALL_DISK"
                         qemu-img create -f qcow2 "$INSTALL_DISK" "$DISK_SIZE"
@@ -898,7 +927,7 @@ fix_vm_config() {
         
         # For ISO installations, ensure INSTALL_DISK is set
         if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-            if [[ -z "$INSTALL_DISK" ]] || [[ ! -f "$INSTALL_DISK" ]]; then
+            if [[ -z "${INSTALL_DISK:-}" ]] || [[ ! -f "$INSTALL_DISK" ]]; then
                 INSTALL_DISK="${IMG_FILE%.*}.qcow2"
                 print_status "INFO" "Creating installation disk: $INSTALL_DISK"
                 qemu-img create -f qcow2 "$INSTALL_DISK" "$DISK_SIZE"
@@ -932,16 +961,17 @@ backup_vm() {
             sleep 3
         fi
         
-        # Create backup
-        local files_to_backup=("$VM_DIR/$vm_name.conf" "$(basename "$IMG_FILE")")
-        if [[ -f "$SEED_FILE" ]]; then
+        # Create list of files to backup
+        local files_to_backup=("$vm_name.conf" "$(basename "$IMG_FILE")")
+        if [[ -n "${SEED_FILE:-}" ]] && [[ -f "$SEED_FILE" ]]; then
             files_to_backup+=("$(basename "$SEED_FILE")")
         fi
-        if [[ -f "$INSTALL_DISK" ]]; then
+        if [[ -n "${INSTALL_DISK:-}" ]] && [[ -f "$INSTALL_DISK" ]]; then
             files_to_backup+=("$(basename "$INSTALL_DISK")")
         fi
         
-        tar -czf "$backup_file" -C "$VM_DIR" "${files_to_backup[@]}" 2>/dev/null
+        # Create backup
+        (cd "$VM_DIR" && tar -czf "$backup_file" "${files_to_backup[@]}" 2>/dev/null)
         
         if [[ -f "$backup_file" ]]; then
             print_status "SUCCESS" "Backup created successfully: $backup_file"
@@ -1046,7 +1076,7 @@ clone_vm() {
         
         # Clone the seed file if it exists
         local new_seed_file=""
-        if [[ -f "$SEED_FILE" ]]; then
+        if [[ -n "${SEED_FILE:-}" ]] && [[ -f "$SEED_FILE" ]]; then
             new_seed_file="$VM_DIR/$new_vm_name-seed.iso"
             if cp "$SEED_FILE" "$new_seed_file"; then
                 print_status "SUCCESS" "Seed file cloned"
@@ -1055,7 +1085,7 @@ clone_vm() {
         
         # Clone installation disk if it exists
         local new_install_disk=""
-        if [[ -f "$INSTALL_DISK" ]]; then
+        if [[ -n "${INSTALL_DISK:-}" ]] && [[ -f "$INSTALL_DISK" ]]; then
             new_install_disk="$VM_DIR/$new_vm_name.qcow2"
             if qemu-img create -f qcow2 -b "$INSTALL_DISK" "$new_install_disk" 2>/dev/null || \
                cp "$INSTALL_DISK" "$new_install_disk"; then
@@ -1276,7 +1306,7 @@ VM_DIR="${VM_DIR:-$HOME/vms}"
 mkdir -p "$VM_DIR"
 mkdir -p "$VM_DIR/backups"
 
-# Supported OS list - FIXED with proper file extensions
+# Supported OS list
 declare -A OS_OPTIONS=(
     # Cloud images (qcow2 format)
     ["Ubuntu 22.04 LTS (Cloud Image)"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
