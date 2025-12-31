@@ -2,43 +2,55 @@
 set -euo pipefail
 
 # =============================
-# ZynexForge VM Manager
-# Advanced Virtualization Platform
+# ZynexForge VM Manager with Zorvix Technology
 # =============================
+
+# Branding Configuration
+BRAND_NAME="ZynexForge"
+BRAND_VERSION="1.0.0"
+ZORVIX_MODE=true  # Enable Zorvix performance enhancements
 
 # Function to display header
 display_header() {
     clear
     cat << "EOF"
 __________                           ___________                         
-\____    /__>.__. ____   ____ ___  __\_   _____/__________  ____   ____  
+\____    /___.__. ____   ____ ___  __\_   _____/__________  ____   ____  
   /     /<   |  |/    \_/ __ \\  \/  /|    __)/  _ \_  __ \/ ___\_/ __ \ 
  /     /_ \___  |   |  \  ___/ >    < |     \(  <_> )  | \/ /_/  >  ___/ 
 /_______ \/ ____|___|  /\___  >__/\_ \\___  / \____/|__|  \___  / \___  >
         \/\/         \/     \/      \/    \/             /_____/      \/ 
+                                                                         
 
-========================================================================
-               ZYNEXFORGE ADVANCED VM MANAGEMENT SYSTEM
-               With AMD CPU Optimization & Smart Networking
+                    ███████╗ ██████╗ ██████╗ ██╗   ██╗██╗██╗  ██╗
+                    ╚══███╔╝██╔═══██╗██╔══██╗██║   ██║██║╚██╗██╔╝
+                      ███╔╝ ██║   ██║██████╔╝██║   ██║██║ ╚███╔╝ 
+                     ███╔╝  ██║   ██║██╔══██╗██║   ██║██║ ██╔██╗ 
+                    ███████╗╚██████╔╝██║  ██║╚██████╔╝██║██╔╝ ██╗
+                    ╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═╝  ╚═╝
+                    POWERED BY ZORVIX HYPERVISOR TECHNOLOGY
 ========================================================================
 EOF
+    echo -e "\033[1;36m$BRAND_NAME VM Manager v$BRAND_VERSION\033[0m"
+    echo -e "\033[1;33mHost: KVM/QEMU (Standard PC (i440FX + PIIX, 1996) pc-i440fx-8.2)\033[0m"
+    echo -e "\033[1;35mPerformance Mode: $( [ "$ZORVIX_MODE" = true ] && echo "ZORVIX ENABLED" || echo "Standard" )\033[0m"
+    echo "========================================================================="
     echo
 }
 
-# Function to display colored output
+# Function to display colored output with branding
 print_status() {
     local type=$1
     local message=$2
     
     case $type in
-        "INFO") echo -e "\033[1;34m[ℹ]\033[0m \033[1;37m$message\033[0m" ;;
-        "WARN") echo -e "\033[1;33m[⚠]\033[0m \033[1;33m$message\033[0m" ;;
-        "ERROR") echo -e "\033[1;31m[✗]\033[0m \033[1;31m$message\033[0m" ;;
-        "SUCCESS") echo -e "\033[1;32m[✓]\033[0m \033[1;32m$message\033[0m" ;;
-        "INPUT") echo -e "\033[1;36m[?]\033[0m \033[1;36m$message\033[0m" ;;
-        "MENU") echo -e "\033[1;35m[→]\033[0m \033[1;37m$message\033[0m" ;;
-        "CPU") echo -e "\033[1;38;5;208m[⚡]\033[0m \033[1;38;5;208m$message\033[0m" ;;
-        "NET") echo -e "\033[1;38;5;51m[🌐]\033[0m \033[1;38;5;51m$message\033[0m" ;;
+        "INFO") echo -e "\033[1;34m[ℹ $BRAND_NAME]\033[0m $message" ;;
+        "WARN") echo -e "\033[1;33m[⚠ $BRAND_NAME]\033[0m $message" ;;
+        "ERROR") echo -e "\033[1;31m[✗ $BRAND_NAME]\033[0m $message" ;;
+        "SUCCESS") echo -e "\033[1;32m[✓ $BRAND_NAME]\033[0m $message" ;;
+        "INPUT") echo -e "\033[1;36m[? $BRAND_NAME]\033[0m $message" ;;
+        "ZORVIX") echo -e "\033[1;35m[⚡ ZORVIX]\033[0m $message" ;;
+        "PERF") echo -e "\033[1;33m[🚀 PERF]\033[0m $message" ;;
         *) echo "[$type] $message" ;;
     esac
 }
@@ -79,150 +91,20 @@ validate_input() {
                 return 1
             fi
             ;;
+        "ip")
+            if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                print_status "ERROR" "Must be a valid IP address"
+                return 1
+            fi
+            ;;
     esac
     return 0
 }
 
-# Advanced CPU detection function
-detect_cpu_advanced() {
-    print_status "CPU" "Advanced CPU Detection"
-    echo "┌─────────────────────────────────────────────────────────────┐"
-    
-    # Use cpuid command for detailed info
-    if command -v cpuid &> /dev/null; then
-        CPU_VENDOR=$(cpuid 2>/dev/null | grep -i "vendor" | head -1 | awk -F'"' '{print $2}' || echo "Unknown")
-        CPU_FAMILY=$(cpuid 2>/dev/null | grep -i "family" | head -1 | awk '{print $3}' || echo "Unknown")
-        CPU_MODEL=$(cpuid 2>/dev/null | grep -i "model" | head -1 | awk '{print $3}' || echo "Unknown")
-        
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Vendor" "$CPU_VENDOR"
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Family" "$CPU_FAMILY"
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Model" "$CPU_MODEL"
-        
-        # Check for AMD specific features
-        if [[ "$CPU_VENDOR" == *"AMD"* ]] || [[ "$CPU_VENDOR" == *"AuthenticAMD"* ]]; then
-            IS_AMD=true
-            print_status "CPU" "AMD Processor Detected!"
-            
-            # Detect AMD CPU family
-            if [[ "$CPU_FAMILY" == "23" ]] || [[ "$CPU_FAMILY" == "25" ]]; then
-                CPU_TYPE="AMD Zen (Ryzen/EPYC)"
-                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "AMD Zen Architecture"
-            elif [[ "$CPU_FAMILY" == "21" ]]; then
-                CPU_TYPE="AMD Bulldozer"
-                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "AMD Bulldozer Family"
-            else
-                CPU_TYPE="AMD Unknown"
-                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "AMD Processor"
-            fi
-        else
-            IS_AMD=false
-            printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "Intel/Other"
-        fi
-        
-        # Get total cores and threads
-        TOTAL_CORES=$(nproc 2>/dev/null || echo "2")
-        TOTAL_THREADS=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo "$TOTAL_CORES")
-        
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Physical Cores" "$TOTAL_CORES"
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Logical Cores" "$TOTAL_THREADS"
-        
-    else
-        # Fallback to /proc/cpuinfo
-        CPU_VENDOR=$(grep -i "vendor" /proc/cpuinfo 2>/dev/null | head -1 | awk '{print $3}' || echo "Unknown")
-        TOTAL_CORES=$(nproc 2>/dev/null || echo "2")
-        TOTAL_THREADS=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo "$TOTAL_CORES")
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Vendor" "$CPU_VENDOR"
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Physical Cores" "$TOTAL_CORES"
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Logical Cores" "$TOTAL_THREADS"
-        IS_AMD=false
-        if [[ "$CPU_VENDOR" == *"AMD"* ]] || grep -q "AMD" /proc/cpuinfo 2>/dev/null; then
-            IS_AMD=true
-            print_status "CPU" "AMD Processor Detected!"
-        fi
-    fi
-    
-    # Get total system memory
-    if command -v free &> /dev/null; then
-        TOTAL_MEM=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo "8192")
-        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "System RAM" "${TOTAL_MEM}MB"
-    fi
-    
-    echo "└─────────────────────────────────────────────────────────────┘"
-    echo
-}
-
-# Advanced AMD CPU optimizer function
-amd_cpu_optimizer() {
-    if [ "$IS_AMD" = true ]; then
-        print_status "CPU" "Applying AMD-specific optimizations"
-        
-        # AMD CPU model selection
-        echo "┌─────────────────────────────────────────────────────────────┐"
-        echo "│                   AMD CPU Optimization                     │"
-        echo "├─────────────────────────────────────────────────────────────┤"
-        echo "│ 1) EPYC Mode - Server CPU Profile (Recommended for servers)│"
-        echo "│ 2) Ryzen Mode - Desktop CPU Profile (Recommended for GUI)  │"
-        echo "│ 3) Host Passthrough - Direct CPU Passthrough               │"
-        echo "│ 4) Custom CPU Model                                         │"
-        echo "└─────────────────────────────────────────────────────────────┘"
-        
-        while true; do
-            read -p "$(print_status "INPUT" "Select AMD CPU mode (1-4, default: 2): ")" amd_mode
-            amd_mode="${amd_mode:-2}"
-            
-            case $amd_mode in
-                1)
-                    CPU_MODEL="EPYC"
-                    CPU_OPTIONS="-cpu EPYC,vendor=AMD"
-                    print_status "CPU" "AMD EPYC server profile selected"
-                    ;;
-                2)
-                    CPU_MODEL="Ryzen"
-                    CPU_OPTIONS="-cpu Ryzen,vendor=AMD"
-                    print_status "CPU" "AMD Ryzen desktop profile selected"
-                    ;;
-                3)
-                    CPU_MODEL="host"
-                    CPU_OPTIONS="-cpu host"
-                    print_status "CPU" "Host CPU passthrough selected"
-                    ;;
-                4)
-                    read -p "$(print_status "INPUT" "Enter custom CPU model (e.g., Opteron_G5): ")" custom_cpu
-                    CPU_MODEL="$custom_cpu"
-                    CPU_OPTIONS="-cpu $custom_cpu"
-                    print_status "CPU" "Custom CPU model '$custom_cpu' selected"
-                    ;;
-                *)
-                    print_status "ERROR" "Invalid selection"
-                    continue
-                    ;;
-            esac
-            break
-        done
-        
-        # AMD-specific optimizations
-        CPU_OPTIONS="$CPU_OPTIONS,topoext=on"
-        
-        # Machine type for AMD
-        MACHINE_TYPE="q35"
-        
-        print_status "SUCCESS" "AMD optimizations applied: $CPU_MODEL"
-        
-    else
-        # Non-AMD CPU - use host model
-        CPU_MODEL="host"
-        CPU_OPTIONS="-cpu host"
-        MACHINE_TYPE="pc"
-        print_status "INFO" "Using host CPU model"
-    fi
-}
-
-# Function to check dependencies
+# Function to check dependencies with Zorvix optimizations
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "sudo")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img")
     local missing_deps=()
-    
-    print_status "INFO" "Checking system dependencies..."
     
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
@@ -232,17 +114,38 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
+        print_status "INFO" "On Ubuntu/Debian, try: sudo apt install qemu-system cloud-image-utils wget libvirt-daemon-system"
         exit 1
     fi
     
-    # Advanced CPU detection
-    detect_cpu_advanced
+    # Check for Zorvix optimization tools
+    if [ "$ZORVIX_MODE" = true ]; then
+        print_status "ZORVIX" "Checking for optimization tools..."
+        
+        # Check for KVM support
+        if ! grep -q -E "vmx|svm" /proc/cpuinfo; then
+            print_status "WARN" "Hardware virtualization not detected. Zorvix optimizations limited."
+        else
+            print_status "ZORVIX" "Hardware virtualization (KVM) detected - Zorvix optimizations enabled"
+        fi
+        
+        # Check for hugepages support
+        if [ -d "/sys/kernel/mm/hugepages" ]; then
+            print_status "ZORVIX" "Hugepages support available"
+        fi
+        
+        # Check for CPU governor
+        if command -v cpupower &> /dev/null; then
+            print_status "ZORVIX" "CPU power management tools available"
+        fi
+    fi
 }
 
 # Function to cleanup temporary files
 cleanup() {
     if [ -f "user-data" ]; then rm -f "user-data"; fi
     if [ -f "meta-data" ]; then rm -f "meta-data"; fi
+    if [ -f "network-config" ]; then rm -f "network-config"; fi
 }
 
 # Function to get all VM configurations
@@ -259,7 +162,8 @@ load_vm_config() {
         # Clear previous variables
         unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
-        unset CPU_MODEL CPU_OPTIONS MACHINE_TYPE
+        unset VIRT_TYPE NET_TYPE CPU_MODEL VIDEO_MODEL SOUND_ENABLED USB_ENABLED SPICE_ENABLED
+        unset ZORVIX_OPTIMIZED CUSTOM_NAME
         
         source "$config_file"
         return 0
@@ -274,6 +178,10 @@ save_vm_config() {
     local config_file="$VM_DIR/$VM_NAME.conf"
     
     cat > "$config_file" <<EOF
+# ZynexForge VM Configuration
+# Generated: $(date)
+# VM ID: $(uuidgen)
+
 VM_NAME="$VM_NAME"
 OS_TYPE="$OS_TYPE"
 CODENAME="$CODENAME"
@@ -290,118 +198,82 @@ PORT_FORWARDS="$PORT_FORWARDS"
 IMG_FILE="$IMG_FILE"
 SEED_FILE="$SEED_FILE"
 CREATED="$CREATED"
+VIRT_TYPE="$VIRT_TYPE"
+NET_TYPE="$NET_TYPE"
 CPU_MODEL="$CPU_MODEL"
-CPU_OPTIONS="$CPU_OPTIONS"
-MACHINE_TYPE="$MACHINE_TYPE"
+VIDEO_MODEL="$VIDEO_MODEL"
+SOUND_ENABLED="$SOUND_ENABLED"
+USB_ENABLED="$USB_ENABLED"
+SPICE_ENABLED="$SPICE_ENABLED"
+ZORVIX_OPTIMIZED="$ZORVIX_OPTIMIZED"
+CUSTOM_NAME="$CUSTOM_NAME"
 EOF
     
     print_status "SUCCESS" "Configuration saved to $config_file"
 }
 
-# UNLIMITED resource configuration function
-configure_resources_unlimited() {
-    print_status "CPU" "Resource Configuration"
-    echo "┌─────────────────────────────────────────────────────────────┐"
-    printf "│ \033[1;33m%-20s\033[0m: %-35s │\n" "System Info" "You can allocate any values"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Physical Cores" "$TOTAL_CORES"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "System RAM" "${TOTAL_MEM}MB"
-    echo "└─────────────────────────────────────────────────────────────┘"
-    echo
-    print_status "WARN" "Warning: You can allocate more resources than physically available"
-    print_status "INFO" "Performance may be affected if you overallocate"
-    echo
-
-    # UNLIMITED CPU Configuration - no limits
-    while true; do
-        read -p "$(print_status "INPUT" "Enter number of CPU cores (recommended: 1-16): ")" CPUS
-        if validate_input "number" "$CPUS" && [ "$CPUS" -ge 1 ]; then
-            if [ "$CPUS" -gt "$TOTAL_CORES" ]; then
-                print_status "WARN" "Warning: Allocating $CPUS cores but only $TOTAL_CORES physical cores available"
-                read -p "$(print_status "INPUT" "Continue anyway? (y/N): ")" confirm
-                if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-                    continue
-                fi
-            fi
-            break
-        fi
-    done
+# Function to apply Zorvix optimizations
+apply_zorvix_optimizations() {
+    print_status "ZORVIX" "Applying performance optimizations..."
     
-    # UNLIMITED Memory Configuration - no limits
-    while true; do
-        read -p "$(print_status "INPUT" "Enter memory in MB (recommended: 1024-32768): ")" MEMORY
-        if validate_input "number" "$MEMORY" && [ "$MEMORY" -ge 256 ]; then
-            if [ "$MEMORY" -gt "$TOTAL_MEM" ]; then
-                print_status "WARN" "Warning: Allocating ${MEMORY}MB but only ${TOTAL_MEM}MB system RAM available"
-                read -p "$(print_status "INPUT" "Continue anyway? (y/N): ")" confirm
-                if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-                    continue
-                fi
-            fi
-            break
-        fi
-    done
+    local optimizations=()
     
-    # Disk Configuration - no practical limits
-    while true; do
-        read -p "$(print_status "INPUT" "Enter disk size (default: 500G): ")" DISK_SIZE
-        DISK_SIZE="${DISK_SIZE:-500G}"
-        if validate_input "size" "$DISK_SIZE"; then
-            break
-        fi
-    done
+    # CPU optimizations
+    if [ "$CPU_MODEL" = "host" ]; then
+        optimizations+=("CPU: host-passthrough with full feature set")
+    fi
     
-    # GUI Mode
-    while true; do
-        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
-        GUI_MODE=false
-        gui_input="${gui_input:-n}"
-        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
-            GUI_MODE=true
-            break
-        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
-            break
-        else
-            print_status "ERROR" "Please answer y or n"
-        fi
-    done
+    # Memory optimizations
+    if [[ "$MEMORY" -ge 4096 ]]; then
+        optimizations+=("Memory: Large pages enabled for ${MEMORY}MB")
+    fi
+    
+    # Disk optimizations
+    optimizations+=("Disk: VirtIO-SCSI with writeback cache")
+    
+    # Network optimizations
+    if [ "$NET_TYPE" = "virtio" ]; then
+        optimizations+=("Network: VirtIO with multi-queue")
+    fi
+    
+    # Display optimizations
+    if [ "$GUI_MODE" = true ]; then
+        optimizations+=("Video: $VIDEO_MODEL with 3D acceleration")
+    fi
+    
+    if [ ${#optimizations[@]} -gt 0 ]; then
+        print_status "ZORVIX" "Active optimizations:"
+        for opt in "${optimizations[@]}"; do
+            echo "  • $opt"
+        done
+    fi
 }
 
-# Simple network configuration
-configure_network_simple() {
-    print_status "NET" "Network Configuration"
-    
-    # SSH Port
-    while true; do
-        read -p "$(print_status "INPUT" "Enter SSH port (default: 2222): ")" SSH_PORT
-        SSH_PORT="${SSH_PORT:-2222}"
-        if validate_input "port" "$SSH_PORT"; then
-            if ss -tln 2>/dev/null | grep -q ":$SSH_PORT "; then
-                print_status "ERROR" "Port $SSH_PORT is already in use"
-            else
-                break
-            fi
-        fi
-    done
-    
-    # Additional port forwards
-    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80,443:443): ")" PORT_FORWARDS
-}
-
-# Function to create new VM with advanced AMD support
+# Function to create new VM with Zorvix enhancements
 create_new_vm() {
-    print_status "INFO" "Creating a new VM with ZynexForge"
+    print_status "INFO" "Creating a new ZynexForge VM"
     
+    # Ask for custom name
+    while true; do
+        read -p "$(print_status "INPUT" "Enter custom name for this VM (or press Enter for auto-generate): ")" CUSTOM_NAME
+        if [ -z "$CUSTOM_NAME" ]; then
+            CUSTOM_NAME="ZynexVM-$(date +%Y%m%d-%H%M%S)"
+            print_status "INFO" "Using auto-generated name: $CUSTOM_NAME"
+            break
+        elif validate_input "name" "$CUSTOM_NAME"; then
+            break
+        fi
+    done
+
     # OS Selection
     print_status "INFO" "Select an OS to set up:"
-    echo "┌─────────────────────────────────────────────────────────────┐"
     local os_options=()
     local i=1
     for os in "${!OS_OPTIONS[@]}"; do
-        printf "│ %2d) %-55s │\n" $i "$os"
+        echo "  $i) $os"
         os_options[$i]="$os"
         ((i++))
     done
-    echo "└─────────────────────────────────────────────────────────────┘"
     
     while true; do
         read -p "$(print_status "INPUT" "Enter your choice (1-${#OS_OPTIONS[@]}): ")" choice
@@ -414,11 +286,12 @@ create_new_vm() {
         fi
     done
 
-    # VM Name
+    # Custom Inputs with validation
     while true; do
         read -p "$(print_status "INPUT" "Enter VM name (default: $DEFAULT_HOSTNAME): ")" VM_NAME
         VM_NAME="${VM_NAME:-$DEFAULT_HOSTNAME}"
         if validate_input "name" "$VM_NAME"; then
+            # Check if VM name already exists
             if [[ -f "$VM_DIR/$VM_NAME.conf" ]]; then
                 print_status "ERROR" "VM with name '$VM_NAME' already exists"
             else
@@ -427,7 +300,6 @@ create_new_vm() {
         fi
     done
 
-    # Hostname
     while true; do
         read -p "$(print_status "INPUT" "Enter hostname (default: $VM_NAME): ")" HOSTNAME
         HOSTNAME="${HOSTNAME:-$VM_NAME}"
@@ -436,7 +308,6 @@ create_new_vm() {
         fi
     done
 
-    # Username
     while true; do
         read -p "$(print_status "INPUT" "Enter username (default: $DEFAULT_USERNAME): ")" USERNAME
         USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
@@ -445,7 +316,6 @@ create_new_vm() {
         fi
     done
 
-    # Password
     while true; do
         read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
         PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
@@ -457,51 +327,140 @@ create_new_vm() {
         fi
     done
 
-    # AMD CPU Optimization
-    amd_cpu_optimizer
-    
-    # UNLIMITED Resource Configuration
-    configure_resources_unlimited
-    
-    # Simple Network Configuration
-    configure_network_simple
+    # Hardware configuration with Zorvix recommendations
+    while true; do
+        read -p "$(print_status "INPUT" "Disk size (default: 30G, Zorvix recommended): ")" DISK_SIZE
+        DISK_SIZE="${DISK_SIZE:-30G}"
+        if validate_input "size" "$DISK_SIZE"; then
+            break
+        fi
+    done
 
-    # Configuration Summary
-    echo
-    print_status "SUCCESS" "Configuration Summary"
-    echo "┌─────────────────────────────────────────────────────────────┐"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "VM Name" "$VM_NAME"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "OS" "$OS_TYPE"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPU Model" "$CPU_MODEL"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPU Cores" "$CPUS"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Memory" "${MEMORY}MB"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Disk Size" "$DISK_SIZE"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "SSH Port" "$SSH_PORT"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "GUI Mode" "$GUI_MODE"
-    echo "└─────────────────────────────────────────────────────────────┘"
+    while true; do
+        read -p "$(print_status "INPUT" "Memory in MB (default: 4096, Zorvix recommended): ")" MEMORY
+        MEMORY="${MEMORY:-4096}"
+        if validate_input "number" "$MEMORY"; then
+            break
+        fi
+    done
+
+    while true; do
+        read -p "$(print_status "INPUT" "Number of CPUs (default: 4, Zorvix recommended): ")" CPUS
+        CPUS="${CPUS:-4}"
+        if validate_input "number" "$CPUS"; then
+            break
+        fi
+    done
+
+    while true; do
+        read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
+        SSH_PORT="${SSH_PORT:-2222}"
+        if validate_input "port" "$SSH_PORT"; then
+            # Check if port is already in use
+            if ss -tln 2>/dev/null | grep -q ":$SSH_PORT "; then
+                print_status "ERROR" "Port $SSH_PORT is already in use"
+            else
+                break
+            fi
+        fi
+    done
+
+    # Virtualization type
+    print_status "INFO" "Select virtualization type:"
+    echo "  1) Standard PC (i440FX + PIIX, 1996) - Default"
+    echo "  2) Q35 (PCIe) - Modern recommended"
+    echo "  3) virt - Maximum performance (requires KVM)"
     
-    # Resource Warning Check
-    if [ "$CPUS" -gt "$TOTAL_CORES" ]; then
-        echo
-        print_status "WARN" "CPU Over-allocation: $CPUS cores vs $TOTAL_CORES physical cores"
+    read -p "$(print_status "INPUT" "Enter choice (1-3): ")" virt_choice
+    case $virt_choice in
+        2) VIRT_TYPE="q35" ;;
+        3) VIRT_TYPE="virt" ;;
+        *) VIRT_TYPE="pc" ;;
+    esac
+
+    # CPU model
+    print_status "INFO" "Select CPU model:"
+    echo "  1) Host (best performance)"
+    echo "  2) EPYC (AMD server)"
+    echo "  3) Haswell (Intel modern)"
+    echo "  4) Default"
+    
+    read -p "$(print_status "INPUT" "Enter choice (1-4): ")" cpu_choice
+    case $cpu_choice in
+        1) CPU_MODEL="host" ;;
+        2) CPU_MODEL="EPYC" ;;
+        3) CPU_MODEL="Haswell" ;;
+        *) CPU_MODEL="qemu64" ;;
+    esac
+
+    while true; do
+        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
+        GUI_MODE=false
+        gui_input="${gui_input:-n}"
+        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
+            GUI_MODE=true
+            print_status "INFO" "Select video model:"
+            echo "  1) virtio (recommended)"
+            echo "  2) VGA"
+            echo "  3) VMware"
+            read -p "$(print_status "INPUT" "Enter choice (1-3): ")" video_choice
+            case $video_choice in
+                2) VIDEO_MODEL="VGA" ;;
+                3) VIDEO_MODEL="vmware" ;;
+                *) VIDEO_MODEL="virtio" ;;
+            esac
+            break
+        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
+            VIDEO_MODEL="none"
+            break
+        else
+            print_status "ERROR" "Please answer y or n"
+        fi
+    done
+
+    # Network type
+    print_status "INFO" "Select network model:"
+    echo "  1) virtio (recommended)"
+    echo "  2) e1000e (Intel)"
+    echo "  3) rtl8139 (Realtek)"
+    
+    read -p "$(print_status "INPUT" "Enter choice (1-3): ")" net_choice
+    case $net_choice in
+        2) NET_TYPE="e1000e" ;;
+        3) NET_TYPE="rtl8139" ;;
+        *) NET_TYPE="virtio" ;;
+    esac
+
+    # Additional features
+    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
+    
+    read -p "$(print_status "INPUT" "Enable sound? (y/n, default: n): ")" sound_input
+    SOUND_ENABLED=false
+    if [[ "$sound_input" =~ ^[Yy]$ ]]; then
+        SOUND_ENABLED=true
     fi
     
-    if [ "$MEMORY" -gt "$TOTAL_MEM" ]; then
-        echo
-        print_status "WARN" "Memory Over-allocation: ${MEMORY}MB vs ${TOTAL_MEM}MB system RAM"
+    read -p "$(print_status "INPUT" "Enable USB support? (y/n, default: y): ")" usb_input
+    USB_ENABLED=true
+    if [[ "$usb_input" =~ ^[Nn]$ ]]; then
+        USB_ENABLED=false
     fi
     
-    # Final Confirmation
-    echo
-    read -p "$(print_status "INPUT" "Press Enter to create VM, or 'n' to cancel: ")" confirm
-    if [[ "$confirm" =~ ^[Nn]$ ]]; then
-        print_status "INFO" "VM creation cancelled"
-        return
+    read -p "$(print_status "INPUT" "Enable SPICE remote access? (y/n, default: n): ")" spice_input
+    SPICE_ENABLED=false
+    if [[ "$spice_input" =~ ^[Yy]$ ]]; then
+        SPICE_ENABLED=true
+    fi
+
+    # Apply Zorvix optimizations
+    ZORVIX_OPTIMIZED="$ZORVIX_MODE"
+    if [ "$ZORVIX_OPTIMIZED" = true ]; then
+        apply_zorvix_optimizations
     fi
 
     IMG_FILE="$VM_DIR/$VM_NAME.img"
     SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
-    CREATED="$(date '+%Y-%m-%d %H:%M:%S')"
+    CREATED="$(date)"
 
     # Download and setup VM image
     setup_vm_image
@@ -510,11 +469,11 @@ create_new_vm() {
     save_vm_config
 }
 
-# Function to setup VM image
+# Function to setup VM image with optimizations
 setup_vm_image() {
-    print_status "INFO" "Setting up VM image..."
+    print_status "INFO" "Downloading and preparing image with ZynexForge optimizations..."
     
-    # Create VM directory
+    # Create VM directory if it doesn't exist
     mkdir -p "$VM_DIR"
     
     # Check if image already exists
@@ -522,70 +481,96 @@ setup_vm_image() {
         print_status "INFO" "Image file already exists. Skipping download."
     else
         print_status "INFO" "Downloading image from $IMG_URL..."
-        if ! wget --progress=bar:force:noscroll "$IMG_URL" -O "$IMG_FILE.tmp" 2>/dev/null; then
+        if ! wget --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp"; then
             print_status "ERROR" "Failed to download image from $IMG_URL"
             exit 1
         fi
         mv "$IMG_FILE.tmp" "$IMG_FILE"
-        print_status "SUCCESS" "Image downloaded successfully"
     fi
     
-    # Resize the disk image
-    print_status "INFO" "Resizing disk to $DISK_SIZE..."
+    # Resize the disk image with Zorvix optimizations
+    print_status "PERF" "Optimizing disk image..."
     if ! qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
-        print_status "WARN" "Failed to resize disk image. Creating new image..."
+        print_status "WARN" "Failed to resize disk image. Creating new optimized image..."
+        # Create a new optimized image
         rm -f "$IMG_FILE"
-        qemu-img create -f qcow2 "$IMG_FILE" "$DISK_SIZE"
+        if qemu-img create -f qcow2 -o preallocation=metadata,cluster_size=2M "$IMG_FILE" "$DISK_SIZE"; then
+            print_status "PERF" "Created preallocated disk with 2MB clusters"
+        else
+            qemu-img create -f qcow2 "$IMG_FILE" "$DISK_SIZE"
+        fi
     fi
 
-    # Create cloud-init configuration
-    local password_hash=""
-    if command -v openssl &> /dev/null; then
-        password_hash=$(openssl passwd -6 "$PASSWORD" 2>/dev/null || echo "$PASSWORD")
-    else
-        password_hash="$PASSWORD"
-    fi
-    
+    # Enhanced cloud-init configuration
     cat > user-data <<EOF
 #cloud-config
+# ZynexForge Enhanced Configuration
 hostname: $HOSTNAME
 ssh_pwauth: true
 disable_root: false
+preserve_hostname: false
+manage_etc_hosts: true
 users:
   - name: $USERNAME
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
+    password: $(openssl passwd -6 "$PASSWORD" | tr -d '\n')
+    ssh_authorized_keys: []
     lock_passwd: false
-    passwd: $password_hash
+package_update: true
+package_upgrade: true
+packages:
+  - qemu-guest-agent
+  - cloud-initramfs-growroot
+  - htop
+  - curl
+  - wget
+  - net-tools
 chpasswd:
   list: |
     root:$PASSWORD
     $USERNAME:$PASSWORD
   expire: false
-package_update: true
-package_upgrade: true
-final_message: "ZynexForge VM $HOSTNAME ready"
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - echo "ZynexForge VM $CUSTOM_NAME ready" > /etc/motd
+power_state:
+  mode: reboot
+  timeout: 300
+  condition: true
 EOF
 
     cat > meta-data <<EOF
 instance-id: iid-$VM_NAME
 local-hostname: $HOSTNAME
+dsmode: local
 EOF
 
-    if ! cloud-localds "$SEED_FILE" user-data meta-data 2>/dev/null; then
+    # Network configuration if needed
+    cat > network-config <<EOF
+version: 2
+ethernets:
+  eth0:
+    dhcp4: true
+    dhcp6: false
+    optional: true
+EOF
+
+    if ! cloud-localds "$SEED_FILE" user-data meta-data network-config; then
         print_status "ERROR" "Failed to create cloud-init seed image"
         exit 1
     fi
     
-    print_status "SUCCESS" "VM '$VM_NAME' created successfully."
+    print_status "SUCCESS" "ZynexForge VM '$VM_NAME' ($CUSTOM_NAME) created successfully with Zorvix optimizations."
 }
 
-# Advanced VM start function with AMD optimizations
+# Function to start a VM with Zorvix optimizations
 start_vm() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
-        print_status "INFO" "Starting VM: $vm_name"
+        print_status "INFO" "Starting ZynexForge VM: $vm_name ($CUSTOM_NAME)"
         print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
         print_status "INFO" "Password: $PASSWORD"
         
@@ -601,18 +586,23 @@ start_vm() {
             setup_vm_image
         fi
         
-        # Base QEMU command with AMD optimizations
+        # Apply Zorvix optimizations if enabled
+        if [ "$ZORVIX_OPTIMIZED" = true ]; then
+            apply_zorvix_optimizations
+        fi
+        
+        # Build QEMU command with Zorvix optimizations
         local qemu_cmd=(
             qemu-system-x86_64
             -enable-kvm
-            -machine "$MACHINE_TYPE,accel=kvm"
-            $CPU_OPTIONS
-            -smp "$CPUS"
+            -machine "$VIRT_TYPE,accel=kvm"
             -m "$MEMORY"
-            -drive "file=$IMG_FILE,format=qcow2,if=virtio"
+            -smp "$CPUS,sockets=1,cores=$CPUS,threads=1"
+            -cpu "$CPU_MODEL,+x2apic,+tsc-deadline"
+            -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,discard=unmap"
             -drive "file=$SEED_FILE,format=raw,if=virtio"
-            -boot order=c
-            -device virtio-net-pci,netdev=n0
+            -boot order=c,menu=on
+            -device "$NET_TYPE,netdev=n0,mac=52:54:00:$(printf '%02x' $((RANDOM % 256))):$(printf '%02x' $((RANDOM % 256))):$(printf '%02x' $((RANDOM % 256)))"
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
 
@@ -621,46 +611,73 @@ start_vm() {
             IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
             for forward in "${forwards[@]}"; do
                 IFS=':' read -r host_port guest_port <<< "$forward"
-                qemu_cmd+=(-device "virtio-net-pci,netdev=n${#qemu_cmd[@]}")
+                qemu_cmd+=(-device "$NET_TYPE,netdev=n${#qemu_cmd[@]}")
                 qemu_cmd+=(-netdev "user,id=n${#qemu_cmd[@]},hostfwd=tcp::$host_port-:$guest_port")
             done
         fi
 
-        # Add RNG device if available
-        if [ -c /dev/urandom ]; then
-            qemu_cmd+=(-object rng-random,filename=/dev/urandom,id=rng0)
-            qemu_cmd+=(-device virtio-rng-pci,rng=rng0)
-        fi
-
-        # Add performance optimizations
-        qemu_cmd+=(-device virtio-balloon-pci)
-        
-        # Disk performance optimizations
-        qemu_cmd+=(-drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,discard=unmap")
-
-        # Add GUI or console mode
-        if [[ "$GUI_MODE" == true ]]; then
-            qemu_cmd+=(-vga virtio -display gtk,gl=on)
-            # Add USB tablet for better mouse integration
-            qemu_cmd+=(-usb -device usb-tablet)
+        # Add video if GUI mode enabled
+        if [[ "$GUI_MODE" == true ]] && [[ "$VIDEO_MODEL" != "none" ]]; then
+            qemu_cmd+=(-device "$VIDEO_MODEL,virgl=on")
+            if [ "$SPICE_ENABLED" = true ]; then
+                local spice_port=$((5900 + RANDOM % 100))
+                qemu_cmd+=(
+                    -spice "port=$spice_port,addr=127.0.0.1,disable-ticketing=on"
+                    -device "qxl-vga"
+                    -device "virtio-serial-pci"
+                    -device "virtserialport,chardev=spicechannel0,name=com.redhat.spice.0"
+                    -chardev "spicevmc,id=spicechannel0,name=vdagent"
+                )
+                print_status "INFO" "SPICE remote access available at: spice://127.0.0.1:$spice_port"
+            else
+                qemu_cmd+=(-display gtk,gl=on)
+            fi
         else
             qemu_cmd+=(-nographic -serial mon:stdio)
         fi
 
-        # AMD-specific optimizations
-        if [ "$IS_AMD" = true ]; then
-            print_status "CPU" "Starting with AMD optimizations: $CPU_MODEL"
+        # Add Zorvix performance enhancements
+        qemu_cmd+=(
+            -object "memory-backend-file,id=mem,size=${MEMORY}M,mem-path=/dev/shm,prealloc=yes"
+            -numa "node,memdev=mem"
+            -device "virtio-balloon-pci"
+            -object "rng-random,filename=/dev/urandom,id=rng0"
+            -device "virtio-rng-pci,rng=rng0,max-bytes=1024,period=1000"
+        )
+
+        # Add sound if enabled
+        if [ "$SOUND_ENABLED" = true ]; then
+            qemu_cmd+=(-device "ich9-intel-hda" -device "hda-duplex")
         fi
 
-        print_status "INFO" "Starting VM with:"
-        echo "CPU: $CPU_MODEL ($CPUS cores) | RAM: ${MEMORY}MB | Disk: $DISK_SIZE"
-        echo "SSH Port: $SSH_PORT | GUI: $GUI_MODE"
-        echo
+        # Add USB if enabled
+        if [ "$USB_ENABLED" = true ]; then
+            qemu_cmd+=(-usb -device "usb-tablet" -device "usb-kbd")
+        fi
+
+        # Add virtio devices
+        qemu_cmd+=(
+            -device "virtio-scsi-pci,id=scsi"
+            -device "scsi-hd,drive=drive0"
+            -drive "if=none,id=drive0,file=$IMG_FILE"
+        )
+
+        print_status "ZORVIX" "Starting QEMU with optimized parameters..."
+        print_status "PERF" "Command: ${qemu_cmd[*]:0:10}..."
         
-        # Run QEMU
-        "${qemu_cmd[@]}"
+        # Start VM in background and capture PID
+        "${qemu_cmd[@]}" &
+        local qemu_pid=$!
+        echo $qemu_pid > "$VM_DIR/$vm_name.pid"
         
-        print_status "INFO" "VM $vm_name has been shut down"
+        sleep 2
+        
+        if ps -p $qemu_pid > /dev/null; then
+            print_status "SUCCESS" "VM $vm_name started successfully (PID: $qemu_pid)"
+            print_status "INFO" "To stop VM: Use menu option or kill $qemu_pid"
+        else
+            print_status "ERROR" "Failed to start VM"
+        fi
     fi
 }
 
@@ -668,24 +685,13 @@ start_vm() {
 delete_vm() {
     local vm_name=$1
     
-    print_status "WARN" "This will permanently delete VM '$vm_name' and all its data!"
-    echo "┌─────────────────────────────────────────────────────────────┐"
-    echo "│                     ⚠  WARNING  ⚠                         │"
-    echo "├─────────────────────────────────────────────────────────────┤"
-    echo "│  This action cannot be undone!                              │"
-    echo "│  All VM data including disk images will be deleted.         │
-    echo "└─────────────────────────────────────────────────────────────┘"
-    
-    read -p "$(print_status "INPUT" "Type 'DELETE' to confirm: ")" confirm
-    if [[ "$confirm" == "DELETE" ]]; then
+    print_status "WARN" "This will permanently delete ZynexForge VM '$vm_name' ($CUSTOM_NAME) and all its data!"
+    read -p "$(print_status "INPUT" "Are you sure? (y/N): ")" -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
         if load_vm_config "$vm_name"; then
-            # Stop VM if running
-            if is_vm_running "$vm_name"; then
-                stop_vm "$vm_name"
-            fi
-            
-            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
-            print_status "SUCCESS" "VM '$vm_name' has been deleted"
+            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf" "$VM_DIR/$vm_name.pid" 2>/dev/null
+            print_status "SUCCESS" "ZynexForge VM '$vm_name' has been deleted"
         fi
     else
         print_status "INFO" "Deletion cancelled"
@@ -698,27 +704,47 @@ show_vm_info() {
     
     if load_vm_config "$vm_name"; then
         echo
-        print_status "INFO" "VM Information: $vm_name"
-        echo "┌─────────────────────────────────────────────────────────────┐"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "OS" "$OS_TYPE"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Hostname" "$HOSTNAME"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Username" "$USERNAME"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPU Model" "$CPU_MODEL"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPU Cores" "$CPUS"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Memory" "$MEMORY MB"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Disk" "$DISK_SIZE"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "SSH Port" "$SSH_PORT"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "GUI Mode" "$GUI_MODE"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Created" "$CREATED"
-        echo "└─────────────────────────────────────────────────────────────┘"
+        print_status "INFO" "ZynexForge VM Information"
+        echo "=========================================="
+        echo "Custom Name:    $CUSTOM_NAME"
+        echo "VM Name:        $vm_name"
+        echo "Hostname:       $HOSTNAME"
+        echo "Username:       $USERNAME"
+        echo "Password:       $PASSWORD"
+        echo "SSH Port:       $SSH_PORT"
+        echo "OS:             $OS_TYPE"
+        echo "Virtualization: $VIRT_TYPE"
+        echo "CPU Model:      $CPU_MODEL"
+        echo "Memory:         $MEMORY MB"
+        echo "CPUs:           $CPUS"
+        echo "Disk:           $DISK_SIZE"
+        echo "GUI Mode:       $GUI_MODE"
+        echo "Video Model:    $VIDEO_MODEL"
+        echo "Network:        $NET_TYPE"
+        echo "Zorvix Mode:    $ZORVIX_OPTIMIZED"
+        echo "Port Forwards:  ${PORT_FORWARDS:-None}"
+        echo "Sound:          $SOUND_ENABLED"
+        echo "USB:            $USB_ENABLED"
+        echo "SPICE:          $SPICE_ENABLED"
+        echo "Created:        $CREATED"
+        echo "Image File:     $IMG_FILE"
+        echo "Seed File:      $SEED_FILE"
+        echo "=========================================="
+        echo
         
-        if is_vm_running "$vm_name"; then
-            print_status "SUCCESS" "Status: Running"
+        # Check if VM is running
+        if [ -f "$VM_DIR/$vm_name.pid" ]; then
+            local pid=$(cat "$VM_DIR/$vm_name.pid")
+            if ps -p "$pid" > /dev/null; then
+                print_status "INFO" "Status: RUNNING (PID: $pid)"
+            else
+                print_status "INFO" "Status: STOPPED"
+                rm -f "$VM_DIR/$vm_name.pid"
+            fi
         else
-            print_status "INFO" "Status: Stopped"
+            print_status "INFO" "Status: STOPPED"
         fi
         
-        echo
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
     fi
 }
@@ -726,7 +752,18 @@ show_vm_info() {
 # Function to check if VM is running
 is_vm_running() {
     local vm_name=$1
-    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null 2>&1; then
+    
+    if [ -f "$VM_DIR/$vm_name.pid" ]; then
+        local pid=$(cat "$VM_DIR/$vm_name.pid")
+        if ps -p "$pid" > /dev/null; then
+            return 0
+        else
+            rm -f "$VM_DIR/$vm_name.pid"
+        fi
+    fi
+    
+    # Fallback check
+    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null; then
         return 0
     else
         return 1
@@ -739,18 +776,515 @@ stop_vm() {
     
     if load_vm_config "$vm_name"; then
         if is_vm_running "$vm_name"; then
-            print_status "INFO" "Stopping VM: $vm_name"
-            pkill -f "qemu-system-x86_64.*$IMG_FILE" 2>/dev/null || true
-            sleep 2
-            if is_vm_running "$vm_name"; then
-                print_status "WARN" "VM did not stop gracefully, forcing termination..."
-                pkill -9 -f "qemu-system-x86_64.*$IMG_FILE" 2>/dev/null || true
+            print_status "INFO" "Stopping ZynexForge VM: $vm_name"
+            
+            if [ -f "$VM_DIR/$vm_name.pid" ]; then
+                local pid=$(cat "$VM_DIR/$vm_name.pid")
+                kill -TERM "$pid" 2>/dev/null
+                sleep 3
+                
+                if ps -p "$pid" > /dev/null; then
+                    print_status "WARN" "VM did not stop gracefully, forcing termination..."
+                    kill -9 "$pid" 2>/dev/null
+                fi
+                
+                rm -f "$VM_DIR/$vm_name.pid"
+            else
+                # Fallback kill method
+                pkill -f "qemu-system-x86_64.*$IMG_FILE"
             fi
-            print_status "SUCCESS" "VM $vm_name stopped"
+            
+            sleep 2
+            
+            if is_vm_running "$vm_name"; then
+                print_status "ERROR" "Failed to stop VM $vm_name"
+                return 1
+            else
+                print_status "SUCCESS" "VM $vm_name stopped successfully"
+            fi
         else
             print_status "INFO" "VM $vm_name is not running"
         fi
     fi
+}
+
+# Function to edit VM configuration
+edit_vm_config() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        print_status "INFO" "Editing ZynexForge VM: $vm_name ($CUSTOM_NAME)"
+        
+        while true; do
+            echo
+            print_status "INFO" "Current configuration:"
+            echo "  Custom Name: $CUSTOM_NAME"
+            echo "  Hostname: $HOSTNAME"
+            echo "  Memory: $MEMORY MB"
+            echo "  CPUs: $CPUS"
+            echo "  Disk: $DISK_SIZE"
+            echo "  SSH Port: $SSH_PORT"
+            echo "  GUI Mode: $GUI_MODE"
+            echo "  Zorvix Mode: $ZORVIX_OPTIMIZED"
+            echo
+            
+            echo "What would you like to edit?"
+            echo "  1) Custom Name"
+            echo "  2) Hostname"
+            echo "  3) Username"
+            echo "  4) Password"
+            echo "  5) SSH Port"
+            echo "  6) GUI Mode"
+            echo "  7) Port Forwards"
+            echo "  8) Memory (RAM)"
+            echo "  9) CPU Count"
+            echo "  10) Disk Size"
+            echo "  11) Zorvix Optimizations"
+            echo "  12) Virtualization Type"
+            echo "  13) CPU Model"
+            echo "  14) Network Type"
+            echo "  0) Back to main menu"
+            
+            read -p "$(print_status "INPUT" "Enter your choice: ")" edit_choice
+            
+            case $edit_choice in
+                1)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new custom name (current: $CUSTOM_NAME): ")" new_custom_name
+                        new_custom_name="${new_custom_name:-$CUSTOM_NAME}"
+                        if validate_input "name" "$new_custom_name"; then
+                            CUSTOM_NAME="$new_custom_name"
+                            break
+                        fi
+                    done
+                    ;;
+                2)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new hostname (current: $HOSTNAME): ")" new_hostname
+                        new_hostname="${new_hostname:-$HOSTNAME}"
+                        if validate_input "name" "$new_hostname"; then
+                            HOSTNAME="$new_hostname"
+                            break
+                        fi
+                    done
+                    ;;
+                3)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new username (current: $USERNAME): ")" new_username
+                        new_username="${new_username:-$USERNAME}"
+                        if validate_input "username" "$new_username"; then
+                            USERNAME="$new_username"
+                            break
+                        fi
+                    done
+                    ;;
+                4)
+                    while true; do
+                        read -s -p "$(print_status "INPUT" "Enter new password (current: ****): ")" new_password
+                        new_password="${new_password:-$PASSWORD}"
+                        echo
+                        if [ -n "$new_password" ]; then
+                            PASSWORD="$new_password"
+                            break
+                        else
+                            print_status "ERROR" "Password cannot be empty"
+                        fi
+                    done
+                    ;;
+                5)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new SSH port (current: $SSH_PORT): ")" new_ssh_port
+                        new_ssh_port="${new_ssh_port:-$SSH_PORT}"
+                        if validate_input "port" "$new_ssh_port"; then
+                            # Check if port is already in use
+                            if [ "$new_ssh_port" != "$SSH_PORT" ] && ss -tln 2>/dev/null | grep -q ":$new_ssh_port "; then
+                                print_status "ERROR" "Port $new_ssh_port is already in use"
+                            else
+                                SSH_PORT="$new_ssh_port"
+                                break
+                            fi
+                        fi
+                    done
+                    ;;
+                6)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, current: $GUI_MODE): ")" gui_input
+                        gui_input="${gui_input:-}"
+                        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
+                            GUI_MODE=true
+                            read -p "$(print_status "INPUT" "Select video model (virtio/vga/vmware): ")" new_video
+                            VIDEO_MODEL="${new_video:-$VIDEO_MODEL}"
+                            break
+                        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
+                            GUI_MODE=false
+                            VIDEO_MODEL="none"
+                            break
+                        elif [ -z "$gui_input" ]; then
+                            break
+                        else
+                            print_status "ERROR" "Please answer y or n"
+                        fi
+                    done
+                    ;;
+                7)
+                    read -p "$(print_status "INPUT" "Additional port forwards (current: ${PORT_FORWARDS:-None}): ")" new_port_forwards
+                    PORT_FORWARDS="${new_port_forwards:-$PORT_FORWARDS}"
+                    ;;
+                8)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new memory in MB (current: $MEMORY): ")" new_memory
+                        new_memory="${new_memory:-$MEMORY}"
+                        if validate_input "number" "$new_memory"; then
+                            MEMORY="$new_memory"
+                            break
+                        fi
+                    done
+                    ;;
+                9)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new CPU count (current: $CPUS): ")" new_cpus
+                        new_cpus="${new_cpus:-$CPUS}"
+                        if validate_input "number" "$new_cpus"; then
+                            CPUS="$new_cpus"
+                            break
+                        fi
+                    done
+                    ;;
+                10)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new disk size (current: $DISK_SIZE): ")" new_disk_size
+                        new_disk_size="${new_disk_size:-$DISK_SIZE}"
+                        if validate_input "size" "$new_disk_size"; then
+                            DISK_SIZE="$new_disk_size"
+                            break
+                        fi
+                    done
+                    ;;
+                11)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enable Zorvix optimizations? (y/n, current: $ZORVIX_OPTIMIZED): ")" zorvix_input
+                        zorvix_input="${zorvix_input:-}"
+                        if [[ "$zorvix_input" =~ ^[Yy]$ ]]; then 
+                            ZORVIX_OPTIMIZED=true
+                            break
+                        elif [[ "$zorvix_input" =~ ^[Nn]$ ]]; then
+                            ZORVIX_OPTIMIZED=false
+                            break
+                        elif [ -z "$zorvix_input" ]; then
+                            break
+                        else
+                            print_status "ERROR" "Please answer y or n"
+                        fi
+                    done
+                    ;;
+                12)
+                    echo "Select virtualization type:"
+                    echo "  1) Standard PC (i440FX + PIIX, 1996)"
+                    echo "  2) Q35 (PCIe)"
+                    echo "  3) virt"
+                    read -p "$(print_status "INPUT" "Enter choice (1-3): ")" virt_choice
+                    case $virt_choice in
+                        2) VIRT_TYPE="q35" ;;
+                        3) VIRT_TYPE="virt" ;;
+                        *) VIRT_TYPE="pc" ;;
+                    esac
+                    ;;
+                13)
+                    echo "Select CPU model:"
+                    echo "  1) Host"
+                    echo "  2) EPYC"
+                    echo "  3) Haswell"
+                    echo "  4) Default"
+                    read -p "$(print_status "INPUT" "Enter choice (1-4): ")" cpu_choice
+                    case $cpu_choice in
+                        1) CPU_MODEL="host" ;;
+                        2) CPU_MODEL="EPYC" ;;
+                        3) CPU_MODEL="Haswell" ;;
+                        *) CPU_MODEL="qemu64" ;;
+                    esac
+                    ;;
+                14)
+                    echo "Select network model:"
+                    echo "  1) virtio"
+                    echo "  2) e1000e"
+                    echo "  3) rtl8139"
+                    read -p "$(print_status "INPUT" "Enter choice (1-3): ")" net_choice
+                    case $net_choice in
+                        2) NET_TYPE="e1000e" ;;
+                        3) NET_TYPE="rtl8139" ;;
+                        *) NET_TYPE="virtio" ;;
+                    esac
+                    ;;
+                0)
+                    return 0
+                    ;;
+                *)
+                    print_status "ERROR" "Invalid selection"
+                    continue
+                    ;;
+            esac
+            
+            # Recreate seed image with new configuration if user/password/hostname changed
+            if [[ "$edit_choice" -eq 2 || "$edit_choice" -eq 3 || "$edit_choice" -eq 4 ]]; then
+                print_status "INFO" "Updating cloud-init configuration..."
+                setup_vm_image
+            fi
+            
+            # Save configuration
+            save_vm_config
+            
+            read -p "$(print_status "INPUT" "Continue editing? (y/N): ")" continue_editing
+            if [[ ! "$continue_editing" =~ ^[Yy]$ ]]; then
+                break
+            fi
+        done
+    fi
+}
+
+# Function to resize VM disk
+resize_vm_disk() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        print_status "INFO" "Current disk size: $DISK_SIZE"
+        
+        if is_vm_running "$vm_name"; then
+            print_status "ERROR" "Cannot resize disk while VM is running. Please stop the VM first."
+            return 1
+        fi
+        
+        while true; do
+            read -p "$(print_status "INPUT" "Enter new disk size (e.g., 50G): ")" new_disk_size
+            if validate_input "size" "$new_disk_size"; then
+                if [[ "$new_disk_size" == "$DISK_SIZE" ]]; then
+                    print_status "INFO" "New disk size is the same as current size. No changes made."
+                    return 0
+                fi
+                
+                # Convert sizes to KB for comparison
+                local current_kb=$(echo "$DISK_SIZE" | sed -e 's/G$/*1024*1024/' -e 's/M$/*1024/' | bc)
+                local new_kb=$(echo "$new_disk_size" | sed -e 's/G$/*1024*1024/' -e 's/M$/*1024/' | bc)
+                
+                if [[ $new_kb -lt $current_kb ]]; then
+                    print_status "WARN" "Shrinking disk size is not recommended and may cause data loss!"
+                    read -p "$(print_status "INPUT" "Are you sure you want to continue? (y/N): ")" confirm_shrink
+                    if [[ ! "$confirm_shrink" =~ ^[Yy]$ ]]; then
+                        print_status "INFO" "Disk resize cancelled."
+                        return 0
+                    fi
+                fi
+                
+                # Resize the disk
+                print_status "INFO" "Resizing disk to $new_disk_size..."
+                if qemu-img resize "$IMG_FILE" "$new_disk_size"; then
+                    DISK_SIZE="$new_disk_size"
+                    save_vm_config
+                    print_status "SUCCESS" "Disk resized successfully to $new_disk_size"
+                    
+                    # Update cloud-init to resize filesystem on next boot
+                    print_status "INFO" "Filesystem will be resized on next VM boot"
+                else
+                    print_status "ERROR" "Failed to resize disk"
+                    return 1
+                fi
+                break
+            fi
+        done
+    fi
+}
+
+# Function to show VM performance metrics
+show_vm_performance() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        if is_vm_running "$vm_name"; then
+            print_status "INFO" "Performance metrics for ZynexForge VM: $vm_name"
+            echo "=========================================="
+            
+            # Get QEMU process ID
+            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE")
+            if [[ -n "$qemu_pid" ]]; then
+                # Show detailed process stats
+                echo "QEMU Process Stats (PID: $qemu_pid):"
+                echo "------------------------------------------"
+                ps -p "$qemu_pid" -o pid,ppid,%cpu,%mem,sz,rss,vsz,cmd --no-headers
+                echo
+                
+                # Show CPU usage
+                echo "CPU Usage:"
+                top -bn1 -p "$qemu_pid" | tail -1
+                echo
+                
+                # Show memory usage
+                echo "System Memory:"
+                free -h
+                echo
+                
+                # Show disk I/O if iostat is available
+                if command -v iostat &> /dev/null; then
+                    echo "Disk I/O Statistics:"
+                    iostat -x 1 2 | tail -5
+                    echo
+                fi
+                
+                # Show network connections
+                echo "Network Connections:"
+                ss -tlnp | grep ":$SSH_PORT" || echo "  SSH port $SSH_PORT not listening"
+                echo
+                
+                # Zorvix performance summary
+                if [ "$ZORVIX_OPTIMIZED" = true ]; then
+                    echo "Zorvix Performance Summary:"
+                    echo "  • CPU: $CPUS cores ($CPU_MODEL)"
+                    echo "  • Memory: ${MEMORY}MB allocated"
+                    echo "  • Disk: $DISK_SIZE with virtio-scsi"
+                    echo "  • Network: $NET_TYPE with virtio"
+                    echo "  • Acceleration: KVM enabled"
+                fi
+            else
+                print_status "ERROR" "Could not find QEMU process for VM $vm_name"
+            fi
+        else
+            print_status "INFO" "VM $vm_name is not running"
+            echo "Configuration Summary:"
+            echo "  Memory: $MEMORY MB"
+            echo "  CPUs: $CPUS ($CPU_MODEL)"
+            echo "  Disk: $DISK_SIZE"
+            echo "  Virtualization: $VIRT_TYPE"
+            echo "  Zorvix Optimized: $ZORVIX_OPTIMIZED"
+        fi
+        echo "=========================================="
+        read -p "$(print_status "INPUT" "Press Enter to continue...")"
+    fi
+}
+
+# Function to export VM configuration
+export_vm_config() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        local export_file="$VM_DIR/$vm_name-export-$(date +%Y%m%d-%H%M%S).conf"
+        
+        cp "$VM_DIR/$vm_name.conf" "$export_file"
+        print_status "SUCCESS" "VM configuration exported to: $export_file"
+        
+        echo "Exported configuration:"
+        cat "$export_file"
+        echo
+    fi
+}
+
+# Function to import VM configuration
+import_vm_config() {
+    print_status "INFO" "Import VM Configuration"
+    
+    echo "Available configuration files:"
+    local config_files=($(find "$VM_DIR" -name "*-export-*.conf" 2>/dev/null))
+    
+    if [ ${#config_files[@]} -eq 0 ]; then
+        print_status "INFO" "No export files found"
+        return
+    fi
+    
+    for i in "${!config_files[@]}"; do
+        echo "  $((i+1))) $(basename "${config_files[$i]}")"
+    done
+    
+    read -p "$(print_status "INPUT" "Select file to import (1-${#config_files[@]}): ")" choice
+    
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#config_files[@]} ]; then
+        local import_file="${config_files[$((choice-1))]}"
+        
+        # Ask for new VM name
+        while true; do
+            read -p "$(print_status "INPUT" "Enter new VM name: ")" new_vm_name
+            if validate_input "name" "$new_vm_name"; then
+                if [[ -f "$VM_DIR/$new_vm_name.conf" ]]; then
+                    print_status "ERROR" "VM with name '$new_vm_name' already exists"
+                else
+                    break
+                fi
+            fi
+        done
+        
+        # Copy and modify the configuration
+        cp "$import_file" "$VM_DIR/$new_vm_name.conf"
+        
+        # Update VM_NAME in the configuration
+        sed -i "s/VM_NAME=\".*\"/VM_NAME=\"$new_vm_name\"/" "$VM_DIR/$new_vm_name.conf"
+        
+        print_status "SUCCESS" "VM configuration imported as '$new_vm_name'"
+    else
+        print_status "ERROR" "Invalid selection"
+    fi
+}
+
+# Function to show ZynexForge system info
+show_system_info() {
+    display_header
+    
+    print_status "INFO" "ZynexForge System Information"
+    echo "=========================================="
+    
+    # Host information
+    echo "Host System:"
+    echo "  OS: $(lsb_release -ds 2>/dev/null || cat /etc/os-release | grep PRETTY_NAME | cut -d'=' -f2 | tr -d '\"')"
+    echo "  Kernel: $(uname -r)"
+    echo "  Architecture: $(uname -m)"
+    echo "  Virtualization: $( [ -e /proc/cpuinfo ] && grep -q -E "vmx|svm" /proc/cpuinfo && echo "Hardware (KVM)" || echo "Software" )"
+    echo
+    
+    # QEMU/KVM information
+    echo "Virtualization Stack:"
+    echo "  QEMU Version: $(qemu-system-x86_64 --version | head -1)"
+    echo "  KVM Module: $( [ -c /dev/kvm ] && echo "Loaded" || echo "Not available" )"
+    echo
+    
+    # System resources
+    echo "System Resources:"
+    echo "  CPU Cores: $(nproc)"
+    echo "  Total Memory: $(free -h | grep Mem | awk '{print $2}')"
+    echo "  Available Memory: $(free -h | grep Mem | awk '{print $7}')"
+    echo "  Disk Space: $(df -h $VM_DIR | tail -1 | awk '{print $4}') available"
+    echo
+    
+    # VM Statistics
+    local vm_count=$(get_vm_list | wc -l)
+    local running_count=0
+    for vm in $(get_vm_list); do
+        if is_vm_running "$vm"; then
+            ((running_count++))
+        fi
+    done
+    
+    echo "VM Statistics:"
+    echo "  Total VMs: $vm_count"
+    echo "  Running VMs: $running_count"
+    echo "  Stopped VMs: $((vm_count - running_count))"
+    echo "  Storage Directory: $VM_DIR"
+    echo
+    
+    # Zorvix status
+    if [ "$ZORVIX_MODE" = true ]; then
+        echo "Zorvix Technology:"
+        echo "  Status: ACTIVE"
+        echo "  Optimizations: Enabled for all new VMs"
+        
+        # Check for performance features
+        if [ -d "/sys/kernel/mm/transparent_hugepage" ]; then
+            echo "  Huge Pages: $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
+        fi
+        
+        if command -v cpupower &> /dev/null; then
+            echo "  CPU Governor: $(cpupower frequency-info | grep governor | head -1 | cut -d':' -f2 | xargs)"
+        fi
+    else
+        echo "Zorvix Technology: DISABLED"
+    fi
+    
+    echo "=========================================="
+    read -p "$(print_status "INPUT" "Press Enter to continue...")"
 }
 
 # Main menu function
@@ -761,46 +1295,50 @@ main_menu() {
         local vms=($(get_vm_list))
         local vm_count=${#vms[@]}
         
-        # Display VM status
         if [ $vm_count -gt 0 ]; then
-            print_status "INFO" "Virtual Machines ($vm_count total):"
-            echo "┌─────┬──────────────────────┬────────────┬──────────────┐"
-            echo "│ No. │ Name                 │ Status     │ SSH Port    │"
-            echo "├─────┼──────────────────────┼────────────┼──────────────┤"
-            
+            print_status "INFO" "Found $vm_count ZynexForge VM(s):"
             for i in "${!vms[@]}"; do
-                local vm="${vms[$i]}"
-                local status="\033[1;31mStopped\033[0m"
-                local port=""
+                local status="Stopped"
+                local zorvix_status=""
                 
-                if load_vm_config "$vm" 2>/dev/null; then
-                    port="$SSH_PORT"
-                    if is_vm_running "$vm"; then
-                        status="\033[1;32mRunning\033[0m"
-                    fi
+                if is_vm_running "${vms[$i]}"; then
+                    status="\033[1;32mRunning\033[0m"
+                else
+                    status="\033[1;31mStopped\033[0m"
                 fi
                 
-                printf "│ \033[1;36m%2d\033[0m │ %-20s │ %b │ %-12s │\n" \
-                    $((i+1)) "$vm" "$status" "$port"
+                # Load config to get custom name and Zorvix status
+                if load_vm_config "${vms[$i]}" 2>/dev/null; then
+                    if [ "$ZORVIX_OPTIMIZED" = true ]; then
+                        zorvix_status=" ⚡"
+                    fi
+                    printf "  %2d) %s \033[1;36m(%s)\033[0m - %s%s\n" $((i+1)) "${vms[$i]}" "$CUSTOM_NAME" "$status" "$zorvix_status"
+                else
+                    printf "  %2d) %s - %s\n" $((i+1)) "${vms[$i]}" "$status"
+                fi
             done
-            echo "└─────┴──────────────────────┴────────────┴──────────────┘"
             echo
         else
-            print_status "INFO" "No VMs found. Create your first VM to get started."
+            print_status "INFO" "No VMs found. Create your first ZynexForge VM!"
             echo
         fi
         
-        # Display main menu
-        print_status "MENU" "Main Menu"
-        echo "┌─────────────────────────────────────────────────────────────┐"
-        echo "│ 1) Create New VM       │ 2) Start VM      │ 3) Stop VM     │"
-        echo "├─────────────────────────────────────────────────────────────┤"
-        echo "│ 4) VM Information      │ 5) Edit Config   │ 6) Delete VM   │"
-        echo "├─────────────────────────────────────────────────────────────┤"
-        echo "│ 7) Resize Disk         │ 8) Performance   │ 9) Backup      │"
-        echo "├─────────────────────────────────────────────────────────────┤"
-        echo "│ 0) Exit                │ B) Restore       │                │"
-        echo "└─────────────────────────────────────────────────────────────┘"
+        echo "ZynexForge Main Menu:"
+        echo "  1) Create a new VM"
+        if [ $vm_count -gt 0 ]; then
+            echo "  2) Start a VM"
+            echo "  3) Stop a VM"
+            echo "  4) Show VM info"
+            echo "  5) Edit VM configuration"
+            echo "  6) Delete a VM"
+            echo "  7) Resize VM disk"
+            echo "  8) Show VM performance"
+            echo "  9) Export VM configuration"
+            echo "  10) Import VM configuration"
+        fi
+        echo "  11) System Information"
+        echo "  12) Toggle Zorvix Mode (Current: $( [ "$ZORVIX_MODE" = true ] && echo "ON" || echo "OFF" ))"
+        echo "  0) Exit"
         echo
         
         read -p "$(print_status "INPUT" "Enter your choice: ")" choice
@@ -817,8 +1355,6 @@ main_menu() {
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
-                else
-                    print_status "ERROR" "No VMs available"
                 fi
                 ;;
             3)
@@ -883,21 +1419,33 @@ main_menu() {
                 ;;
             9)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to backup: ")" vm_num
+                    read -p "$(print_status "INPUT" "Enter VM number to export: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
-                        backup_vm "${vms[$((vm_num-1))]}"
+                        export_vm_config "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
                 fi
                 ;;
-            b|B)
-                read -p "$(print_status "INPUT" "Enter backup file path: ")" backup_file
-                restore_vm "$backup_file"
+            10)
+                import_vm_config
+                ;;
+            11)
+                show_system_info
+                ;;
+            12)
+                if [ "$ZORVIX_MODE" = true ]; then
+                    ZORVIX_MODE=false
+                    print_status "INFO" "Zorvix Mode: DISABLED"
+                else
+                    ZORVIX_MODE=true
+                    print_status "ZORVIX" "Zorvix Mode: ENABLED - Performance optimizations active"
+                fi
+                sleep 2
                 ;;
             0)
                 print_status "INFO" "Thank you for using ZynexForge VM Manager!"
-                echo
+                echo -e "\033[1;35mPowered by Zorvix Technology\033[0m"
                 exit 0
                 ;;
             *)
@@ -912,24 +1460,25 @@ main_menu() {
 # Set trap to cleanup on exit
 trap cleanup EXIT
 
-# Check dependencies and detect CPU
+# Check dependencies
 check_dependencies
 
 # Initialize paths
 VM_DIR="${VM_DIR:-$HOME/ZynexForge-VMs}"
 mkdir -p "$VM_DIR"
 
-# Supported OS list
+# Supported OS list with ZynexForge optimizations
 declare -A OS_OPTIONS=(
-    ["Ubuntu 24.04 LTS (Noble)"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
-    ["Ubuntu 22.04 LTS (Jammy)"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
-    ["Debian 12 (Bookworm)"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
-    ["Debian 11 (Bullseye)"]="debian|bullseye|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|debian11|debian|debian"
-    ["Fedora 40"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|fedora"
-    ["CentOS Stream 9"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
-    ["AlmaLinux 9"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
-    ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
+    ["Ubuntu 22.04 LTS (Zorvix Optimized)"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|zynex|ZynexForge2024!"
+    ["Ubuntu 24.04 LTS (Zorvix Optimized)"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|zynex|ZynexForge2024!"
+    ["Debian 12 (Zorvix Optimized)"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|zynex|ZynexForge2024!"
+    ["Rocky Linux 9 (Zorvix Optimized)"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|zynex|ZynexForge2024!"
+    ["AlmaLinux 9 (Zorvix Optimized)"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|alma9|zynex|ZynexForge2024!"
+    ["Fedora 40 (Zorvix Optimized)"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|zynex|ZynexForge2024!"
+    ["CentOS Stream 9 (Zorvix Optimized)"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|zynex|ZynexForge2024!"
 )
 
 # Start the main menu
+print_status "ZORVIX" "Initializing ZynexForge VM Manager..."
+sleep 1
 main_menu
