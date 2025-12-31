@@ -83,7 +83,174 @@ validate_input() {
     return 0
 }
 
-# Function to check dependencies (using only available packages)
+# Advanced CPU detection function
+detect_cpu_advanced() {
+    print_status "CPU" "Advanced CPU Detection"
+    echo "┌─────────────────────────────────────────────────────────────┐"
+    
+    # Use cpuid command for detailed info
+    if command -v cpuid &> /dev/null; then
+        CPU_VENDOR=$(cpuid 2>/dev/null | grep -i "vendor" | head -1 | awk -F'"' '{print $2}' || echo "Unknown")
+        CPU_FAMILY=$(cpuid 2>/dev/null | grep -i "family" | head -1 | awk '{print $3}' || echo "Unknown")
+        CPU_MODEL=$(cpuid 2>/dev/null | grep -i "model" | head -1 | awk '{print $3}' || echo "Unknown")
+        CPU_BRAND=$(cpuid 2>/dev/null | grep -i "brand" | head -1 || echo "Unknown")
+        
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Vendor" "$CPU_VENDOR"
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Family" "$CPU_FAMILY"
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Model" "$CPU_MODEL"
+        
+        # Check for AMD specific features
+        if [[ "$CPU_VENDOR" == *"AMD"* ]] || [[ "$CPU_VENDOR" == *"AuthenticAMD"* ]]; then
+            IS_AMD=true
+            print_status "CPU" "AMD Processor Detected!"
+            
+            # Detect AMD CPU family
+            if [[ "$CPU_FAMILY" == "23" ]] || [[ "$CPU_FAMILY" == "25" ]]; then
+                CPU_TYPE="AMD Zen (Ryzen/EPYC)"
+                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "AMD Zen Architecture"
+            elif [[ "$CPU_FAMILY" == "21" ]]; then
+                CPU_TYPE="AMD Bulldozer"
+                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "AMD Bulldozer Family"
+            else
+                CPU_TYPE="AMD Unknown"
+                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "AMD Processor"
+            fi
+            
+            # Check for AMD-V (SVM) support
+            if grep -q "svm" /proc/cpuinfo 2>/dev/null; then
+                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "AMD-V" "Enabled ✓"
+                SVM_SUPPORT=true
+            else
+                printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "AMD-V" "Disabled ✗"
+                SVM_SUPPORT=false
+            fi
+            
+            # Check for Nested Virtualization
+            if [ -f "/sys/module/kvm_amd/parameters/nested" ]; then
+                NESTED_VIRT=$(cat /sys/module/kvm_amd/parameters/nested 2>/dev/null || echo "0")
+                if [ "$NESTED_VIRT" == "1" ] || [ "$NESTED_VIRT" == "Y" ]; then
+                    printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Nested Virt" "Enabled ✓"
+                else
+                    printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Nested Virt" "Disabled ✗"
+                fi
+            fi
+        else
+            IS_AMD=false
+            printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Type" "Intel/Other"
+        fi
+        
+        # Get total cores and threads
+        TOTAL_CORES=$(nproc 2>/dev/null || echo "4")
+        TOTAL_THREADS=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo "$TOTAL_CORES")
+        
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Cores" "$TOTAL_CORES"
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Threads" "$TOTAL_THREADS"
+        
+    else
+        # Fallback to /proc/cpuinfo
+        CPU_VENDOR=$(grep -i "vendor" /proc/cpuinfo 2>/dev/null | head -1 | awk '{print $3}' || echo "Unknown")
+        TOTAL_CORES=$(nproc 2>/dev/null || echo "4")
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Vendor" "$CPU_VENDOR"
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Cores" "$TOTAL_CORES"
+        IS_AMD=false
+        if [[ "$CPU_VENDOR" == *"AMD"* ]] || grep -q "AMD" /proc/cpuinfo 2>/dev/null; then
+            IS_AMD=true
+            print_status "CPU" "AMD Processor Detected!"
+        fi
+    fi
+    
+    # Get total system memory
+    if command -v free &> /dev/null; then
+        TOTAL_MEM=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo "4096")
+        printf "│ \033[1;36m%-15s\033[0m: %-40s │\n" "Total RAM" "${TOTAL_MEM}MB"
+    fi
+    
+    echo "└─────────────────────────────────────────────────────────────┘"
+    echo
+}
+
+# Advanced AMD CPU optimizer function
+amd_cpu_optimizer() {
+    if [ "$IS_AMD" = true ]; then
+        print_status "CPU" "Applying AMD-specific optimizations"
+        
+        # AMD CPU model selection
+        echo "┌─────────────────────────────────────────────────────────────┐"
+        echo "│                   AMD CPU Optimization                     │"
+        echo "├─────────────────────────────────────────────────────────────┤"
+        echo "│ 1) EPYC Mode - Server CPU Profile (Recommended for servers)│"
+        echo "│ 2) Ryzen Mode - Desktop CPU Profile (Recommended for GUI)  │"
+        echo "│ 3) Host Passthrough - Direct CPU Passthrough               │"
+        echo "│ 4) Custom CPU Model                                         │"
+        echo "└─────────────────────────────────────────────────────────────┘"
+        
+        while true; do
+            read -p "$(print_status "INPUT" "Select AMD CPU mode (1-4, default: 2): ")" amd_mode
+            amd_mode="${amd_mode:-2}"
+            
+            case $amd_mode in
+                1)
+                    CPU_MODEL="EPYC"
+                    CPU_OPTIONS="-cpu EPYC,vendor=AMD"
+                    print_status "CPU" "AMD EPYC server profile selected"
+                    ;;
+                2)
+                    CPU_MODEL="Ryzen"
+                    CPU_OPTIONS="-cpu Ryzen,vendor=AMD"
+                    print_status "CPU" "AMD Ryzen desktop profile selected"
+                    ;;
+                3)
+                    CPU_MODEL="host"
+                    CPU_OPTIONS="-cpu host"
+                    print_status "CPU" "Host CPU passthrough selected"
+                    ;;
+                4)
+                    read -p "$(print_status "INPUT" "Enter custom CPU model (e.g., Opteron_G5): ")" custom_cpu
+                    CPU_MODEL="$custom_cpu"
+                    CPU_OPTIONS="-cpu $custom_cpu"
+                    print_status "CPU" "Custom CPU model '$custom_cpu' selected"
+                    ;;
+                *)
+                    print_status "ERROR" "Invalid selection"
+                    continue
+                    ;;
+            esac
+            break
+        done
+        
+        # AMD-specific optimizations
+        if [ "$SVM_SUPPORT" = true ]; then
+            CPU_OPTIONS="$CPU_OPTIONS,svm=on"
+            
+            # Ask about nested virtualization
+            read -p "$(print_status "INPUT" "Enable nested virtualization? (y/N): ")" enable_nested
+            if [[ "$enable_nested" =~ ^[Yy]$ ]]; then
+                CPU_OPTIONS="$CPU_OPTIONS,nested=1"
+                print_status "CPU" "Nested virtualization enabled"
+            fi
+        fi
+        
+        # Additional AMD optimizations
+        CPU_OPTIONS="$CPU_OPTIONS,topoext=on"
+        
+        # Machine type for AMD
+        MACHINE_TYPE="q35"
+        if [ "$amd_mode" == "1" ] || [ "$amd_mode" == "3" ]; then
+            MACHINE_TYPE="pc-q35-6.2"
+        fi
+        
+        print_status "SUCCESS" "AMD optimizations applied: $CPU_MODEL"
+        
+    else
+        # Non-AMD CPU - use host model
+        CPU_MODEL="host"
+        CPU_OPTIONS="-cpu host"
+        MACHINE_TYPE="pc"
+        print_status "INFO" "Using host CPU model"
+    fi
+}
+
+# Function to check dependencies
 check_dependencies() {
     local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "sudo")
     local missing_deps=()
@@ -101,27 +268,8 @@ check_dependencies() {
         exit 1
     fi
     
-    # Check for AMD CPU using cpuid (available in your packages)
-    if command -v cpuid &> /dev/null; then
-        if cpuid 2>/dev/null | grep -q "AMD"; then
-            print_status "CPU" "AMD CPU detected - Enabling optimizations"
-            AMD_CPU=true
-        else
-            AMD_CPU=false
-        fi
-    elif grep -q "AMD" /proc/cpuinfo 2>/dev/null; then
-        print_status "CPU" "AMD CPU detected - Enabling optimizations"
-        AMD_CPU=true
-    else
-        AMD_CPU=false
-    fi
-    
-    # Check for virtualization support
-    if grep -q -E "vmx|svm" /proc/cpuinfo 2>/dev/null; then
-        print_status "SUCCESS" "Hardware virtualization support detected"
-    else
-        print_status "WARN" "Hardware virtualization not detected - Performance may be limited"
-    fi
+    # Advanced CPU detection
+    detect_cpu_advanced
 }
 
 # Function to cleanup temporary files
@@ -144,6 +292,7 @@ load_vm_config() {
         # Clear previous variables
         unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
+        unset CPU_MODEL CPU_OPTIONS MACHINE_TYPE
         
         source "$config_file"
         return 0
@@ -174,24 +323,73 @@ PORT_FORWARDS="$PORT_FORWARDS"
 IMG_FILE="$IMG_FILE"
 SEED_FILE="$SEED_FILE"
 CREATED="$CREATED"
+CPU_MODEL="$CPU_MODEL"
+CPU_OPTIONS="$CPU_OPTIONS"
+MACHINE_TYPE="$MACHINE_TYPE"
 EOF
     
     print_status "SUCCESS" "Configuration saved to $config_file"
 }
 
-# Function to setup network using available tools
-setup_network() {
-    print_status "NET" "Configuring network options"
+# Simple resource configuration function
+configure_resources_simple() {
+    print_status "CPU" "Resource Configuration"
+    echo "┌─────────────────────────────────────────────────────────────┐"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Available Cores" "$TOTAL_CORES"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Available RAM" "${TOTAL_MEM}MB"
+    echo "└─────────────────────────────────────────────────────────────┘"
+    echo
     
-    # Simple network configuration using user-mode networking (NAT)
-    print_status "INFO" "Using user-mode networking (NAT) with port forwarding"
+    # CPU Configuration
+    while true; do
+        read -p "$(print_status "INPUT" "Enter number of CPU cores (1-$TOTAL_CORES): ")" CPUS
+        if validate_input "number" "$CPUS" && [ "$CPUS" -ge 1 ] && [ "$CPUS" -le "$TOTAL_CORES" ]; then
+            break
+        fi
+    done
     
-    # Check if port is available
+    # Memory Configuration
+    while true; do
+        read -p "$(print_status "INPUT" "Enter memory in MB (256-$TOTAL_MEM): ")" MEMORY
+        if validate_input "number" "$MEMORY" && [ "$MEMORY" -ge 256 ] && [ "$MEMORY" -le "$TOTAL_MEM" ]; then
+            break
+        fi
+    done
+    
+    # Disk Configuration
+    while true; do
+        read -p "$(print_status "INPUT" "Enter disk size (default: 40G): ")" DISK_SIZE
+        DISK_SIZE="${DISK_SIZE:-40G}"
+        if validate_input "size" "$DISK_SIZE"; then
+            break
+        fi
+    done
+    
+    # GUI Mode
+    while true; do
+        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
+        GUI_MODE=false
+        gui_input="${gui_input:-n}"
+        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
+            GUI_MODE=true
+            break
+        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
+            break
+        else
+            print_status "ERROR" "Please answer y or n"
+        fi
+    done
+}
+
+# Simple network configuration
+configure_network_simple() {
+    print_status "NET" "Network Configuration"
+    
+    # SSH Port
     while true; do
         read -p "$(print_status "INPUT" "Enter SSH port (default: 2222): ")" SSH_PORT
         SSH_PORT="${SSH_PORT:-2222}"
         if validate_input "port" "$SSH_PORT"; then
-            # Check if port is already in use
             if ss -tln 2>/dev/null | grep -q ":$SSH_PORT "; then
                 print_status "ERROR" "Port $SSH_PORT is already in use"
             else
@@ -201,66 +399,10 @@ setup_network() {
     done
     
     # Additional port forwards
-    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80,443:443, press Enter for none): ")" PORT_FORWARDS
+    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80,443:443): ")" PORT_FORWARDS
 }
 
-# Function to AUTOMATICALLY setup CPU optimizations using available tools
-auto_setup_cpu() {
-    print_status "CPU" "Configuring CPU optimizations"
-    
-    # Get CPU info using available tools
-    if command -v cpuid &> /dev/null; then
-        print_status "INFO" "CPU Information:"
-        cpuid 2>/dev/null | grep -E "(AMD|Intel|vendor|family|model)" | head -5 || true
-    fi
-    
-    # AUTOMATIC CPU configuration
-    print_status "INFO" "Using host CPU model for best performance"
-    
-    # AUTOMATIC: Get available CPU cores and allocate 75% for VM
-    local total_cores=$(nproc 2>/dev/null || echo 2)
-    local allocated_cores=$((total_cores * 3 / 4))
-    
-    # Ensure at least 1 core but not more than available
-    if [ $allocated_cores -lt 1 ]; then
-        allocated_cores=1
-    elif [ $allocated_cores -gt $total_cores ]; then
-        allocated_cores=$total_cores
-    fi
-    
-    CPUS=$allocated_cores
-    print_status "CPU" "Automatically allocated $CPUS CPU cores (out of $total_cores total)"
-    
-    # AUTOMATIC: Memory configuration - allocate 75% of available RAM
-    local total_mem=4096
-    if command -v free &> /dev/null; then
-        total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 4096)
-    fi
-    local allocated_mem=$((total_mem * 3 / 4))
-    
-    # Ensure reasonable min/max bounds
-    if [ $allocated_mem -lt 512 ]; then
-        allocated_mem=512
-        print_status "WARN" "Low memory system, allocating minimum 512MB"
-    elif [ $allocated_mem -gt 16384 ]; then
-        allocated_mem=16384
-        print_status "INFO" "Large memory system, capped at 16GB"
-    fi
-    
-    MEMORY=$allocated_mem
-    print_status "CPU" "Automatically allocated ${MEMORY}MB RAM (out of ${total_mem}MB total)"
-    
-    # AUTOMATIC: Check if we should enable GUI mode based on available memory
-    if [ $MEMORY -ge 2048 ]; then
-        GUI_MODE=true
-        print_status "INFO" "Enabling GUI mode (sufficient memory available)"
-    else
-        GUI_MODE=false
-        print_status "INFO" "Disabling GUI mode (insufficient memory)"
-    fi
-}
-
-# Function to create new VM with automatic CPU configuration
+# Function to create new VM with advanced AMD support
 create_new_vm() {
     print_status "INFO" "Creating a new VM with ZynexForge"
     
@@ -287,7 +429,7 @@ create_new_vm() {
         fi
     done
 
-    # Custom Inputs
+    # VM Name
     while true; do
         read -p "$(print_status "INPUT" "Enter VM name (default: $DEFAULT_HOSTNAME): ")" VM_NAME
         VM_NAME="${VM_NAME:-$DEFAULT_HOSTNAME}"
@@ -300,6 +442,7 @@ create_new_vm() {
         fi
     done
 
+    # Hostname
     while true; do
         read -p "$(print_status "INPUT" "Enter hostname (default: $VM_NAME): ")" HOSTNAME
         HOSTNAME="${HOSTNAME:-$VM_NAME}"
@@ -308,6 +451,7 @@ create_new_vm() {
         fi
     done
 
+    # Username
     while true; do
         read -p "$(print_status "INPUT" "Enter username (default: $DEFAULT_USERNAME): ")" USERNAME
         USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
@@ -316,6 +460,7 @@ create_new_vm() {
         fi
     done
 
+    # Password
     while true; do
         read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
         PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
@@ -327,32 +472,31 @@ create_new_vm() {
         fi
     done
 
-    # Disk Configuration
-    while true; do
-        read -p "$(print_status "INPUT" "Disk size (default: 20G): ")" DISK_SIZE
-        DISK_SIZE="${DISK_SIZE:-20G}"
-        if validate_input "size" "$DISK_SIZE"; then
-            break
-        fi
-    done
+    # AMD CPU Optimization
+    amd_cpu_optimizer
+    
+    # Simple Resource Configuration
+    configure_resources_simple
+    
+    # Simple Network Configuration
+    configure_network_simple
 
-    # AUTOMATIC Hardware Configuration
-    auto_setup_cpu
-    setup_network
-
-    # Show automatic configuration summary
+    # Configuration Summary
     echo
-    print_status "SUCCESS" "Automatic Configuration Summary:"
+    print_status "SUCCESS" "Configuration Summary"
     echo "┌─────────────────────────────────────────────────────────────┐"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "VM Name" "$VM_NAME"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "OS" "$OS_TYPE"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPU Model" "$CPU_MODEL"
     printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPU Cores" "$CPUS"
     printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Memory" "${MEMORY}MB"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "GUI Mode" "$GUI_MODE"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Disk Size" "$DISK_SIZE"
     printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "SSH Port" "$SSH_PORT"
-    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Port Forwards" "${PORT_FORWARDS:-None}"
+    printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "GUI Mode" "$GUI_MODE"
     echo "└─────────────────────────────────────────────────────────────┘"
     
-    # Ask for confirmation
-    read -p "$(print_status "INPUT" "Press Enter to continue with this configuration, or 'n' to cancel: ")" confirm
+    # Confirmation
+    read -p "$(print_status "INPUT" "Press Enter to create VM, or 'n' to cancel: ")" confirm
     if [[ "$confirm" =~ ^[Nn]$ ]]; then
         print_status "INFO" "VM creation cancelled"
         return
@@ -398,7 +542,6 @@ setup_vm_image() {
     fi
 
     # Create cloud-init configuration
-    # Using openssl for password hashing (available in packages)
     local password_hash=""
     if command -v openssl &> /dev/null; then
         password_hash=$(openssl passwd -6 "$PASSWORD" 2>/dev/null || echo "$PASSWORD")
@@ -440,7 +583,7 @@ EOF
     print_status "SUCCESS" "VM '$VM_NAME' created successfully."
 }
 
-# Function to start a VM
+# Advanced VM start function with AMD optimizations
 start_vm() {
     local vm_name=$1
     
@@ -461,11 +604,11 @@ start_vm() {
             setup_vm_image
         fi
         
-        # Base QEMU command
+        # Base QEMU command with AMD optimizations
         local qemu_cmd=(
             qemu-system-x86_64
             -enable-kvm
-            -cpu host
+            -machine "$MACHINE_TYPE,accel=kvm"
             -smp "$CPUS"
             -m "$MEMORY"
             -drive "file=$IMG_FILE,format=qcow2,if=virtio"
@@ -475,6 +618,9 @@ start_vm() {
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
 
+        # Add CPU options
+        qemu_cmd+=($CPU_OPTIONS)
+        
         # Add port forwards if specified
         if [[ -n "$PORT_FORWARDS" ]]; then
             IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
@@ -494,18 +640,24 @@ start_vm() {
         # Add GUI or console mode
         if [[ "$GUI_MODE" == true ]]; then
             qemu_cmd+=(-vga virtio -display gtk,gl=on)
+            # Add USB tablet for better mouse integration
+            qemu_cmd+=(-usb -device usb-tablet)
         else
             qemu_cmd+=(-nographic -serial mon:stdio)
         fi
 
-        # Add AMD optimizations if detected
-        if $AMD_CPU; then
-            qemu_cmd+=(-machine "type=pc,accel=kvm")
-            print_status "CPU" "AMD CPU optimizations enabled"
+        # AMD-specific optimizations
+        if [ "$IS_AMD" = true ]; then
+            # Add IOMMU for AMD if available
+            qemu_cmd+=(-device "virtio-iommu")
+            print_status "CPU" "Starting with AMD optimizations: $CPU_MODEL"
         fi
 
-        print_status "INFO" "Starting QEMU..."
-        echo "Command: ${qemu_cmd[@]}"
+        print_status "INFO" "Starting QEMU with configuration:"
+        echo "CPU: $CPU_MODEL | Cores: $CPUS | RAM: ${MEMORY}MB | Disk: $DISK_SIZE"
+        echo
+        
+        # Run QEMU
         "${qemu_cmd[@]}"
         
         print_status "INFO" "VM $vm_name has been shut down"
@@ -551,10 +703,11 @@ show_vm_info() {
         printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "OS" "$OS_TYPE"
         printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Hostname" "$HOSTNAME"
         printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Username" "$USERNAME"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "SSH Port" "$SSH_PORT"
+        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPU Model" "$CPU_MODEL"
+        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPU Cores" "$CPUS"
         printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Memory" "$MEMORY MB"
-        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "CPUs" "$CPUS"
         printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Disk" "$DISK_SIZE"
+        printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "SSH Port" "$SSH_PORT"
         printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "GUI Mode" "$GUI_MODE"
         printf "│ \033[1;36m%-20s\033[0m: %-35s │\n" "Created" "$CREATED"
         echo "└─────────────────────────────────────────────────────────────┘"
@@ -598,292 +751,6 @@ stop_vm() {
             print_status "INFO" "VM $vm_name is not running"
         fi
     fi
-}
-
-# Function to edit VM configuration
-edit_vm_config() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        print_status "INFO" "Editing VM: $vm_name"
-        
-        while true; do
-            echo
-            print_status "MENU" "Edit Configuration"
-            echo "┌─────────────────────────────────────────────────────────────┐"
-            echo "│  1) Basic Settings  │  2) Hardware  │  3) Network          │"
-            echo "│  0) Back to Menu    │                                    │"
-            echo "└─────────────────────────────────────────────────────────────┘"
-            
-            read -p "$(print_status "INPUT" "Select category: ")" category
-            
-            case $category in
-                1) edit_basic_settings ;;
-                2) edit_hardware_settings ;;
-                3) edit_network_settings ;;
-                0) return 0 ;;
-                *) print_status "ERROR" "Invalid selection" ;;
-            esac
-            
-            # Save configuration
-            save_vm_config
-            
-            read -p "$(print_status "INPUT" "Continue editing? (y/N): ")" continue_editing
-            if [[ ! "$continue_editing" =~ ^[Yy]$ ]]; then
-                break
-            fi
-        done
-    fi
-}
-
-edit_basic_settings() {
-    echo "Basic Settings:"
-    while true; do
-        read -p "$(print_status "INPUT" "Enter new hostname (current: $HOSTNAME): ")" new_hostname
-        new_hostname="${new_hostname:-$HOSTNAME}"
-        if validate_input "name" "$new_hostname"; then
-            HOSTNAME="$new_hostname"
-            break
-        fi
-    done
-    
-    while true; do
-        read -p "$(print_status "INPUT" "Enter new username (current: $USERNAME): ")" new_username
-        new_username="${new_username:-$USERNAME}"
-        if validate_input "username" "$new_username"; then
-            USERNAME="$new_username"
-            break
-        fi
-    done
-    
-    while true; do
-        read -s -p "$(print_status "INPUT" "Enter new password (current: ****): ")" new_password
-        new_password="${new_password:-$PASSWORD}"
-        echo
-        if [ -n "$new_password" ]; then
-            PASSWORD="$new_password"
-            break
-        fi
-    done
-}
-
-edit_hardware_settings() {
-    echo "Hardware Settings:"
-    while true; do
-        read -p "$(print_status "INPUT" "Enter new memory in MB (current: $MEMORY): ")" new_memory
-        new_memory="${new_memory:-$MEMORY}"
-        if validate_input "number" "$new_memory"; then
-            MEMORY="$new_memory"
-            break
-        fi
-    done
-    
-    while true; do
-        read -p "$(print_status "INPUT" "Enter new CPU count (current: $CPUS): ")" new_cpus
-        new_cpus="${new_cpus:-$CPUS}"
-        if validate_input "number" "$new_cpus"; then
-            CPUS="$new_cpus"
-            break
-        fi
-    done
-    
-    while true; do
-        read -p "$(print_status "INPUT" "Enter new disk size (current: $DISK_SIZE): ")" new_disk_size
-        new_disk_size="${new_disk_size:-$DISK_SIZE}"
-        if validate_input "size" "$new_disk_size"; then
-            DISK_SIZE="$new_disk_size"
-            break
-        fi
-    done
-}
-
-edit_network_settings() {
-    echo "Network Settings:"
-    while true; do
-        read -p "$(print_status "INPUT" "Enter new SSH port (current: $SSH_PORT): ")" new_ssh_port
-        new_ssh_port="${new_ssh_port:-$SSH_PORT}"
-        if validate_input "port" "$new_ssh_port"; then
-            SSH_PORT="$new_ssh_port"
-            break
-        fi
-    done
-    
-    read -p "$(print_status "INPUT" "Port forwards (current: ${PORT_FORWARDS:-None}): ")" new_port_forwards
-    PORT_FORWARDS="${new_port_forwards:-$PORT_FORWARDS}"
-    
-    while true; do
-        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, current: $GUI_MODE): ")" gui_input
-        gui_input="${gui_input:-}"
-        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
-            GUI_MODE=true
-            break
-        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
-            GUI_MODE=false
-            break
-        elif [ -z "$gui_input" ]; then
-            break
-        fi
-    done
-}
-
-# Function to resize VM disk
-resize_vm_disk() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        print_status "INFO" "Current disk size: $DISK_SIZE"
-        
-        while true; do
-            read -p "$(print_status "INPUT" "Enter new disk size (e.g., 50G): ")" new_disk_size
-            if validate_input "size" "$new_disk_size"; then
-                if [[ "$new_disk_size" == "$DISK_SIZE" ]]; then
-                    print_status "INFO" "New disk size is the same as current size. No changes made."
-                    return 0
-                fi
-                
-                # Check if VM is running
-                if is_vm_running "$vm_name"; then
-                    print_status "ERROR" "Cannot resize disk while VM is running. Stop the VM first."
-                    return 1
-                fi
-                
-                # Resize the disk
-                print_status "INFO" "Resizing disk to $new_disk_size..."
-                if qemu-img resize "$IMG_FILE" "$new_disk_size" 2>/dev/null; then
-                    DISK_SIZE="$new_disk_size"
-                    save_vm_config
-                    print_status "SUCCESS" "Disk resized successfully to $new_disk_size"
-                else
-                    print_status "ERROR" "Failed to resize disk"
-                    return 1
-                fi
-                break
-            fi
-        done
-    fi
-}
-
-# Function to show VM performance metrics using available tools
-show_vm_performance() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        echo
-        print_status "INFO" "Performance metrics for VM: $vm_name"
-        echo "┌─────────────────────────────────────────────────────────────┐"
-        
-        if is_vm_running "$vm_name"; then
-            # Get QEMU process ID
-            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE" 2>/dev/null | head -1)
-            if [[ -n "$qemu_pid" ]]; then
-                # Show process stats using available tools
-                print_status "CPU" "Process Statistics:"
-                if command -v ps &> /dev/null; then
-                    ps -p "$qemu_pid" -o pid,%cpu,%mem,sz,rss,vsz,cmd --no-headers 2>/dev/null | awk '{printf "│ PID: %-5s CPU: %-4s MEM: %-4s\n", $1, $2, $3}' || true
-                fi
-                echo "├─────────────────────────────────────────────────────────────┤"
-                
-                # Show system resources
-                print_status "INFO" "System Resources:"
-                if command -v free &> /dev/null; then
-                    free -h 2>/dev/null | awk 'NR<=2 {printf "│ %-15s %-10s %-10s %-10s\n", $1, $2, $3, $4}' || true
-                fi
-            fi
-        else
-            print_status "INFO" "VM $vm_name is not running"
-            echo "│ Configuration:"
-            printf "│ %-20s: %-35s │\n" "Memory" "$MEMORY MB"
-            printf "│ %-20s: %-35s │\n" "CPUs" "$CPUS"
-            printf "│ %-20s: %-35s │\n" "Disk" "$DISK_SIZE"
-            echo "└─────────────────────────────────────────────────────────────┘"
-        fi
-        
-        echo
-        read -p "$(print_status "INPUT" "Press Enter to continue...")"
-    fi
-}
-
-# Function to backup VM
-backup_vm() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        print_status "INFO" "Backing up VM: $vm_name"
-        
-        # Stop VM if running
-        if is_vm_running "$vm_name"; then
-            print_status "WARN" "VM is running. Stopping for consistent backup..."
-            stop_vm "$vm_name"
-            sleep 2
-        fi
-        
-        # Create backup directory
-        local backup_dir="$VM_DIR/backups"
-        mkdir -p "$backup_dir"
-        
-        # Create timestamp
-        local timestamp=$(date '+%Y%m%d_%H%M%S')
-        local backup_file="$backup_dir/${vm_name}_${timestamp}.tar.gz"
-        
-        # Create backup using available tools
-        print_status "INFO" "Creating backup..."
-        tar -czf "$backup_file" -C "$VM_DIR" "$vm_name.conf" "${vm_name}.img" "${vm_name}-seed.iso" 2>/dev/null
-        
-        if [ $? -eq 0 ]; then
-            print_status "SUCCESS" "Backup created: $backup_file"
-            ls -lh "$backup_file" 2>/dev/null || echo "    Backup saved to: $backup_file"
-        else
-            print_status "ERROR" "Backup failed"
-        fi
-    fi
-}
-
-# Function to restore VM from backup
-restore_vm() {
-    local backup_file=$1
-    
-    if [ ! -f "$backup_file" ]; then
-        print_status "ERROR" "Backup file not found: $backup_file"
-        return 1
-    fi
-    
-    print_status "INFO" "Restoring VM from backup: $backup_file"
-    
-    # Extract backup
-    local temp_dir=$(mktemp -d)
-    tar -xzf "$backup_file" -C "$temp_dir" 2>/dev/null
-    
-    # Find config file
-    local config_file=$(find "$temp_dir" -name "*.conf" 2>/dev/null | head -1)
-    if [ -z "$config_file" ]; then
-        print_status "ERROR" "No configuration file found in backup"
-        rm -rf "$temp_dir"
-        return 1
-    fi
-    
-    # Load config to get VM name
-    source "$config_file"
-    local vm_name="$VM_NAME"
-    
-    # Check if VM already exists
-    if [ -f "$VM_DIR/$vm_name.conf" ]; then
-        print_status "WARN" "VM '$vm_name' already exists. Overwrite? (y/N): "
-        read -r confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            print_status "INFO" "Restore cancelled"
-            rm -rf "$temp_dir"
-            return 0
-        fi
-        # Delete existing VM
-        delete_vm "$vm_name"
-    fi
-    
-    # Restore files
-    cp "$temp_dir"/* "$VM_DIR/" 2>/dev/null
-    rm -rf "$temp_dir"
-    
-    print_status "SUCCESS" "VM '$vm_name' restored from backup"
-    return 0
 }
 
 # Main menu function
@@ -1045,7 +912,7 @@ main_menu() {
 # Set trap to cleanup on exit
 trap cleanup EXIT
 
-# Check dependencies
+# Check dependencies and detect CPU
 check_dependencies
 
 # Initialize paths
