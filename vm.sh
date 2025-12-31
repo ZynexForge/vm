@@ -3,7 +3,7 @@ set -euo pipefail
 
 # =============================
 # ZynexForge VM Manager
-# Enhanced Multi-VM Manager
+# Enhanced Multi-VM Manager with Automatic Format Detection
 # =============================
 
 # Function to display header with ZynexForge branding
@@ -290,95 +290,132 @@ create_new_vm() {
     save_vm_config
 }
 
-# Function to detect image format and convert if needed
-detect_and_convert_image() {
+# Function to detect image format
+detect_image_format() {
     local image_file="$1"
     
     # Check if file exists
     if [[ ! -f "$image_file" ]]; then
-        print_status "ERROR" "Image file not found: $image_file"
+        echo "none"
         return 1
     fi
     
-    # Get file type using qemu-img info
-    local image_info
-    if image_info=$(qemu-img info "$image_file" 2>/dev/null); then
-        local format=$(echo "$image_info" | grep -oP 'file format: \K\w+')
-        
-        if [[ -n "$format" ]]; then
-            print_status "INFO" "Detected image format: $format"
-            
-            # If format is raw or qcow2, we're good
-            if [[ "$format" == "qcow2" ]]; then
-                return 0
-            elif [[ "$format" == "raw" ]]; then
-                # Convert raw to qcow2
-                print_status "INFO" "Converting raw image to qcow2 format..."
-                local temp_file="${image_file}.qcow2"
-                if qemu-img convert -f raw -O qcow2 "$image_file" "$temp_file"; then
-                    mv "$temp_file" "$image_file"
-                    print_status "SUCCESS" "Image converted to qcow2 format"
-                    return 0
-                else
-                    print_status "ERROR" "Failed to convert image format"
-                    return 1
-                fi
-            else
-                # Try to convert unknown format to qcow2
-                print_status "INFO" "Converting $format image to qcow2 format..."
-                local temp_file="${image_file}.qcow2"
-                if qemu-img convert -f "$format" -O qcow2 "$image_file" "$temp_file"; then
-                    mv "$temp_file" "$image_file"
-                    print_status "SUCCESS" "Image converted to qcow2 format"
-                    return 0
-                else
-                    print_status "ERROR" "Unsupported image format: $format"
-                    return 1
-                fi
-            fi
-        else
-            # Try to determine format by file extension
-            if [[ "$image_file" == *.iso ]] || [[ "$image_file" == *.ISO ]]; then
-                print_status "INFO" "ISO file detected - treating as installation media"
-                return 0
-            else
-                print_status "WARN" "Could not detect image format. Trying to use as-is..."
-                # Try to convert anyway
-                local temp_file="${image_file}.qcow2"
-                if qemu-img convert -f raw -O qcow2 "$image_file" "$temp_file" 2>/dev/null; then
-                    mv "$temp_file" "$image_file"
-                    print_status "SUCCESS" "Image converted to qcow2 format"
-                    return 0
-                fi
-                return 0
-            fi
-        fi
-    else
-        # If qemu-img info fails, try to determine by file extension
-        if [[ "$image_file" == *.iso ]] || [[ "$image_file" == *.ISO ]]; then
-            print_status "INFO" "ISO file detected - treating as installation media"
-            return 0
-        elif [[ "$image_file" == *.qcow2 ]] || [[ "$image_file" == *.img ]]; then
-            print_status "INFO" "Assuming qcow2 format based on extension"
-            return 0
-        else
-            print_status "WARN" "Could not determine image format. May cause issues."
+    # First check by file extension
+    if [[ "$image_file" == *.iso ]] || [[ "$image_file" == *.ISO ]]; then
+        echo "iso"
+        return 0
+    fi
+    
+    # Try to use qemu-img to detect format
+    if command -v qemu-img &> /dev/null; then
+        local format_info
+        if format_info=$(qemu-img info "$image_file" 2>/dev/null); then
+            local format=$(echo "$format_info" | grep -oP 'file format: \K\w+' 2>/dev/null || echo "unknown")
+            echo "$format"
             return 0
         fi
     fi
+    
+    # Try file command
+    if command -v file &> /dev/null; then
+        local file_type=$(file -b "$image_file")
+        if [[ "$file_type" == *"ISO 9660"* ]] || [[ "$file_type" == *"DOS/MBR boot sector"* ]]; then
+            echo "iso"
+            return 0
+        elif [[ "$file_type" == *"QEMU QCOW"* ]]; then
+            echo "qcow2"
+            return 0
+        elif [[ "$file_type" == *"data"* ]] || [[ "$file_type" == *"DOS executable"* ]]; then
+            echo "raw"
+            return 0
+        fi
+    fi
+    
+    # Default to unknown
+    echo "unknown"
+    return 0
 }
 
-# Function to setup VM image - FIXED with proper format detection
+# Function to fix image format issues
+fix_image_format() {
+    local vm_name="$1"
+    
+    if load_vm_config "$vm_name"; then
+        local image_format=$(detect_image_format "$IMG_FILE")
+        
+        case "$image_format" in
+            "iso")
+                print_status "INFO" "Detected ISO image format"
+                # Check if this is an ISO-based installation (like Proxmox)
+                if [[ "$IMG_FILE" != *.iso ]] && [[ "$IMG_FILE" != *.ISO ]]; then
+                    # Rename to .iso extension
+                    local new_name="${IMG_FILE%.*}.iso"
+                    print_status "INFO" "Renaming $IMG_FILE to $new_name"
+                    mv "$IMG_FILE" "$new_name" 2>/dev/null && IMG_FILE="$new_name"
+                fi
+                
+                # Create a disk image for installation if it doesn't exist
+                local disk_file="${IMG_FILE%.*}.qcow2"
+                if [[ ! -f "$disk_file" ]]; then
+                    print_status "INFO" "Creating installation disk: $disk_file"
+                    qemu-img create -f qcow2 "$disk_file" "$DISK_SIZE"
+                fi
+                
+                # Remove seed file if it exists (not needed for ISO installations)
+                if [[ -f "$SEED_FILE" ]]; then
+                    print_status "INFO" "Removing unnecessary seed file for ISO installation"
+                    rm -f "$SEED_FILE"
+                    SEED_FILE=""
+                fi
+                ;;
+            "qcow2"|"raw")
+                print_status "INFO" "Detected disk image format: $image_format"
+                # Ensure correct extension
+                if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
+                    local new_name="${IMG_FILE%.*}.img"
+                    print_status "INFO" "Renaming $IMG_FILE to $new_name"
+                    mv "$IMG_FILE" "$new_name" 2>/dev/null && IMG_FILE="$new_name"
+                fi
+                ;;
+            "unknown"|"none")
+                print_status "WARN" "Could not determine image format for $IMG_FILE"
+                # Try to guess by URL
+                if [[ "$IMG_URL" == *".iso" ]] || [[ "$IMG_URL" == *".ISO" ]]; then
+                    print_status "INFO" "Based on URL, assuming ISO format"
+                    if [[ "$IMG_FILE" != *.iso ]] && [[ "$IMG_FILE" != *.ISO ]]; then
+                        local new_name="${IMG_FILE%.*}.iso"
+                        mv "$IMG_FILE" "$new_name" 2>/dev/null && IMG_FILE="$new_name"
+                    fi
+                fi
+                ;;
+        esac
+        
+        # Save updated configuration
+        save_vm_config
+        print_status "SUCCESS" "Image format fixed for VM: $vm_name"
+    fi
+}
+
+# Function to setup VM image
 setup_vm_image() {
     print_status "INFO" "Downloading and preparing image..."
     
     # Create VM directory if it doesn't exist
     mkdir -p "$VM_DIR"
     
+    # Determine expected format based on URL
+    local expected_format="qcow2"
+    if [[ "$IMG_URL" == *".iso" ]] || [[ "$IMG_URL" == *".ISO" ]] || [[ "$OS_TYPE" == *"Proxmox"* ]]; then
+        expected_format="iso"
+        # Update IMG_FILE to have .iso extension
+        IMG_FILE="${IMG_FILE%.*}.iso"
+    fi
+    
     # Check if image already exists
     if [[ -f "$IMG_FILE" ]]; then
-        print_status "INFO" "Image file already exists. Checking format..."
-        detect_and_convert_image "$IMG_FILE"
+        print_status "INFO" "Image file already exists."
+        fix_image_format "$VM_NAME"
+        return 0
     else
         print_status "INFO" "Downloading image from $IMG_URL..."
         
@@ -414,54 +451,21 @@ setup_vm_image() {
         # Move to final location
         mv "$temp_file" "$IMG_FILE"
         
-        # Detect and convert image format if needed
-        detect_and_convert_image "$IMG_FILE"
+        # Fix image format
+        fix_image_format "$VM_NAME"
     fi
     
-    # Resize the disk image if needed (only for qcow2 images)
-    if qemu-img info "$IMG_FILE" 2>/dev/null | grep -q "file format: qcow2"; then
-        print_status "INFO" "Resizing disk to $DISK_SIZE..."
-        if ! qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
-            print_status "WARN" "Failed to resize disk image. Creating new image with specified size..."
-            # Create a new image with the specified size
-            local temp_file="${IMG_FILE}.new"
-            qemu-img create -f qcow2 "$temp_file" "$DISK_SIZE"
-            
-            # Try to convert old image content to new one
-            if qemu-img convert -f qcow2 -O qcow2 "$IMG_FILE" "$temp_file" 2>/dev/null; then
-                mv "$temp_file" "$IMG_FILE"
-            else
-                # If conversion fails, just keep the new empty image
-                mv "$temp_file" "$IMG_FILE"
-                print_status "WARN" "Created new empty disk image"
-            fi
-        fi
-    else
-        print_status "INFO" "Not resizing non-qcow2 image (likely an ISO)"
-    fi
-
-    # Special handling for Proxmox and other ISO-based installations
-    if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]] || [[ "$OS_TYPE" == *"Proxmox"* ]]; then
-        print_status "INFO" "Setting up installation media (ISO-based installation)..."
-        
-        # For ISO installations, we don't need seed file
-        if [[ -f "$SEED_FILE" ]]; then
-            rm -f "$SEED_FILE"
-        fi
-        
-        # Create a new qcow2 disk image for installation
+    # For ISO installations, create a disk image
+    if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
         local disk_file="${IMG_FILE%.*}.qcow2"
         if [[ ! -f "$disk_file" ]]; then
-            print_status "INFO" "Creating installation disk..."
+            print_status "INFO" "Creating installation disk: $disk_file"
             qemu-img create -f qcow2 "$disk_file" "$DISK_SIZE"
         fi
-        
-        # Update IMG_FILE to point to the ISO for booting
-        # We'll handle this in the start_vm function
-        
-        print_status "SUCCESS" "Installation media setup ready. Will boot from ISO for installation."
     else
-        # cloud-init configuration for cloud images
+        # For cloud images, create seed file
+        print_status "INFO" "Creating cloud-init configuration..."
+        
         cat > user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
@@ -489,7 +493,13 @@ EOF
             exit 1
         fi
         
-        print_status "SUCCESS" "Cloud-init configuration created"
+        # Resize disk if it's a qcow2 image
+        local img_format=$(detect_image_format "$IMG_FILE")
+        if [[ "$img_format" == "qcow2" ]]; then
+            print_status "INFO" "Resizing disk to $DISK_SIZE..."
+            qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null || \
+            print_status "WARN" "Could not resize image (might be normal for some formats)"
+        fi
     fi
     
     print_status "SUCCESS" "VM '$VM_NAME' created successfully."
@@ -501,67 +511,77 @@ start_vm() {
     
     if load_vm_config "$vm_name"; then
         print_status "INFO" "Starting VM: $vm_name"
-        print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
-        print_status "INFO" "Password: $PASSWORD"
         
-        # Check if image file exists
-        if [[ ! -f "$IMG_FILE" ]]; then
-            print_status "ERROR" "VM image file not found: $IMG_FILE"
-            return 1
-        fi
+        # Fix image format if needed
+        fix_image_format "$vm_name"
         
-        # Check if seed file exists (for cloud images)
-        if [[ "$IMG_FILE" != *.iso ]] && [[ "$IMG_FILE" != *.ISO ]] && [[ ! -f "$SEED_FILE" ]]; then
-            print_status "WARN" "Seed file not found, recreating..."
-            setup_vm_image
-        fi
+        # Detect image format
+        local img_format=$(detect_image_format "$IMG_FILE")
         
-        # Determine image type
-        local image_format="qcow2"
-        if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-            image_format="raw"
-            print_status "INFO" "Booting from ISO installation media"
+        if [[ "$img_format" == "iso" ]] || [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
+            # ISO-based installation
+            print_status "INFO" "ISO installation detected"
+            print_status "INFO" "This is an installation media. Follow on-screen instructions to install."
             
-            # Check if we have a disk file for installation
             local disk_file="${IMG_FILE%.*}.qcow2"
             if [[ ! -f "$disk_file" ]]; then
                 print_status "INFO" "Creating installation disk..."
                 qemu-img create -f qcow2 "$disk_file" "$DISK_SIZE"
             fi
-        fi
-        
-        # Base QEMU command
-        local qemu_cmd=(
-            qemu-system-x86_64
-            -enable-kvm
-            -m "$MEMORY"
-            -smp "$CPUS"
-            -cpu host
-        )
-
-        # Add disk configuration based on image type
-        if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-            # ISO installation - use both ISO and disk
-            qemu_cmd+=(
-                -drive "file=${IMG_FILE%.*}.qcow2,format=qcow2,if=virtio"
+            
+            # Build QEMU command for ISO installation
+            local qemu_cmd=(
+                qemu-system-x86_64
+                -enable-kvm
+                -m "$MEMORY"
+                -smp "$CPUS"
+                -cpu host
+                -drive "file=$disk_file,format=qcow2,if=virtio"
                 -cdrom "$IMG_FILE"
-                -boot order=d
+                -boot order=d,menu=on
+                -device virtio-net-pci,netdev=n0
+                -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
             )
+            
+            # Proxmox specific instructions
+            if [[ "$OS_TYPE" == *"Proxmox"* ]]; then
+                print_status "INFO" "=================================================================="
+                print_status "INFO" "PROXMOX VE INSTALLATION INSTRUCTIONS:"
+                print_status "INFO" "1. Wait for Proxmox boot screen"
+                print_status "INFO" "2. Select 'Install Proxmox VE'"
+                print_status "INFO" "3. Follow installation wizard"
+                print_status "INFO" "4. For disk: Select the VirtIO disk"
+                print_status "INFO" "5. Set root password during installation"
+                print_status "INFO" "6. After installation, VM will reboot"
+                print_status "INFO" "7. Access Web UI: https://localhost:8006"
+                print_status "INFO" "=================================================================="
+            fi
+            
         else
             # Cloud image with seed
-            qemu_cmd+=(
-                -drive "file=$IMG_FILE,format=$image_format,if=virtio"
+            print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
+            print_status "INFO" "Password: $PASSWORD"
+            
+            if [[ ! -f "$SEED_FILE" ]]; then
+                print_status "WARN" "Seed file not found, recreating..."
+                setup_vm_image
+            fi
+            
+            # Build QEMU command for cloud image
+            local qemu_cmd=(
+                qemu-system-x86_64
+                -enable-kvm
+                -m "$MEMORY"
+                -smp "$CPUS"
+                -cpu host
+                -drive "file=$IMG_FILE,format=qcow2,if=virtio"
                 -drive "file=$SEED_FILE,format=raw,if=virtio"
                 -boot order=c
+                -device virtio-net-pci,netdev=n0
+                -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
             )
         fi
-
-        # Network configuration
-        qemu_cmd+=(
-            -device virtio-net-pci,netdev=n0
-            -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
-        )
-
+        
         # Add port forwards if specified
         if [[ -n "$PORT_FORWARDS" ]]; then
             IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
@@ -586,29 +606,8 @@ start_vm() {
             -device virtio-rng-pci,rng=rng0
         )
 
-        # Special instructions for Proxmox
-        if [[ "$OS_TYPE" == *"Proxmox"* ]]; then
-            print_status "INFO" "=================================================================="
-            print_status "INFO" "PROXMOX VE INSTALLATION INSTRUCTIONS:"
-            print_status "INFO" "1. Wait for Proxmox boot screen"
-            print_status "INFO" "2. Select 'Install Proxmox VE'"
-            print_status "INFO" "3. Follow installation wizard"
-            print_status "INFO" "4. For disk: Select the VirtIO disk"
-            print_status "INFO" "5. Set root password during installation"
-            print_status "INFO" "6. After installation, VM will reboot"
-            print_status "INFO" "7. Access Web UI: https://localhost:8006"
-            print_status "INFO" "=================================================================="
-        elif [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-            print_status "INFO" "=================================================================="
-            print_status "INFO" "ISO INSTALLATION INSTRUCTIONS:"
-            print_status "INFO" "1. Follow the OS installation wizard"
-            print_status "INFO" "2. Use credentials you specified during VM creation"
-            print_status "INFO" "3. After installation, you may need to restart"
-            print_status "INFO" "=================================================================="
-        fi
-
-        print_status "INFO" "Starting QEMU with command:"
-        echo "  ${qemu_cmd[@]}"
+        print_status "INFO" "Starting QEMU..."
+        echo "Command: ${qemu_cmd[@]}"
         echo
         
         # Run QEMU
@@ -626,14 +625,15 @@ delete_vm() {
     read -p "$(print_status "INPUT" "Are you sure? (y/N): ")" -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if load_vm_config "$vm_name"; then
+        if load_vm_config "$vm_name" 2>/dev/null; then
             rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
             # Also delete any related files
             rm -f "${IMG_FILE%.*}.qcow2" "${IMG_FILE%.*}.temp" 2>/dev/null
             print_status "SUCCESS" "VM '$vm_name' has been deleted"
         else
             # Try to delete files even if config can't be loaded
-            rm -f "$VM_DIR/$vm_name.img" "$VM_DIR/$vm_name-seed.iso" "$VM_DIR/$vm_name.conf" 2>/dev/null
+            rm -f "$VM_DIR/$vm_name.img" "$VM_DIR/$vm_name.iso" "$VM_DIR/$vm_name-seed.iso" "$VM_DIR/$vm_name.conf" 2>/dev/null
+            rm -f "$VM_DIR/$vm_name.qcow2" 2>/dev/null
             print_status "SUCCESS" "VM '$vm_name' files have been deleted"
         fi
     else
@@ -646,6 +646,11 @@ show_vm_info() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
+        # Fix image format display
+        fix_image_format "$vm_name"
+        
+        local img_format=$(detect_image_format "$IMG_FILE")
+        
         echo
         print_status "INFO" "VM Information: $vm_name"
         echo "=========================================="
@@ -661,17 +666,17 @@ show_vm_info() {
         echo "Port Forwards: ${PORT_FORWARDS:-None}"
         echo "Created: $CREATED"
         echo "Image File: $IMG_FILE"
+        echo "Image Format: $img_format"
         
-        # Check image type
-        if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-            echo "Image Type: ISO Installation Media"
+        if [[ "$img_format" == "iso" ]]; then
             local disk_file="${IMG_FILE%.*}.qcow2"
             if [[ -f "$disk_file" ]]; then
                 echo "Installation Disk: $disk_file"
             fi
+            echo "Type: ISO Installation Media"
         else
-            echo "Image Type: Cloud Image"
-            echo "Seed File: ${SEED_FILE:-Not found}"
+            echo "Seed File: ${SEED_FILE:-Not applicable}"
+            echo "Type: Cloud Image"
         fi
         
         # Check if VM is running
@@ -691,7 +696,7 @@ show_vm_info() {
 is_vm_running() {
     local vm_name=$1
     if load_vm_config "$vm_name" 2>/dev/null; then
-        if pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null; then
+        if pgrep -f "qemu-system-x86_64.*$(basename "$IMG_FILE")" >/dev/null; then
             return 0
         fi
     fi
@@ -705,11 +710,11 @@ stop_vm() {
     if load_vm_config "$vm_name"; then
         if is_vm_running "$vm_name"; then
             print_status "INFO" "Stopping VM: $vm_name"
-            pkill -f "qemu-system-x86_64.*$IMG_FILE"
+            pkill -f "qemu-system-x86_64.*$(basename "$IMG_FILE")"
             sleep 2
             if is_vm_running "$vm_name"; then
                 print_status "WARN" "VM did not stop gracefully, forcing termination..."
-                pkill -9 -f "qemu-system-x86_64.*$IMG_FILE"
+                pkill -9 -f "qemu-system-x86_64.*$(basename "$IMG_FILE")"
             fi
             print_status "SUCCESS" "VM $vm_name stopped"
         else
@@ -852,7 +857,7 @@ edit_vm_config() {
             
             # Recreate seed image with new configuration if user/password/hostname changed
             if [[ "$edit_choice" -eq 1 || "$edit_choice" -eq 2 || "$edit_choice" -eq 3 ]]; then
-                print_status "INFO" "Updating cloud-init configuration..."
+                print_status "INFO" "Updating configuration..."
                 setup_vm_image
             fi
             
@@ -875,10 +880,21 @@ resize_vm_disk() {
         print_status "INFO" "Current disk size: $DISK_SIZE"
         
         # Check if image is an ISO (can't resize ISO)
-        if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
+        local img_format=$(detect_image_format "$IMG_FILE")
+        if [[ "$img_format" == "iso" ]]; then
             print_status "ERROR" "Cannot resize ISO installation media"
-            print_status "INFO" "Resize the installation disk instead: ${IMG_FILE%.*}.qcow2"
-            return 1
+            local disk_file="${IMG_FILE%.*}.qcow2"
+            if [[ -f "$disk_file" ]]; then
+                print_status "INFO" "Resize the installation disk instead: $disk_file"
+                read -p "$(print_status "INPUT" "Resize installation disk? (y/N): ")" confirm
+                if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                    IMG_FILE="$disk_file"
+                else
+                    return 1
+                fi
+            else
+                return 1
+            fi
         fi
         
         while true; do
@@ -938,7 +954,7 @@ show_vm_performance() {
             echo "=========================================="
             
             # Get QEMU process ID
-            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE")
+            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$(basename "$IMG_FILE")")
             if [[ -n "$qemu_pid" ]]; then
                 # Show process stats
                 echo "QEMU Process Stats:"
@@ -1131,6 +1147,26 @@ clone_vm() {
     fi
 }
 
+# Function to fix all VMs
+fix_all_vms() {
+    print_status "INFO" "Checking and fixing all VM image formats..."
+    
+    local vms=($(get_vm_list))
+    local vm_count=${#vms[@]}
+    
+    if [[ $vm_count -eq 0 ]]; then
+        print_status "INFO" "No VMs found to fix"
+        return 0
+    fi
+    
+    for vm in "${vms[@]}"; do
+        print_status "INFO" "Checking VM: $vm"
+        fix_image_format "$vm"
+    done
+    
+    print_status "SUCCESS" "All VMs have been checked and fixed"
+}
+
 # Main menu function
 main_menu() {
     while true; do
@@ -1145,11 +1181,9 @@ main_menu() {
         if [ $vm_count -gt 0 ]; then
             print_status "INFO" "Found $vm_count existing VM(s):"
             for i in "${!vms[@]}"; do
-                local status="Stopped"
+                local status="\033[1;31mStopped\033[0m"
                 if is_vm_running "${vms[$i]}"; then
                     status="\033[1;32mRunning\033[0m"
-                else
-                    status="\033[1;31mStopped\033[0m"
                 fi
                 printf "  %2d) %s (%s)\n" $((i+1)) "${vms[$i]}" "$status"
             done
@@ -1170,6 +1204,7 @@ main_menu() {
             echo " 10) Restore VM from backup"
             echo " 11) List backups"
             echo " 12) Clone VM"
+            echo " 13) Fix all VM image formats"
         fi
         echo "  0) Exit"
         echo
@@ -1292,6 +1327,14 @@ main_menu() {
                     fi
                 fi
                 ;;
+            13)
+                if [ $vm_count -gt 0 ]; then
+                    fix_all_vms
+                else
+                    print_status "INFO" "No VMs found to fix"
+                fi
+                read -p "$(print_status "INPUT" "Press Enter to continue...")"
+                ;;
             0)
                 print_status "ZYNEX" "Thank you for using ZynexForge VM Manager!"
                 echo "Goodbye!"
@@ -1317,7 +1360,7 @@ VM_DIR="${VM_DIR:-$HOME/vms}"
 mkdir -p "$VM_DIR"
 mkdir -p "$VM_DIR/backups"
 
-# Supported OS list - FIXED with proper format detection
+# Supported OS list
 declare -A OS_OPTIONS=(
     # Cloud images (qcow2 format)
     ["Ubuntu 22.04 LTS (Cloud Image)"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
@@ -1334,7 +1377,7 @@ declare -A OS_OPTIONS=(
     ["Ubuntu 24.04 LTS (ISO)"]="ubuntu|noble|https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso|ubuntu24|ubuntu|ubuntu"
     ["Debian 12 (ISO)"]="debian|bookworm|https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.5.0-amd64-netinst.iso|debian12|debian|debian"
     
-    # REAL PROXMOX VE ISO IMAGES
+    # Proxmox VE ISO
     ["Proxmox VE 8.2 (ISO)"]="proxmox|ve82|https://download.proxmox.com/iso/proxmox-ve_8.2-1.iso|proxmox-ve82|root|proxmox123"
     ["Proxmox VE 8.1 (ISO)"]="proxmox|ve81|https://download.proxmox.com/iso/proxmox-ve_8.1-1.iso|proxmox-ve81|root|proxmox123"
     ["Proxmox VE 8.0 (ISO)"]="proxmox|ve80|https://download.proxmox.com/iso/proxmox-ve_8.0-2.iso|proxmox-ve80|root|proxmox123"
