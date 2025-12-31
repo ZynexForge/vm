@@ -549,7 +549,7 @@ setup_vm_image() {
     print_status "SUCCESS" "VM image setup complete"
 }
 
-# Function to build QEMU command
+# Function to build QEMU command - FIXED VERSION
 build_qemu_command() {
     local vm_name=$1
     local qemu_cmd=()
@@ -575,9 +575,23 @@ build_qemu_command() {
         fi
     fi
     
-    # Disk configuration - SIMPLIFIED to fix the error
+    # Disk configuration - FIXED: Only define disk once
+    if [[ "$IO_URING" == true ]]; then
+        # Use IO thread with drive0
+        qemu_cmd+=(
+            -object iothread,id=iothread0
+            -drive "if=none,id=drive0,file=$IMG_FILE,format=qcow2,cache=$DISK_CACHE"
+            -device "virtio-blk-pci,drive=drive0,iothread=iothread0"
+        )
+    else
+        # Regular disk without IO thread
+        qemu_cmd+=(
+            -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=$DISK_CACHE"
+        )
+    fi
+    
+    # Seed image
     qemu_cmd+=(
-        -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=$DISK_CACHE"
         -drive "file=$SEED_FILE,format=raw,if=virtio,readonly=on"
     )
     
@@ -599,17 +613,7 @@ build_qemu_command() {
         done
     fi
     
-    # Additional devices - only add if IO_URING is enabled
-    if [[ "$IO_URING" == true ]]; then
-        qemu_cmd+=(
-            -object iothread,id=iothread0
-            -device virtio-blk-pci,drive=drive0,iothread=iothread0
-        )
-        # Add the drive0 definition
-        qemu_cmd+=(-drive "if=none,id=drive0,file=$IMG_FILE,format=qcow2,cache=$DISK_CACHE")
-    fi
-    
-    # Add other devices
+    # Additional devices
     qemu_cmd+=(
         -device virtio-balloon-pci
         -object rng-random,filename=/dev/urandom,id=rng0
@@ -655,6 +659,13 @@ start_vm() {
             create_seed_image "$SEED_FILE" "$HOSTNAME" "$USERNAME" "$PASSWORD"
         fi
         
+        # Check if VM is already running
+        if is_vm_running "$vm_name"; then
+            print_status "ERROR" "VM '$vm_name' is already running!"
+            print_status "INFO" "Use option 3 to stop it first."
+            return 1
+        fi
+        
         # Build and execute QEMU command
         local qemu_cmd=$(build_qemu_command "$vm_name")
         
@@ -678,6 +689,11 @@ delete_vm() {
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         if load_vm_config "$vm_name"; then
+            # Check if VM is running
+            if is_vm_running "$vm_name"; then
+                print_status "ERROR" "VM '$vm_name' is running. Stop it first."
+                return 1
+            fi
             rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
             print_status "SUCCESS" "VM '$vm_name' has been deleted"
         fi
@@ -721,7 +737,8 @@ show_vm_info() {
 # Function to check if VM is running
 is_vm_running() {
     local vm_name=$1
-    if pgrep -f "qemu-system-x86_64.*$VM_DIR/$vm_name" >/dev/null 2>&1; then
+    if pgrep -f "qemu-system-x86_64.*$VM_DIR/$vm_name" >/dev/null 2>&1 || \
+       pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null 2>&1; then
         return 0
     else
         return 1
@@ -912,6 +929,12 @@ resize_vm_disk() {
                 if [[ "$new_disk_size" == "$DISK_SIZE" ]]; then
                     print_status "INFO" "New disk size is the same as current size. No changes made."
                     return 0
+                fi
+                
+                # Check if VM is running
+                if is_vm_running "$vm_name"; then
+                    print_status "ERROR" "Cannot resize disk while VM is running. Stop the VM first."
+                    return 1
                 fi
                 
                 # Resize the disk
