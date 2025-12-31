@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # =============================
-# Enhanced Multi-VM Manager with Auto-Performance
+# Enhanced Multi-VM Manager with Customizable Performance
 # =============================
 
-# Performance Configuration
-AUTO_MEMORY="24000"    # 24GB RAM
-AUTO_CPUS="8"          # 8 CPU cores
-AUTO_DISK="500G"       # 500GB Disk
-AUTO_CPU_MODEL="host"  # Auto CPU features
+# Default Performance Configuration
+DEFAULT_MEMORY="24000"    # 24GB RAM
+DEFAULT_CPUS="8"          # 8 CPU cores
+DEFAULT_DISK="500G"       # 500GB Disk
+DEFAULT_CPU_MODEL="host"  # Auto CPU features
 
 # Function to display header
 display_header() {
@@ -23,10 +23,14 @@ __________                           ___________
         \/\/         \/     \/      \/    \/             /_____/      \/ 
                                                                          
 
-                    ⚡ Auto-Performance VM Manager ⚡
-                    (24GB RAM • 8 Cores • 500GB Disk)
+                    ⚡ ZynexForge VM Manager ⚡
+                    Custom Performance Configuration
 ========================================================================
 EOF
+    echo -e "\033[1;36mZynexForge v2.0 | Recommended: 24GB RAM | 8 Cores | 500GB Disk\033[0m"
+    echo -e "\033[1;33mHost: KVM/QEMU (Standard PC (i440FX + PIIX, 1996))\033[0m"
+    echo -e "\033[1;35mPerformance Mode: ZORVIX OPTIMIZED\033[0m"
+    echo "========================================================================="
     echo
 }
 
@@ -159,120 +163,6 @@ EOF
     print_status "SUCCESS" "Configuration saved to $config_file"
 }
 
-# Function to create new VM
-create_new_vm() {
-    print_status "INFO" "Creating a new VM"
-    print_status "PERF" "Auto-configured: ${AUTO_MEMORY}MB RAM, ${AUTO_CPUS} CPUs, ${AUTO_DISK} Disk"
-    
-    # OS Selection
-    print_status "INFO" "Select an OS to set up:"
-    local os_options=()
-    local i=1
-    for os in "${!OS_OPTIONS[@]}"; do
-        echo "  $i) $os"
-        os_options[$i]="$os"
-        ((i++))
-    done
-    
-    while true; do
-        read -p "$(print_status "INPUT" "Enter your choice (1-${#OS_OPTIONS[@]}): ")" choice
-        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#OS_OPTIONS[@]} ]; then
-            local os="${os_options[$choice]}"
-            IFS='|' read -r OS_TYPE CODENAME IMG_URL DEFAULT_HOSTNAME DEFAULT_USERNAME DEFAULT_PASSWORD <<< "${OS_OPTIONS[$os]}"
-            break
-        else
-            print_status "ERROR" "Invalid selection. Try again."
-        fi
-    done
-
-    # Custom Inputs with validation
-    while true; do
-        read -p "$(print_status "INPUT" "Enter VM name (default: $DEFAULT_HOSTNAME): ")" VM_NAME
-        VM_NAME="${VM_NAME:-$DEFAULT_HOSTNAME}"
-        if validate_input "name" "$VM_NAME"; then
-            # Check if VM name already exists
-            if [[ -f "$VM_DIR/$VM_NAME.conf" ]]; then
-                print_status "ERROR" "VM with name '$VM_NAME' already exists"
-            else
-                break
-            fi
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "Enter hostname (default: $VM_NAME): ")" HOSTNAME
-        HOSTNAME="${HOSTNAME:-$VM_NAME}"
-        if validate_input "name" "$HOSTNAME"; then
-            break
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "Enter username (default: $DEFAULT_USERNAME): ")" USERNAME
-        USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
-        if validate_input "username" "$USERNAME"; then
-            break
-        fi
-    done
-
-    while true; do
-        read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
-        PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
-        echo
-        if [ -n "$PASSWORD" ]; then
-            break
-        else
-            print_status "ERROR" "Password cannot be empty"
-        fi
-    done
-
-    # Auto-configured hardware
-    print_status "PERF" "Setting hardware: RAM=${AUTO_MEMORY}MB, CPUs=${AUTO_CPUS}, Disk=${AUTO_DISK}"
-    MEMORY="$AUTO_MEMORY"
-    CPUS="$AUTO_CPUS"
-    DISK_SIZE="$AUTO_DISK"
-
-    while true; do
-        read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
-        SSH_PORT="${SSH_PORT:-2222}"
-        if validate_input "port" "$SSH_PORT"; then
-            # Check if port is already in use
-            if ss -tln 2>/dev/null | grep -q ":$SSH_PORT "; then
-                print_status "ERROR" "Port $SSH_PORT is already in use"
-            else
-                break
-            fi
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
-        GUI_MODE=false
-        gui_input="${gui_input:-n}"
-        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
-            GUI_MODE=true
-            break
-        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
-            break
-        else
-            print_status "ERROR" "Please answer y or n"
-        fi
-    done
-
-    # Additional network options
-    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
-
-    IMG_FILE="$VM_DIR/$VM_NAME.img"
-    SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
-    CREATED="$(date)"
-
-    # Download and setup VM image
-    setup_vm_image
-    
-    # Save configuration
-    save_vm_config
-}
-
 # Function to setup VM image
 setup_vm_image() {
     print_status "INFO" "Downloading and preparing image..."
@@ -335,6 +225,172 @@ EOF
     print_status "SUCCESS" "VM '$VM_NAME' created successfully."
 }
 
+# Function to create new VM
+create_new_vm() {
+    display_header
+    print_status "INFO" "Creating a new VM"
+    
+    # Get VM name
+    while true; do
+        read -p "$(print_status "INPUT" "Enter VM name: ")" VM_NAME
+        if validate_input "name" "$VM_NAME"; then
+            if [[ -f "$VM_DIR/$VM_NAME.conf" ]]; then
+                print_status "ERROR" "VM '$VM_NAME' already exists"
+            else
+                break
+            fi
+        fi
+    done
+    
+    # OS Selection
+    print_status "INFO" "Select an OS to set up:"
+    local os_options=()
+    local i=1
+    for os in "${!OS_OPTIONS[@]}"; do
+        echo "  $i) $os"
+        os_options[$i]="$os"
+        ((i++))
+    done
+    
+    while true; do
+        read -p "$(print_status "INPUT" "Enter your choice (1-${#OS_OPTIONS[@]}): ")" choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#OS_OPTIONS[@]} ]; then
+            local os="${os_options[$choice]}"
+            IFS='|' read -r OS_TYPE CODENAME IMG_URL DEFAULT_HOSTNAME DEFAULT_USERNAME DEFAULT_PASSWORD <<< "${OS_OPTIONS[$os]}"
+            break
+        else
+            print_status "ERROR" "Invalid selection. Try again."
+        fi
+    done
+
+    while true; do
+        read -p "$(print_status "INPUT" "Enter hostname (default: $VM_NAME): ")" HOSTNAME
+        HOSTNAME="${HOSTNAME:-$VM_NAME}"
+        if validate_input "name" "$HOSTNAME"; then
+            break
+        fi
+    done
+
+    while true; do
+        read -p "$(print_status "INPUT" "Enter username (default: $DEFAULT_USERNAME): ")" USERNAME
+        USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
+        if validate_input "username" "$USERNAME"; then
+            break
+        fi
+    done
+
+    while true; do
+        read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
+        PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
+        echo
+        if [ -n "$PASSWORD" ]; then
+            break
+        else
+            print_status "ERROR" "Password cannot be empty"
+        fi
+    done
+
+    # Customizable Hardware Configuration
+    echo
+    print_status "PERF" "=== Hardware Configuration ==="
+    print_status "INFO" "Recommended: ${DEFAULT_MEMORY}MB RAM, ${DEFAULT_CPUS} CPUs, ${DEFAULT_DISK} Disk"
+    echo
+
+    # Memory Configuration
+    while true; do
+        read -p "$(print_status "INPUT" "Memory in MB (default: $DEFAULT_MEMORY): ")" MEMORY
+        MEMORY="${MEMORY:-$DEFAULT_MEMORY}"
+        if validate_input "number" "$MEMORY"; then
+            print_status "PERF" "RAM set to: ${MEMORY}MB ($((MEMORY/1024))GB)"
+            break
+        fi
+    done
+
+    # CPU Configuration
+    while true; do
+        read -p "$(print_status "INPUT" "Number of CPUs (default: $DEFAULT_CPUS): ")" CPUS
+        CPUS="${CPUS:-$DEFAULT_CPUS}"
+        if validate_input "number" "$CPUS"; then
+            print_status "PERF" "CPUs set to: ${CPUS}"
+            break
+        fi
+    done
+
+    # Disk Configuration
+    while true; do
+        read -p "$(print_status "INPUT" "Disk size (default: $DEFAULT_DISK): ")" DISK_SIZE
+        DISK_SIZE="${DISK_SIZE:-$DEFAULT_DISK}"
+        if validate_input "size" "$DISK_SIZE"; then
+            print_status "PERF" "Disk set to: ${DISK_SIZE}"
+            break
+        fi
+    done
+
+    # Network Configuration
+    while true; do
+        read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
+        SSH_PORT="${SSH_PORT:-2222}"
+        if validate_input "port" "$SSH_PORT"; then
+            # Check if port is already in use
+            if ss -tln 2>/dev/null | grep -q ":$SSH_PORT "; then
+                print_status "ERROR" "Port $SSH_PORT is already in use"
+            else
+                break
+            fi
+        fi
+    done
+
+    # GUI Mode
+    while true; do
+        read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
+        GUI_MODE=false
+        gui_input="${gui_input:-n}"
+        if [[ "$gui_input" =~ ^[Yy]$ ]]; then 
+            GUI_MODE=true
+            break
+        elif [[ "$gui_input" =~ ^[Nn]$ ]]; then
+            break
+        else
+            print_status "ERROR" "Please answer y or n"
+        fi
+    done
+
+    # Additional network options
+    read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
+
+    # Summary
+    echo
+    print_status "PERF" "=== Configuration Summary ==="
+    print_status "INFO" "VM Name: $VM_NAME"
+    print_status "INFO" "OS: $OS_TYPE"
+    print_status "INFO" "Hostname: $HOSTNAME"
+    print_status "INFO" "Username: $USERNAME"
+    print_status "INFO" "Memory: ${MEMORY}MB ($((MEMORY/1024))GB)"
+    print_status "INFO" "CPUs: $CPUS"
+    print_status "INFO" "Disk: $DISK_SIZE"
+    print_status "INFO" "SSH Port: $SSH_PORT"
+    print_status "INFO" "GUI Mode: $GUI_MODE"
+    print_status "INFO" "Port Forwards: ${PORT_FORWARDS:-None}"
+    echo
+
+    # Confirm
+    read -p "$(print_status "INPUT" "Create VM with these settings? (y/N): ")" confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_status "INFO" "VM creation cancelled"
+        return
+    fi
+
+    IMG_FILE="$VM_DIR/$VM_NAME.img"
+    SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
+    CREATED="$(date)"
+
+    # Download and setup VM image
+    setup_vm_image
+    
+    # Save configuration
+    save_vm_config
+}
+
 # Function to start a VM
 start_vm() {
     local vm_name=$1
@@ -343,7 +399,7 @@ start_vm() {
         print_status "INFO" "Starting VM: $vm_name"
         print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
         print_status "INFO" "Password: $PASSWORD"
-        print_status "PERF" "Resources: ${MEMORY}MB RAM, ${CPUS} CPUs"
+        print_status "PERF" "Resources: ${MEMORY}MB RAM, ${CPUS} CPUs, ${DISK_SIZE} Disk"
         
         # Check if image file exists
         if [[ ! -f "$IMG_FILE" ]]; then
@@ -363,7 +419,7 @@ start_vm() {
             -enable-kvm
             -m "$MEMORY"
             -smp "$CPUS"
-            -cpu "$AUTO_CPU_MODEL"
+            -cpu "$DEFAULT_CPU_MODEL"
             -drive "file=$IMG_FILE,format=qcow2,if=virtio"
             -drive "file=$SEED_FILE,format=raw,if=virtio"
             -boot order=c
@@ -713,7 +769,7 @@ show_vm_performance() {
             echo "  Memory: $MEMORY MB"
             echo "  CPUs: $CPUS"
             echo "  Disk: $DISK_SIZE"
-            echo "  CPU Model: $AUTO_CPU_MODEL (auto-configured)"
+            echo "  CPU Model: $DEFAULT_CPU_MODEL (auto-configured)"
         fi
         echo "=========================================="
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
