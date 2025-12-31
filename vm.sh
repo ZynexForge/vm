@@ -180,7 +180,7 @@ save_vm_config() {
     cat > "$config_file" <<EOF
 # ZynexForge VM Configuration
 # Generated: $(date)
-# VM ID: $(uuidgen)
+# VM ID: $(uuidgen 2>/dev/null || echo "unknown")
 
 VM_NAME="$VM_NAME"
 OS_TYPE="$OS_TYPE"
@@ -481,7 +481,7 @@ setup_vm_image() {
         print_status "INFO" "Image file already exists. Skipping download."
     else
         print_status "INFO" "Downloading image from $IMG_URL..."
-        if ! wget --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp"; then
+        if ! wget --progress=bar:force -q --show-progress "$IMG_URL" -O "$IMG_FILE.tmp"; then
             print_status "ERROR" "Failed to download image from $IMG_URL"
             exit 1
         fi
@@ -514,7 +514,7 @@ users:
   - name: $USERNAME
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
-    password: $(openssl passwd -6 "$PASSWORD" | tr -d '\n')
+    password: $(openssl passwd -6 "$PASSWORD" 2>/dev/null | tr -d '\n' || echo "")
     ssh_authorized_keys: []
     lock_passwd: false
 package_update: true
@@ -1061,19 +1061,6 @@ resize_vm_disk() {
                     return 0
                 fi
                 
-                # Convert sizes to KB for comparison
-                local current_kb=$(echo "$DISK_SIZE" | sed -e 's/G$/*1024*1024/' -e 's/M$/*1024/' | bc)
-                local new_kb=$(echo "$new_disk_size" | sed -e 's/G$/*1024*1024/' -e 's/M$/*1024/' | bc)
-                
-                if [[ $new_kb -lt $current_kb ]]; then
-                    print_status "WARN" "Shrinking disk size is not recommended and may cause data loss!"
-                    read -p "$(print_status "INPUT" "Are you sure you want to continue? (y/N): ")" confirm_shrink
-                    if [[ ! "$confirm_shrink" =~ ^[Yy]$ ]]; then
-                        print_status "INFO" "Disk resize cancelled."
-                        return 0
-                    fi
-                fi
-                
                 # Resize the disk
                 print_status "INFO" "Resizing disk to $new_disk_size..."
                 if qemu-img resize "$IMG_FILE" "$new_disk_size"; then
@@ -1113,7 +1100,7 @@ show_vm_performance() {
                 
                 # Show CPU usage
                 echo "CPU Usage:"
-                top -bn1 -p "$qemu_pid" | tail -1
+                top -bn1 -p "$qemu_pid" 2>/dev/null | tail -1 || echo "  Unable to get CPU stats"
                 echo
                 
                 # Show memory usage
@@ -1124,13 +1111,13 @@ show_vm_performance() {
                 # Show disk I/O if iostat is available
                 if command -v iostat &> /dev/null; then
                     echo "Disk I/O Statistics:"
-                    iostat -x 1 2 | tail -5
+                    iostat -x 1 2 2>/dev/null | tail -5 || echo "  Unable to get disk I/O stats"
                     echo
                 fi
                 
                 # Show network connections
                 echo "Network Connections:"
-                ss -tlnp | grep ":$SSH_PORT" || echo "  SSH port $SSH_PORT not listening"
+                ss -tlnp 2>/dev/null | grep ":$SSH_PORT" || echo "  SSH port $SSH_PORT not listening"
                 echo
                 
                 # Zorvix performance summary
@@ -1229,24 +1216,44 @@ show_system_info() {
     
     # Host information
     echo "Host System:"
-    echo "  OS: $(lsb_release -ds 2>/dev/null || cat /etc/os-release | grep PRETTY_NAME | cut -d'=' -f2 | tr -d '\"')"
+    if command -v lsb_release &> /dev/null; then
+        echo "  OS: $(lsb_release -ds 2>/dev/null)"
+    elif [ -f /etc/os-release ]; then
+        echo "  OS: $(grep PRETTY_NAME /etc/os-release | cut -d'=' -f2 | tr -d '\"')"
+    else
+        echo "  OS: $(uname -o)"
+    fi
     echo "  Kernel: $(uname -r)"
     echo "  Architecture: $(uname -m)"
-    echo "  Virtualization: $( [ -e /proc/cpuinfo ] && grep -q -E "vmx|svm" /proc/cpuinfo && echo "Hardware (KVM)" || echo "Software" )"
+    if [ -f /proc/cpuinfo ]; then
+        if grep -q -E "vmx|svm" /proc/cpuinfo; then
+            echo "  Virtualization: Hardware (KVM)"
+        else
+            echo "  Virtualization: Software"
+        fi
+    fi
     echo
     
     # QEMU/KVM information
     echo "Virtualization Stack:"
-    echo "  QEMU Version: $(qemu-system-x86_64 --version | head -1)"
-    echo "  KVM Module: $( [ -c /dev/kvm ] && echo "Loaded" || echo "Not available" )"
+    echo "  QEMU Version: $(qemu-system-x86_64 --version | head -1 2>/dev/null || echo "Unknown")"
+    if [ -c /dev/kvm ]; then
+        echo "  KVM Module: Loaded"
+    else
+        echo "  KVM Module: Not available"
+    fi
     echo
     
     # System resources
     echo "System Resources:"
-    echo "  CPU Cores: $(nproc)"
-    echo "  Total Memory: $(free -h | grep Mem | awk '{print $2}')"
-    echo "  Available Memory: $(free -h | grep Mem | awk '{print $7}')"
-    echo "  Disk Space: $(df -h $VM_DIR | tail -1 | awk '{print $4}') available"
+    echo "  CPU Cores: $(nproc 2>/dev/null || echo "Unknown")"
+    if command -v free &> /dev/null; then
+        echo "  Total Memory: $(free -h | grep Mem | awk '{print $2}')"
+        echo "  Available Memory: $(free -h | grep Mem | awk '{print $7}')"
+    fi
+    if command -v df &> /dev/null; then
+        echo "  Disk Space: $(df -h "$VM_DIR" 2>/dev/null | tail -1 | awk '{print $4}') available in VM directory"
+    fi
     echo
     
     # VM Statistics
@@ -1273,11 +1280,11 @@ show_system_info() {
         
         # Check for performance features
         if [ -d "/sys/kernel/mm/transparent_hugepage" ]; then
-            echo "  Huge Pages: $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
+            echo "  Huge Pages: $(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || echo "Unknown")"
         fi
         
         if command -v cpupower &> /dev/null; then
-            echo "  CPU Governor: $(cpupower frequency-info | grep governor | head -1 | cut -d':' -f2 | xargs)"
+            echo "  CPU Governor: $(cpupower frequency-info 2>/dev/null | grep governor | head -1 | cut -d':' -f2 | xargs || echo "Unknown")"
         fi
     else
         echo "Zorvix Technology: DISABLED"
@@ -1285,6 +1292,35 @@ show_system_info() {
     
     echo "=========================================="
     read -p "$(print_status "INPUT" "Press Enter to continue...")"
+}
+
+# Function to display main menu with proper formatting
+display_main_menu() {
+    local vm_count=$1
+    local vms=($2)
+    
+    echo "ZynexForge Main Menu:"
+    echo "  1) Create a new VM"
+    
+    if [ $vm_count -gt 0 ]; then
+        echo "  2) Start a VM"
+        echo "  3) Stop a VM"
+        echo "  4) Show VM info"
+        echo "  5) Edit VM configuration"
+        echo "  6) Delete a VM"
+        echo "  7) Resize VM disk"
+        echo "  8) Show VM performance"
+        echo "  9) Export VM configuration"
+        echo "  10) Import VM configuration"
+        echo "  11) System Information"
+        echo "  12) Toggle Zorvix Mode (Current: $( [ "$ZORVIX_MODE" = true ] && echo "ON" || echo "OFF" ))"
+        echo "  0) Exit"
+    else
+        echo "  11) System Information"
+        echo "  12) Toggle Zorvix Mode (Current: $( [ "$ZORVIX_MODE" = true ] && echo "ON" || echo "OFF" ))"
+        echo "  0) Exit"
+    fi
+    echo
 }
 
 # Main menu function
@@ -1323,137 +1359,136 @@ main_menu() {
             echo
         fi
         
-        echo "ZynexForge Main Menu:"
-        echo "  1) Create a new VM"
+        # Display menu based on whether VMs exist
         if [ $vm_count -gt 0 ]; then
-            echo "  2) Start a VM"
-            echo "  3) Stop a VM"
-            echo "  4) Show VM info"
-            echo "  5) Edit VM configuration"
-            echo "  6) Delete a VM"
-            echo "  7) Resize VM disk"
-            echo "  8) Show VM performance"
-            echo "  9) Export VM configuration"
-            echo "  10) Import VM configuration"
-        fi
-        echo "  11) System Information"
-        echo "  12) Toggle Zorvix Mode (Current: $( [ "$ZORVIX_MODE" = true ] && echo "ON" || echo "OFF" ))"
-        echo "  0) Exit"
-        echo
-        
-        read -p "$(print_status "INPUT" "Enter your choice: ")" choice
-        
-        case $choice in
-            1)
-                create_new_vm
-                ;;
-            2)
-                if [ $vm_count -gt 0 ]; then
+            display_main_menu "$vm_count" "${vms[*]}"
+            read -p "$(print_status "INPUT" "Enter your choice (0-12): ")" choice
+            
+            case $choice in
+                1) create_new_vm ;;
+                2)
                     read -p "$(print_status "INPUT" "Enter VM number to start: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         start_vm "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
-                fi
-                ;;
-            3)
-                if [ $vm_count -gt 0 ]; then
+                    ;;
+                3)
                     read -p "$(print_status "INPUT" "Enter VM number to stop: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         stop_vm "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
-                fi
-                ;;
-            4)
-                if [ $vm_count -gt 0 ]; then
+                    ;;
+                4)
                     read -p "$(print_status "INPUT" "Enter VM number to show info: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         show_vm_info "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
-                fi
-                ;;
-            5)
-                if [ $vm_count -gt 0 ]; then
+                    ;;
+                5)
                     read -p "$(print_status "INPUT" "Enter VM number to edit: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         edit_vm_config "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
-                fi
-                ;;
-            6)
-                if [ $vm_count -gt 0 ]; then
+                    ;;
+                6)
                     read -p "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         delete_vm "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
-                fi
-                ;;
-            7)
-                if [ $vm_count -gt 0 ]; then
+                    ;;
+                7)
                     read -p "$(print_status "INPUT" "Enter VM number to resize disk: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         resize_vm_disk "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
-                fi
-                ;;
-            8)
-                if [ $vm_count -gt 0 ]; then
+                    ;;
+                8)
                     read -p "$(print_status "INPUT" "Enter VM number to show performance: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         show_vm_performance "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
-                fi
-                ;;
-            9)
-                if [ $vm_count -gt 0 ]; then
+                    ;;
+                9)
                     read -p "$(print_status "INPUT" "Enter VM number to export: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         export_vm_config "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
-                fi
-                ;;
-            10)
-                import_vm_config
-                ;;
-            11)
-                show_system_info
-                ;;
-            12)
-                if [ "$ZORVIX_MODE" = true ]; then
-                    ZORVIX_MODE=false
-                    print_status "INFO" "Zorvix Mode: DISABLED"
-                else
-                    ZORVIX_MODE=true
-                    print_status "ZORVIX" "Zorvix Mode: ENABLED - Performance optimizations active"
-                fi
-                sleep 2
-                ;;
-            0)
-                print_status "INFO" "Thank you for using ZynexForge VM Manager!"
-                echo -e "\033[1;35mPowered by Zorvix Technology\033[0m"
-                exit 0
-                ;;
-            *)
-                print_status "ERROR" "Invalid option"
-                ;;
-        esac
+                    ;;
+                10) import_vm_config ;;
+                11) show_system_info ;;
+                12)
+                    if [ "$ZORVIX_MODE" = true ]; then
+                        ZORVIX_MODE=false
+                        print_status "INFO" "Zorvix Mode: DISABLED"
+                    else
+                        ZORVIX_MODE=true
+                        print_status "ZORVIX" "Zorvix Mode: ENABLED - Performance optimizations active"
+                    fi
+                    sleep 2
+                    ;;
+                0)
+                    print_status "INFO" "Thank you for using ZynexForge VM Manager!"
+                    echo -e "\033[1;35mPowered by Zorvix Technology\033[0m"
+                    exit 0
+                    ;;
+                *)
+                    print_status "ERROR" "Invalid option. Please choose 0-12."
+                    ;;
+            esac
+        else
+            # Menu when no VMs exist
+            echo "ZynexForge Main Menu:"
+            echo "  1) Create a new VM"
+            echo "  11) System Information"
+            echo "  12) Toggle Zorvix Mode (Current: $( [ "$ZORVIX_MODE" = true ] && echo "ON" || echo "OFF" ))"
+            echo "  0) Exit"
+            echo
+            
+            read -p "$(print_status "INPUT" "Enter your choice (0, 1, 11, or 12): ")" choice
+            
+            case $choice in
+                1) create_new_vm ;;
+                11) show_system_info ;;
+                12)
+                    if [ "$ZORVIX_MODE" = true ]; then
+                        ZORVIX_MODE=false
+                        print_status "INFO" "Zorvix Mode: DISABLED"
+                    else
+                        ZORVIX_MODE=true
+                        print_status "ZORVIX" "Zorvix Mode: ENABLED - Performance optimizations active"
+                    fi
+                    sleep 2
+                    ;;
+                0)
+                    print_status "INFO" "Thank you for using ZynexForge VM Manager!"
+                    echo -e "\033[1;35mPowered by Zorvix Technology\033[0m"
+                    exit 0
+                    ;;
+                *)
+                    print_status "ERROR" "Invalid option. Please choose 0, 1, 11, or 12."
+                    ;;
+            esac
+        fi
         
-        read -p "$(print_status "INPUT" "Press Enter to continue...")"
+        if [ "$choice" != "0" ]; then
+            read -p "$(print_status "INPUT" "Press Enter to continue...")"
+        fi
     done
 }
 
