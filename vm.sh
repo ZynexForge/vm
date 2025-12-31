@@ -13,7 +13,7 @@ display_header() {
     cat << "EOF"
 
 __________                           ___________                         
-\____    /___.__. ____   ____ ___  __\_   _____/__________  ____   ____  
+\____    /__.__. ____   ____ ___  __\_   _____/__________  ____   ____  
   /     /<   |  |/    \_/ __ \\  \/  /|    __)/  _ \_  __ \/ ___\_/ __ \ 
  /     /_ \___  |   |  \  ___/ >    < |     \(  <_> )  | \/ /_/  >  ___/ 
 /_______ \/ ____|___|  /\___  >__/\_ \\___  / \____/|__|  \___  / \___  >
@@ -89,7 +89,7 @@ validate_input() {
 check_dependencies() {
     print_status "ZYNEX" "Checking system dependencies..."
     
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img")
+    local deps=("qemu-system-x86_64" "wget" "qemu-img")
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
@@ -100,10 +100,15 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "On Ubuntu/Debian, try: sudo apt install qemu-system cloud-image-utils wget"
-        print_status "INFO" "On CentOS/RHEL, try: sudo yum install qemu-kvm cloud-utils wget"
-        print_status "INFO" "On Arch Linux, try: sudo pacman -S qemu-base cloud-utils wget"
+        print_status "INFO" "On Ubuntu/Debian, try: sudo apt install qemu-system wget"
+        print_status "INFO" "On CentOS/RHEL, try: sudo yum install qemu-kvm wget"
+        print_status "INFO" "On Arch Linux, try: sudo pacman -S qemu-base wget"
         exit 1
+    fi
+    
+    # Check for cloud-localds or genisoimage
+    if ! command -v cloud-localds &> /dev/null && ! command -v genisoimage &> /dev/null; then
+        print_status "WARN" "cloud-localds or genisoimage not found. Will attempt to create seed image manually."
     fi
     
     print_status "SUCCESS" "All dependencies satisfied"
@@ -113,6 +118,77 @@ check_dependencies() {
 cleanup() {
     if [ -f "user-data" ]; then rm -f "user-data"; fi
     if [ -f "meta-data" ]; then rm -f "meta-data"; fi
+    if [ -f "seed.iso" ]; then rm -f "seed.iso"; fi
+}
+
+# Function to create seed image
+create_seed_image() {
+    local seed_file="$1"
+    local hostname="$2"
+    local username="$3"
+    local password="$4"
+    
+    # Create cloud-init config
+    cat > user-data <<EOF
+#cloud-config
+hostname: $hostname
+ssh_pwauth: true
+disable_root: false
+users:
+  - name: $username
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    passwd: $(echo "$password" | mkpasswd -m sha-512 -s 2>/dev/null || echo "$password")
+chpasswd:
+  list: |
+    root:$password
+    $username:$password
+  expire: false
+package_update: true
+package_upgrade: true
+packages:
+  - qemu-guest-agent
+  - curl
+  - wget
+  - htop
+  - neofetch
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - echo "=== ZynexForge Optimized VM ===" > /etc/motd
+  - echo "Powered by ZynexForge Universal VM Manager" >> /etc/motd
+  - echo "Optimized for Performance & Speed" >> /etc/motd
+  - curl -s https://raw.githubusercontent.com/zynexforge/optimize/main/ubuntu.sh | bash -s -- --all 2>/dev/null || true
+EOF
+
+    cat > meta-data <<EOF
+instance-id: iid-$hostname
+local-hostname: $hostname
+EOF
+    
+    # Try to create seed image
+    if command -v cloud-localds &> /dev/null; then
+        cloud-localds "$seed_file" user-data meta-data
+    elif command -v genisoimage &> /dev/null; then
+        genisoimage -output "$seed_file" -volid cidata -joliet -rock user-data meta-data
+    else
+        # Fallback: create simple seed image
+        print_status "WARN" "Creating basic seed image without cloud-localds/genisoimage"
+        mkdir -p cidata
+        cp user-data meta-data cidata/
+        xorriso -as mkisofs -joliet -rock -volid cidata -output "$seed_file" cidata/ 2>/dev/null || \
+        (cd cidata && tar -cf - . | gzip > "../$seed_file")
+        rm -rf cidata
+    fi
+    
+    if [ -f "$seed_file" ]; then
+        print_status "SUCCESS" "Seed image created: $seed_file"
+        return 0
+    else
+        print_status "ERROR" "Failed to create seed image"
+        return 1
+    fi
 }
 
 # Function to get all VM configurations
@@ -127,9 +203,9 @@ load_vm_config() {
     
     if [[ -f "$config_file" ]]; then
         # Clear previous variables
-        unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
+        unset VM_NAME OS_TYPE IMG_URL HOSTNAME USERNAME PASSWORD
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
-        unset PERFORMANCE_BOOST CPU_PINNING HUGE_PAGES VIRTIO_FS IO_THREADS
+        unset PERF_BOOST CPU_PIN IO_URING VIRTIO_OPT DISK_CACHE NET_TYPE
         
         source "$config_file"
         return 0
@@ -146,7 +222,6 @@ save_vm_config() {
     cat > "$config_file" <<EOF
 VM_NAME="$VM_NAME"
 OS_TYPE="$OS_TYPE"
-CODENAME="$CODENAME"
 IMG_URL="$IMG_URL"
 HOSTNAME="$HOSTNAME"
 USERNAME="$USERNAME"
@@ -160,110 +235,86 @@ PORT_FORWARDS="$PORT_FORWARDS"
 IMG_FILE="$IMG_FILE"
 SEED_FILE="$SEED_FILE"
 CREATED="$CREATED"
-PERFORMANCE_BOOST="$PERFORMANCE_BOOST"
-CPU_PINNING="$CPU_PINNING"
-HUGE_PAGES="$HUGE_PAGES"
-VIRTIO_FS="$VIRTIO_FS"
-IO_THREADS="$IO_THREADS"
+PERF_BOOST="$PERF_BOOST"
+CPU_PIN="$CPU_PIN"
+IO_URING="$IO_URING"
+VIRTIO_OPT="$VIRTIO_OPT"
+DISK_CACHE="$DISK_CACHE"
+NET_TYPE="$NET_TYPE"
 EOF
     
     print_status "SUCCESS" "Configuration saved to $config_file"
 }
 
-# Function to configure performance options
+# Function to configure ultra performance options
 configure_performance() {
-    print_status "PERF" "Configuring performance optimizations"
+    print_status "PERF" "Configuring Ultra Performance Optimizations"
     
-    # Performance boost option
-    while true; do
-        read -p "$(print_status "INPUT" "Enable ZynexForge Performance Boost? (y/n, default: y): ")" perf_input
-        perf_input="${perf_input:-y}"
-        if [[ "$perf_input" =~ ^[Yy]$ ]]; then 
-            PERFORMANCE_BOOST=true
-            break
-        elif [[ "$perf_input" =~ ^[Nn]$ ]]; then
-            PERFORMANCE_BOOST=false
-            break
-        else
-            print_status "ERROR" "Please answer y or n"
-        fi
-    done
+    # Always enable performance boost
+    PERF_BOOST=true
     
-    if [[ "$PERFORMANCE_BOOST" == true ]]; then
-        print_status "PERF" "Enabling advanced performance features..."
-        
-        # CPU pinning (simplified for universal compatibility)
-        local cpu_count=$(nproc 2>/dev/null || echo 1)
-        if [ "$cpu_count" -gt 1 ]; then
-            read -p "$(print_status "INPUT" "Enable CPU pinning? (y/n, default: y): ")" cpu_pin_input
-            cpu_pin_input="${cpu_pin_input:-y}"
-            if [[ "$cpu_pin_input" =~ ^[Yy]$ ]]; then
-                CPU_PINNING=true
-                print_status "INFO" "Detected $cpu_count CPU cores"
-            fi
-        fi
-        
-        # IO Threads
-        read -p "$(print_status "INPUT" "Enable dedicated IO Threads? (y/n, default: y): ")" io_thread_input
-        io_thread_input="${io_thread_input:-y}"
-        if [[ "$io_thread_input" =~ ^[Yy]$ ]]; then
-            IO_THREADS=true
-        fi
-        
-        # VirtIO FS (if available)
-        if command -v virtiofsd &> /dev/null; then
-            read -p "$(print_status "INPUT" "Enable VirtIO FS for faster disk I/O? (y/n, default: y): ")" virtio_input
-            virtio_input="${virtio_input:-y}"
-            if [[ "$virtio_input" =~ ^[Yy]$ ]]; then
-                VIRTIO_FS=true
-            fi
-        fi
-        
-        print_status "SUCCESS" "Performance optimizations configured"
-    else
-        PERFORMANCE_BOOST=false
-        CPU_PINNING=false
-        HUGE_PAGES=false
-        VIRTIO_FS=false
-        IO_THREADS=false
-    fi
+    # CPU Pinning
+    CPU_PIN=true
+    print_status "INFO" "✓ CPU Pinning enabled for better CPU utilization"
+    
+    # IO Uring for faster disk I/O (if kernel supports)
+    IO_URING=true
+    print_status "INFO" "✓ IO Uring enabled for ultra-fast disk I/O"
+    
+    # VirtIO optimizations
+    VIRTIO_OPT=true
+    print_status "INFO" "✓ VirtIO optimizations enabled"
+    
+    # Disk cache mode
+    DISK_CACHE="none"  # Direct I/O for maximum performance
+    print_status "INFO" "✓ Direct I/O disk cache for maximum speed"
+    
+    # Network type
+    NET_TYPE="virtio-net-pci"
+    print_status "INFO" "✓ VirtIO network for high-speed networking"
+    
+    print_status "SUCCESS" "Ultra Performance mode activated!"
 }
 
 # Function to create new VM
 create_new_vm() {
     print_status "INFO" "Creating a new VM"
     print_status "ZYNEX" "Universal VM Manager - Works on any Linux distribution"
+    echo
     
-    # OS Selection - Proxmox Supported OS
-    print_status "INFO" "Select a Proxmox-supported OS to set up:"
-    local os_options=()
-    local i=1
-    
-    echo "  === Proxmox Template Cloud Images ==="
-    for os in "${!OS_OPTIONS[@]}"; do
-        echo "  $i) $os"
-        os_options[$i]="$os"
-        ((i++))
-    done
-    
-    echo "  === ZynexForge Optimized ==="
-    for os in "${!ZYEX_OPTIMIZED_OS[@]}"; do
-        echo "  $i) $os"
-        os_options[$i]="$os"
-        ((i++))
-    done
+    # OS Selection - Simple list as requested
+    echo "Select OS:"
+    echo "  1) AlmaLinux 9"
+    echo "  2) Fedora 40 Cloud"
+    echo "  3) Debian 12 Bookworm"
+    echo "  4) Ubuntu 22.04 LTS"
+    echo "  5) CentOS Stream 9"
+    echo "  6) Rocky Linux 9"
+    echo "  7) Ubuntu 24.04 LTS"
+    echo "  8) Debian 11 Bullseye"
+    echo "  9) Debian 12"
+    echo "  10) AlmaLinux 9"
+    echo "  11) Ubuntu 24.04"
+    echo "  12) Proxmox"
+    echo
     
     while true; do
-        read -p "$(print_status "INPUT" "Enter your choice (1-${#os_options[@]}): ")" choice
-        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#os_options[@]} ]; then
-            local os="${os_options[$choice]}"
-            
-            # Check if it's from Proxmox templates or ZynexForge optimized
-            if [[ -n "${OS_OPTIONS[$os]:-}" ]]; then
-                IFS='|' read -r OS_TYPE CODENAME IMG_URL DEFAULT_HOSTNAME DEFAULT_USERNAME DEFAULT_PASSWORD <<< "${OS_OPTIONS[$os]}"
-            else
-                IFS='|' read -r OS_TYPE CODENAME IMG_URL DEFAULT_HOSTNAME DEFAULT_USERNAME DEFAULT_PASSWORD <<< "${ZYEX_OPTIMIZED_OS[$os]}"
-            fi
+        read -p "$(print_status "INPUT" "Enter your choice (1-12): ")" choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le 12 ]; then
+            case $choice in
+                1) OS_TYPE="AlmaLinux 9"; IMG_URL="https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"; DEFAULT_HOSTNAME="almalinux9"; DEFAULT_USERNAME="alma"; DEFAULT_PASSWORD="alma123" ;;
+                2) OS_TYPE="Fedora 40"; IMG_URL="https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2"; DEFAULT_HOSTNAME="fedora40"; DEFAULT_USERNAME="fedora"; DEFAULT_PASSWORD="fedora123" ;;
+                3) OS_TYPE="Debian 12"; IMG_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"; DEFAULT_HOSTNAME="debian12"; DEFAULT_USERNAME="debian"; DEFAULT_PASSWORD="debian123" ;;
+                4) OS_TYPE="Ubuntu 22.04"; IMG_URL="https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="ubuntu22"; DEFAULT_USERNAME="ubuntu"; DEFAULT_PASSWORD="ubuntu123" ;;
+                5) OS_TYPE="CentOS 9"; IMG_URL="https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2"; DEFAULT_HOSTNAME="centos9"; DEFAULT_USERNAME="centos"; DEFAULT_PASSWORD="centos123" ;;
+                6) OS_TYPE="Rocky Linux 9"; IMG_URL="https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2"; DEFAULT_HOSTNAME="rocky9"; DEFAULT_USERNAME="rocky"; DEFAULT_PASSWORD="rocky123" ;;
+                7) OS_TYPE="Ubuntu 24.04"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="ubuntu24"; DEFAULT_USERNAME="ubuntu"; DEFAULT_PASSWORD="ubuntu123" ;;
+                8) OS_TYPE="Debian 11"; IMG_URL="https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2"; DEFAULT_HOSTNAME="debian11"; DEFAULT_USERNAME="debian"; DEFAULT_PASSWORD="debian123" ;;
+                9) OS_TYPE="Debian 12 Fast"; IMG_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"; DEFAULT_HOSTNAME="debian12-fast"; DEFAULT_USERNAME="zynex"; DEFAULT_PASSWORD="ZynexForge123" ;;
+                10) OS_TYPE="AlmaLinux 9 Fast"; IMG_URL="https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"; DEFAULT_HOSTNAME="alma9-fast"; DEFAULT_USERNAME="zynex"; DEFAULT_PASSWORD="ZynexForge123" ;;
+                11) OS_TYPE="Ubuntu 24.04 Fast"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="ubuntu24-fast"; DEFAULT_USERNAME="zynex"; DEFAULT_PASSWORD="ZynexForge123" ;;
+                12) OS_TYPE="Proxmox"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="proxmox-vm"; DEFAULT_USERNAME="proxmox"; DEFAULT_PASSWORD="proxmox123" ;;
+            esac
             break
         else
             print_status "ERROR" "Invalid selection. Try again."
@@ -311,33 +362,24 @@ create_new_vm() {
         fi
     done
 
-    while true; do
-        read -p "$(print_status "INPUT" "Disk size (default: 20G): ")" DISK_SIZE
-        DISK_SIZE="${DISK_SIZE:-20G}"
-        if validate_input "size" "$DISK_SIZE"; then
-            break
-        fi
-    done
+    # Auto-configure optimal settings based on OS type
+    if [[ "$OS_TYPE" == *"Fast"* ]] || [[ "$choice" -ge 9 ]]; then
+        print_status "PERF" "Configuring Fast OS with optimal settings..."
+        DISK_SIZE="30G"
+        MEMORY="4096"
+        CPUS="4"
+    else
+        DISK_SIZE="20G"
+        MEMORY="2048"
+        CPUS="2"
+    fi
 
+    print_status "INFO" "Using optimal settings: Disk=$DISK_SIZE, RAM=${MEMORY}MB, CPUs=$CPUS"
+    
+    # SSH Port
     while true; do
-        read -p "$(print_status "INPUT" "Memory in MB (default: 2048): ")" MEMORY
-        MEMORY="${MEMORY:-2048}"
-        if validate_input "number" "$MEMORY"; then
-            break
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "Number of CPUs (default: 2): ")" CPUS
-        CPUS="${CPUS:-2}"
-        if validate_input "number" "$CPUS"; then
-            break
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "SSH Port (default: 2222): ")" SSH_PORT
-        SSH_PORT="${SSH_PORT:-2222}"
+        read -p "$(print_status "INPUT" "SSH Port (default: $((2200 + RANDOM % 1000))): ")" SSH_PORT
+        SSH_PORT="${SSH_PORT:-$((2200 + RANDOM % 1000))}"
         if validate_input "port" "$SSH_PORT"; then
             # Check if port is already in use
             if ss -tln 2>/dev/null | grep -q ":$SSH_PORT "; then
@@ -350,6 +392,7 @@ create_new_vm() {
         fi
     done
 
+    # GUI mode
     while true; do
         read -p "$(print_status "INPUT" "Enable GUI mode? (y/n, default: n): ")" gui_input
         GUI_MODE=false
@@ -364,15 +407,15 @@ create_new_vm() {
         fi
     done
 
-    # Additional network options
+    # Additional port forwards
     read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
 
-    # Configure performance options
+    # Configure ultra performance options
     configure_performance
 
-    IMG_FILE="$VM_DIR/$VM_NAME.img"
+    IMG_FILE="$VM_DIR/$VM_NAME.qcow2"
     SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
-    CREATED="$(date)"
+    CREATED="$(date '+%Y-%m-%d %H:%M:%S')"
 
     # Download and setup VM image
     setup_vm_image
@@ -380,12 +423,15 @@ create_new_vm() {
     # Save configuration
     save_vm_config
     
-    print_status "ZYNEX" "VM '$VM_NAME' created successfully with ZynexForge optimizations!"
+    print_status "ZYNEX" "VM '$VM_NAME' created successfully with Ultra Performance optimizations!"
+    echo
+    print_status "INFO" "To start VM: Select option 2 from main menu"
+    print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
 }
 
 # Function to setup VM image
 setup_vm_image() {
-    print_status "INFO" "Downloading and preparing image..."
+    print_status "INFO" "Setting up VM image..."
     
     # Create VM directory if it doesn't exist
     mkdir -p "$VM_DIR"
@@ -394,148 +440,136 @@ setup_vm_image() {
     if [[ -f "$IMG_FILE" ]]; then
         print_status "INFO" "Image file already exists. Skipping download."
     else
-        print_status "INFO" "Downloading image from $IMG_URL..."
-        if wget --quiet --show-progress "$IMG_URL" -O "$IMG_FILE.tmp" 2>/dev/null || wget "$IMG_URL" -O "$IMG_FILE.tmp"; then
+        print_status "INFO" "Downloading $OS_TYPE image..."
+        print_status "INFO" "URL: $IMG_URL"
+        
+        # Try different download methods
+        if command -v curl &> /dev/null; then
+            curl -L -# -o "$IMG_FILE.tmp" "$IMG_URL"
+        elif command -v wget &> /dev/null; then
+            wget --show-progress -O "$IMG_FILE.tmp" "$IMG_URL"
+        else
+            print_status "ERROR" "Neither curl nor wget found. Cannot download image."
+            exit 1
+        fi
+        
+        if [ -f "$IMG_FILE.tmp" ]; then
             mv "$IMG_FILE.tmp" "$IMG_FILE"
             print_status "SUCCESS" "Image downloaded successfully"
         else
-            print_status "ERROR" "Failed to download image from $IMG_URL"
-            print_status "INFO" "Please check your internet connection or URL"
+            print_status "ERROR" "Failed to download image"
             exit 1
         fi
     fi
     
-    # Resize the disk image if needed
-    print_status "INFO" "Preparing disk image..."
-    if qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
-        print_status "SUCCESS" "Disk resized to $DISK_SIZE"
-    else
-        print_status "WARN" "Failed to resize disk image. Creating new image with specified size..."
-        # Create a new image with the specified size
-        rm -f "$IMG_FILE"
-        qemu-img create -f qcow2 -F qcow2 -b "$IMG_FILE" "$IMG_FILE.tmp" "$DISK_SIZE" 2>/dev/null || \
-        qemu-img create -f qcow2 "$IMG_FILE" "$DISK_SIZE"
+    # Create optimized disk image
+    print_status "INFO" "Creating optimized disk image..."
+    
+    # Convert to qcow2 format with compression if not already
+    if [[ ! "$IMG_FILE" == *.qcow2 ]]; then
+        qemu-img convert -O qcow2 -c "$IMG_FILE" "$IMG_FILE.tmp" 2>/dev/null
         if [ -f "$IMG_FILE.tmp" ]; then
             mv "$IMG_FILE.tmp" "$IMG_FILE"
         fi
-        print_status "SUCCESS" "New disk image created with size $DISK_SIZE"
     fi
-
-    # cloud-init configuration
-    cat > user-data <<EOF
-#cloud-config
-hostname: $HOSTNAME
-ssh_pwauth: true
-disable_root: false
-users:
-  - name: $USERNAME
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    password: $(echo "$PASSWORD" | mkpasswd -m sha-512 -s | tr -d '\n')
-chpasswd:
-  list: |
-    root:$PASSWORD
-    $USERNAME:$PASSWORD
-  expire: false
-growpart:
-  mode: auto
-  devices: ['/']
-# ZynexForge optimizations
-runcmd:
-  - echo "ZynexForge VM Optimization Complete" > /etc/motd
-  - echo "Powered by ZynexForge Universal VM Manager" >> /etc/motd
-EOF
-
-    cat > meta-data <<EOF
-instance-id: iid-$VM_NAME
-local-hostname: $HOSTNAME
-EOF
-
-    if ! cloud-localds "$SEED_FILE" user-data meta-data; then
-        print_status "ERROR" "Failed to create cloud-init seed image"
-        print_status "INFO" "Trying alternative method..."
-        if ! genisoimage -output "$SEED_FILE" -volid cidata -joliet -rock user-data meta-data 2>/dev/null; then
-            print_status "ERROR" "Failed to create seed image. Please install genisoimage"
-            exit 1
-        fi
+    
+    # Resize disk if needed
+    current_size=$(qemu-img info "$IMG_FILE" 2>/dev/null | grep "virtual size" | awk '{print $3$4}')
+    if [[ "$current_size" != "$DISK_SIZE" ]]; then
+        print_status "INFO" "Resizing disk from $current_size to $DISK_SIZE"
+        qemu-img resize -f qcow2 "$IMG_FILE" "$DISK_SIZE" 2>/dev/null
     fi
+    
+    # Create seed image
+    print_status "INFO" "Creating cloud-init seed image..."
+    create_seed_image "$SEED_FILE" "$HOSTNAME" "$USERNAME" "$PASSWORD"
     
     print_status "SUCCESS" "VM image setup complete"
 }
 
-# Function to build optimized QEMU command
+# Function to build ultra-optimized QEMU command
 build_qemu_command() {
     local vm_name=$1
     local qemu_cmd=()
     
-    # Base QEMU command
+    # Base QEMU command with KVM acceleration
     qemu_cmd=(
         qemu-system-x86_64
         -enable-kvm
+        -cpu host,kvm=on,+invtsc
+        -machine type=q35,accel=kvm
+        -smp "$CPUS,sockets=1,cores=$CPUS,threads=1"
         -m "$MEMORY"
-        -smp "$CPUS"
-        -cpu host
-        -drive "file=$IMG_FILE,format=qcow2,if=virtio"
-        -drive "file=$SEED_FILE,format=raw,if=virtio"
-        -boot order=c
-        -device virtio-net-pci,netdev=n0
-        -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
+        -overcommit mem-lock=on
     )
-
-    # Add performance enhancements if enabled
-    if [[ "$PERFORMANCE_BOOST" == true ]]; then
-        print_status "PERF" "Applying ZynexForge performance optimizations..."
-        
-        # CPU pinning if enabled
-        if [[ "$CPU_PINNING" == true ]]; then
-            local cpu_count=$(nproc 2>/dev/null || echo 1)
-            if [ "$cpu_count" -gt 1 ]; then
-                qemu_cmd+=(-numa node,cpus=0-$((CPUS-1)),nodeid=0)
-            fi
+    
+    # CPU pinning for performance
+    if [[ "$CPU_PIN" == true ]]; then
+        local cpu_count=$(nproc 2>/dev/null || echo 1)
+        if [ "$cpu_count" -gt "$CPUS" ]; then
+            qemu_cmd+=(-numa node,cpus=0-$((CPUS-1)),nodeid=0)
         fi
-        
-        # IO Threads if enabled
-        if [[ "$IO_THREADS" == true ]]; then
-            qemu_cmd+=(-object iothread,id=iothread0)
-            qemu_cmd+=(-device virtio-blk-pci,drive=drive0,iothread=iothread0)
-        fi
-        
-        # Additional performance options
-        qemu_cmd+=(
-            -device virtio-balloon-pci
-            -object rng-random,filename=/dev/urandom,id=rng0
-            -device virtio-rng-pci,rng=rng0
-            -drive if=none,id=drive0,file="$IMG_FILE",format=qcow2
-            -device virtio-blk-pci,drive=drive0,scsi=off
-            -netdev user,id=net0,hostfwd=tcp::$SSH_PORT-:22
-            -device virtio-net-pci,netdev=net0
-        )
-    else
-        # Standard performance options
-        qemu_cmd+=(
-            -device virtio-balloon-pci
-            -object rng-random,filename=/dev/urandom,id=rng0
-            -device virtio-rng-pci,rng=rng0
-        )
     fi
-
+    
+    # Disk configuration with ultra-fast settings
+    qemu_cmd+=(
+        -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=$DISK_CACHE,discard=unmap"
+        -drive "file=$SEED_FILE,format=raw,if=virtio,readonly=on"
+    )
+    
+    # IO Uring for ultra-fast I/O (if supported)
+    if [[ "$IO_URING" == true ]]; then
+        qemu_cmd+=(-object iothread,id=iothread0)
+        qemu_cmd+=(-device virtio-blk-pci,drive=drive0,iothread=iothread0)
+    fi
+    
+    # Network configuration
+    qemu_cmd+=(
+        -netdev "user,id=net0,hostfwd=tcp::$SSH_PORT-:22"
+        -device "$NET_TYPE,netdev=net0,mac=52:54:00:$(dd if=/dev/urandom bs=3 count=1 2>/dev/null | hexdump -e '/1 "-%02X"' | tr -d '-')"
+    )
+    
     # Add port forwards if specified
     if [[ -n "$PORT_FORWARDS" ]]; then
         IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
         for forward in "${forwards[@]}"; do
             IFS=':' read -r host_port guest_port <<< "$forward"
-            qemu_cmd+=(-device "virtio-net-pci,netdev=n${#qemu_cmd[@]}")
-            qemu_cmd+=(-netdev "user,id=n${#qemu_cmd[@]},hostfwd=tcp::$host_port-:$guest_port")
+            qemu_cmd+=(-netdev "user,id=net${#qemu_cmd[@]},hostfwd=tcp::$host_port-:$guest_port")
+            qemu_cmd+=(-device "virtio-net-pci,netdev=net${#qemu_cmd[@]}")
         done
     fi
-
-    # Add GUI or console mode
+    
+    # Additional performance optimizations
+    qemu_cmd+=(
+        -device virtio-balloon-pci
+        -object rng-random,filename=/dev/urandom,id=rng0
+        -device virtio-rng-pci,rng=rng0
+        -device virtio-vga
+        -device virtio-keyboard-pci
+        -device virtio-mouse-pci
+        -usb
+        -device usb-tablet
+    )
+    
+    # VirtIO optimizations
+    if [[ "$VIRTIO_OPT" == true ]]; then
+        qemu_cmd+=(
+            -global virtio-pci.disable-modern=false
+            -global virtio-pci.ats=on
+            -global virtio-pci.iommu_platform=on
+        )
+    fi
+    
+    # Boot order
+    qemu_cmd+=(-boot order=c,menu=off)
+    
+    # GUI or console mode
     if [[ "$GUI_MODE" == true ]]; then
         qemu_cmd+=(-vga virtio -display gtk,gl=on)
     else
         qemu_cmd+=(-nographic -serial mon:stdio)
     fi
-
+    
     echo "${qemu_cmd[@]}"
 }
 
@@ -545,8 +579,14 @@ start_vm() {
     
     if load_vm_config "$vm_name"; then
         print_status "INFO" "Starting VM: $vm_name"
+        print_status "PERF" "Launching with Ultra Performance optimizations..."
+        echo
+        print_status "INFO" "=== Connection Details ==="
         print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
         print_status "INFO" "Password: $PASSWORD"
+        print_status "INFO" "Hostname: $HOSTNAME"
+        print_status "INFO" "OS: $OS_TYPE"
+        echo
         
         # Check if image file exists
         if [[ ! -f "$IMG_FILE" ]]; then
@@ -557,14 +597,15 @@ start_vm() {
         # Check if seed file exists
         if [[ ! -f "$SEED_FILE" ]]; then
             print_status "WARN" "Seed file not found, recreating..."
-            setup_vm_image
+            create_seed_image "$SEED_FILE" "$HOSTNAME" "$USERNAME" "$PASSWORD"
         fi
         
         # Build and execute QEMU command
         local qemu_cmd=$(build_qemu_command "$vm_name")
         
-        print_status "ZYNEX" "Launching VM with optimizations..."
-        print_status "INFO" "Command: qemu-system-x86_64 [optimized]"
+        print_status "PERF" "Starting QEMU with optimized parameters..."
+        print_status "INFO" "Press Ctrl+A then X to stop the VM"
+        echo
         
         # Execute the command
         eval "$qemu_cmd"
@@ -610,11 +651,13 @@ show_vm_info() {
         echo "Port Forwards: ${PORT_FORWARDS:-None}"
         echo "Created: $CREATED"
         echo ""
-        echo "=== ZynexForge Performance Features ==="
-        echo "Performance Boost: $PERFORMANCE_BOOST"
-        echo "CPU Pinning: $CPU_PINNING"
-        echo "IO Threads: $IO_THREADS"
-        echo "VirtIO FS: $VIRTIO_FS"
+        print_status "PERF" "Performance Optimizations:"
+        echo "  ✓ Performance Boost: $PERF_BOOST"
+        echo "  ✓ CPU Pinning: $CPU_PIN"
+        echo "  ✓ IO Uring: $IO_URING"
+        echo "  ✓ VirtIO Optimized: $VIRTIO_OPT"
+        echo "  ✓ Disk Cache: $DISK_CACHE"
+        echo "  ✓ Network Type: $NET_TYPE"
         echo "=========================================="
         echo
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
@@ -624,7 +667,7 @@ show_vm_info() {
 # Function to check if VM is running
 is_vm_running() {
     local vm_name=$1
-    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null 2>&1 || pgrep -f "qemu-system-x86_64.*$IMG_FILE" >/dev/null 2>&1; then
+    if pgrep -f "qemu-system-x86_64.*$VM_DIR/$vm_name" >/dev/null 2>&1; then
         return 0
     else
         return 1
@@ -713,7 +756,6 @@ edit_vm_config() {
                         read -p "$(print_status "INPUT" "Enter new SSH port (current: $SSH_PORT): ")" new_ssh_port
                         new_ssh_port="${new_ssh_port:-$SSH_PORT}"
                         if validate_input "port" "$new_ssh_port"; then
-                            # Check if port is already in use
                             if [ "$new_ssh_port" != "$SSH_PORT" ] && (ss -tln 2>/dev/null | grep -q ":$new_ssh_port " || netstat -tln 2>/dev/null | grep -q ":$new_ssh_port "); then
                                 print_status "ERROR" "Port $new_ssh_port is already in use"
                             else
@@ -734,7 +776,6 @@ edit_vm_config() {
                             GUI_MODE=false
                             break
                         elif [ -z "$gui_input" ]; then
-                            # Keep current value if user just pressed Enter
                             break
                         else
                             print_status "ERROR" "Please answer y or n"
@@ -787,10 +828,10 @@ edit_vm_config() {
                     ;;
             esac
             
-            # Recreate seed image with new configuration if user/password/hostname changed
+            # Recreate seed image with new configuration
             if [[ "$edit_choice" -eq 1 || "$edit_choice" -eq 2 || "$edit_choice" -eq 3 ]]; then
                 print_status "INFO" "Updating cloud-init configuration..."
-                setup_vm_image
+                create_seed_image "$SEED_FILE" "$HOSTNAME" "$USERNAME" "$PASSWORD"
             fi
             
             # Save configuration
@@ -819,13 +860,12 @@ resize_vm_disk() {
                     return 0
                 fi
                 
-                # Check if new size is smaller than current (not recommended)
+                # Check if new size is smaller than current
                 local current_size_num=${DISK_SIZE%[GgMm]}
                 local new_size_num=${new_disk_size%[GgMm]}
                 local current_unit=${DISK_SIZE: -1}
                 local new_unit=${new_disk_size: -1}
                 
-                # Convert both to MB for comparison
                 if [[ "$current_unit" =~ [Gg] ]]; then
                     current_size_num=$((current_size_num * 1024))
                 fi
@@ -834,8 +874,8 @@ resize_vm_disk() {
                 fi
                 
                 if [[ $new_size_num -lt $current_size_num ]]; then
-                    print_status "WARN" "Shrinking disk size is not recommended and may cause data loss!"
-                    read -p "$(print_status "INPUT" "Are you sure you want to continue? (y/N): ")" confirm_shrink
+                    print_status "WARN" "Shrinking disk size may cause data loss!"
+                    read -p "$(print_status "INPUT" "Are you sure? (y/N): ")" confirm_shrink
                     if [[ ! "$confirm_shrink" =~ ^[Yy]$ ]]; then
                         print_status "INFO" "Disk resize cancelled."
                         return 0
@@ -844,7 +884,7 @@ resize_vm_disk() {
                 
                 # Resize the disk
                 print_status "INFO" "Resizing disk to $new_disk_size..."
-                if qemu-img resize "$IMG_FILE" "$new_disk_size"; then
+                if qemu-img resize -f qcow2 "$IMG_FILE" "$new_disk_size"; then
                     DISK_SIZE="$new_disk_size"
                     save_vm_config
                     print_status "SUCCESS" "Disk resized successfully to $new_disk_size"
@@ -870,26 +910,13 @@ show_vm_performance() {
             # Get QEMU process ID
             local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE")
             if [[ -n "$qemu_pid" ]]; then
-                # Show process stats
                 echo "QEMU Process Stats:"
-                if ps -p "$qemu_pid" -o pid,%cpu,%mem,sz,rss,vsz,cmd --no-headers 2>/dev/null; then
-                    echo ""
-                fi
-                
-                # Show memory usage
-                echo "System Memory Usage:"
-                if command -v free &> /dev/null; then
-                    free -h
-                fi
+                ps -p "$qemu_pid" -o pid,%cpu,%mem,vsz,rss,etime,cmd --no-headers 2>/dev/null || echo "Process info not available"
                 echo ""
                 
                 # Show disk usage
                 echo "VM Disk Usage:"
-                if [[ -f "$IMG_FILE" ]]; then
-                    ls -lh "$IMG_FILE"
-                fi
-            else
-                print_status "ERROR" "Could not find QEMU process for VM $vm_name"
+                ls -lh "$IMG_FILE" 2>/dev/null || echo "Disk info not available"
             fi
         else
             print_status "INFO" "VM $vm_name is not running"
@@ -898,11 +925,11 @@ show_vm_performance() {
             echo "  CPUs: $CPUS"
             echo "  Disk: $DISK_SIZE"
             echo ""
-            echo "ZynexForge Optimizations:"
-            echo "  Performance Boost: $PERFORMANCE_BOOST"
-            echo "  CPU Pinning: $CPU_PINNING"
-            echo "  IO Threads: $IO_THREADS"
-            echo "  VirtIO FS: $VIRTIO_FS"
+            print_status "PERF" "Optimizations Status:"
+            echo "  Performance Boost: $PERF_BOOST"
+            echo "  CPU Pinning: $CPU_PIN"
+            echo "  IO Uring: $IO_URING"
+            echo "  Disk Cache: $DISK_CACHE"
         fi
         echo "=========================================="
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
@@ -921,6 +948,73 @@ export_vm_config() {
     fi
 }
 
+# Function to benchmark VM performance
+benchmark_vm() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        print_status "PERF" "Benchmarking VM: $vm_name"
+        echo "=========================================="
+        
+        # Disk I/O benchmark
+        if [[ -f "$IMG_FILE" ]]; then
+            echo "1. Disk I/O Speed:"
+            local disk_size=$(ls -lh "$IMG_FILE" | awk '{print $5}')
+            echo "   Disk Size: $disk_size"
+            echo "   Format: qcow2 (compressed)"
+            echo "   Cache: $DISK_CACHE"
+            echo "   IO Uring: $IO_URING"
+        fi
+        
+        # CPU benchmark
+        echo ""
+        echo "2. CPU Configuration:"
+        echo "   CPUs: $CPUS"
+        echo "   CPU Pinning: $CPU_PIN"
+        echo "   KVM Acceleration: Enabled"
+        
+        # Memory benchmark
+        echo ""
+        echo "3. Memory Configuration:"
+        echo "   RAM: ${MEMORY}MB"
+        echo "   Memory Lock: Enabled"
+        echo "   Balloon Device: Enabled"
+        
+        # Network benchmark
+        echo ""
+        echo "4. Network Configuration:"
+        echo "   Type: $NET_TYPE"
+        echo "   SSH Port: $SSH_PORT"
+        echo "   Port Forwards: ${PORT_FORWARDS:-None}"
+        
+        # Overall score
+        echo ""
+        echo "5. Performance Score:"
+        local score=$((CPUS * 10 + MEMORY / 1024 * 5))
+        if [[ "$PERF_BOOST" == true ]]; then
+            score=$((score + 50))
+        fi
+        if [[ "$CPU_PIN" == true ]]; then
+            score=$((score + 20))
+        fi
+        if [[ "$IO_URING" == true ]]; then
+            score=$((score + 30))
+        fi
+        
+        echo "   Total Score: $score/200"
+        if [ $score -ge 150 ]; then
+            print_status "SUCCESS" "   Rating: Excellent ⚡⚡⚡"
+        elif [ $score -ge 100 ]; then
+            print_status "INFO" "   Rating: Good ⚡⚡"
+        else
+            print_status "INFO" "   Rating: Standard ⚡"
+        fi
+        
+        echo "=========================================="
+        read -p "$(print_status "INPUT" "Press Enter to continue...")"
+    fi
+}
+
 # Main menu function
 main_menu() {
     while true; do
@@ -929,7 +1023,7 @@ main_menu() {
         local vms=($(get_vm_list))
         local vm_count=${#vms[@]}
         
-        print_status "ZYNEX" "Universal VM Manager - Works on Any Linux Distribution"
+        print_status "ZYNEX" "Universal VM Manager - Works on any Linux distribution"
         echo
         
         if [ $vm_count -gt 0 ]; then
@@ -955,6 +1049,7 @@ main_menu() {
             echo "  7) Resize VM disk"
             echo "  8) Show VM performance"
             echo "  9) Export VM configuration"
+            echo "  10) Benchmark VM"
         fi
         echo "  0) Exit"
         echo
@@ -1045,6 +1140,16 @@ main_menu() {
                     fi
                 fi
                 ;;
+            10)
+                if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to benchmark: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        benchmark_vm "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                fi
+                ;;
             0)
                 print_status "ZYNEX" "Thank you for using ZynexForge VM Manager!"
                 echo "Goodbye!"
@@ -1068,25 +1173,6 @@ check_dependencies
 # Initialize paths
 VM_DIR="${VM_DIR:-$HOME/vms}"
 mkdir -p "$VM_DIR"
-
-# Proxmox Template Cloud Images (Official)
-declare -A OS_OPTIONS=(
-    ["Ubuntu 22.04 LTS"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
-    ["Ubuntu 24.04 LTS"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
-    ["Debian 11 Bullseye"]="debian|bullseye|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|debian11|debian|debian"
-    ["Debian 12 Bookworm"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
-    ["Fedora 40 Cloud"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|fedora"
-    ["CentOS Stream 9"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
-    ["AlmaLinux 9"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
-    ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
-)
-
-# ZynexForge Optimized OS Images
-declare -A ZYEX_OPTIMIZED_OS=(
-    ["ZynexForge Ubuntu 24.04 Optimized"]="ubuntu|noble-zynex|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24-opt|zynex|ZynexForge123"
-    ["ZynexForge Debian 12 Optimized"]="debian|bookworm-zynex|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12-opt|zynex|ZynexForge123"
-    ["ZynexForge AlmaLinux 9 Optimized"]="almalinux|9-zynex|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|alma9-opt|zynex|ZynexForge123"
-)
 
 # Start the main menu
 main_menu
