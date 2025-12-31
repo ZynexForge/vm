@@ -103,13 +103,13 @@ check_dependencies() {
     
     # Check for AMD CPU using cpuid (available in your packages)
     if command -v cpuid &> /dev/null; then
-        if cpuid | grep -q "AMD"; then
+        if cpuid 2>/dev/null | grep -q "AMD"; then
             print_status "CPU" "AMD CPU detected - Enabling optimizations"
             AMD_CPU=true
         else
             AMD_CPU=false
         fi
-    elif grep -q "AMD" /proc/cpuinfo; then
+    elif grep -q "AMD" /proc/cpuinfo 2>/dev/null; then
         print_status "CPU" "AMD CPU detected - Enabling optimizations"
         AMD_CPU=true
     else
@@ -117,7 +117,7 @@ check_dependencies() {
     fi
     
     # Check for virtualization support
-    if grep -q -E "vmx|svm" /proc/cpuinfo; then
+    if grep -q -E "vmx|svm" /proc/cpuinfo 2>/dev/null; then
         print_status "SUCCESS" "Hardware virtualization support detected"
     else
         print_status "WARN" "Hardware virtualization not detected - Performance may be limited"
@@ -184,7 +184,6 @@ setup_network() {
     print_status "NET" "Configuring network options"
     
     # Simple network configuration using user-mode networking (NAT)
-    # This works with the packages available
     print_status "INFO" "Using user-mode networking (NAT) with port forwarding"
     
     # Check if port is available
@@ -212,15 +211,15 @@ setup_cpu() {
     # Get CPU info using available tools
     if command -v cpuid &> /dev/null; then
         print_status "INFO" "CPU Information:"
-        cpuid | grep -E "(AMD|Intel|vendor|family|model)" | head -5
+        cpuid 2>/dev/null | grep -E "(AMD|Intel|vendor|family|model)" | head -5 || true
     fi
     
     # Simple CPU configuration - using host model for best performance
     print_status "INFO" "Using host CPU model for best performance"
     
     # Get available CPU cores
-    local total_cores=$(nproc)
-    local max_cpus=$total_cores
+    local total_cores=$(nproc 2>/dev/null || echo 2)
+    local max_cpus=$((total_cores > 1 ? total_cores - 1 : 1))
     
     while true; do
         read -p "$(print_status "INPUT" "Number of CPUs (1-$max_cpus, default: 2): ")" CPUS
@@ -231,8 +230,14 @@ setup_cpu() {
     done
     
     # Memory configuration
-    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
+    local total_mem=4096
+    if command -v free &> /dev/null; then
+        total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 4096)
+    fi
     local max_mem=$((total_mem - 1024)) # Leave 1GB for host
+    if [ $max_mem -lt 512 ]; then
+        max_mem=512
+    fi
     
     while true; do
         read -p "$(print_status "INPUT" "Memory in MB (256-$max_mem, default: 2048): ")" MEMORY
@@ -361,7 +366,7 @@ setup_vm_image() {
         print_status "INFO" "Image file already exists. Skipping download."
     else
         print_status "INFO" "Downloading image from $IMG_URL..."
-        if ! wget --progress=bar:force:noscroll "$IMG_URL" -O "$IMG_FILE.tmp"; then
+        if ! wget --progress=bar:force:noscroll "$IMG_URL" -O "$IMG_FILE.tmp" 2>/dev/null; then
             print_status "ERROR" "Failed to download image from $IMG_URL"
             exit 1
         fi
@@ -412,7 +417,7 @@ instance-id: iid-$VM_NAME
 local-hostname: $HOSTNAME
 EOF
 
-    if ! cloud-localds "$SEED_FILE" user-data meta-data; then
+    if ! cloud-localds "$SEED_FILE" user-data meta-data 2>/dev/null; then
         print_status "ERROR" "Failed to create cloud-init seed image"
         exit 1
     fi
@@ -453,8 +458,6 @@ start_vm() {
             -boot order=c
             -device virtio-net-pci,netdev=n0
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
-            -object rng-random,filename=/dev/urandom,id=rng0
-            -device virtio-rng-pci,rng=rng0
         )
 
         # Add port forwards if specified
@@ -465,6 +468,12 @@ start_vm() {
                 qemu_cmd+=(-device "virtio-net-pci,netdev=n${#qemu_cmd[@]}")
                 qemu_cmd+=(-netdev "user,id=n${#qemu_cmd[@]},hostfwd=tcp::$host_port-:$guest_port")
             done
+        fi
+
+        # Add RNG device if available
+        if [ -c /dev/urandom ]; then
+            qemu_cmd+=(-object rng-random,filename=/dev/urandom,id=rng0)
+            qemu_cmd+=(-device virtio-rng-pci,rng=rng0)
         fi
 
         # Add GUI or console mode
@@ -481,6 +490,7 @@ start_vm() {
         fi
 
         print_status "INFO" "Starting QEMU..."
+        echo "Command: ${qemu_cmd[@]}"
         "${qemu_cmd[@]}"
         
         print_status "INFO" "VM $vm_name has been shut down"
@@ -548,7 +558,7 @@ show_vm_info() {
 # Function to check if VM is running
 is_vm_running() {
     local vm_name=$1
-    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null; then
+    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null 2>&1; then
         return 0
     else
         return 1
@@ -562,11 +572,11 @@ stop_vm() {
     if load_vm_config "$vm_name"; then
         if is_vm_running "$vm_name"; then
             print_status "INFO" "Stopping VM: $vm_name"
-            pkill -f "qemu-system-x86_64.*$IMG_FILE"
+            pkill -f "qemu-system-x86_64.*$IMG_FILE" 2>/dev/null || true
             sleep 2
             if is_vm_running "$vm_name"; then
                 print_status "WARN" "VM did not stop gracefully, forcing termination..."
-                pkill -9 -f "qemu-system-x86_64.*$IMG_FILE"
+                pkill -9 -f "qemu-system-x86_64.*$IMG_FILE" 2>/dev/null || true
             fi
             print_status "SUCCESS" "VM $vm_name stopped"
         else
@@ -724,7 +734,7 @@ resize_vm_disk() {
                 
                 # Resize the disk
                 print_status "INFO" "Resizing disk to $new_disk_size..."
-                if qemu-img resize "$IMG_FILE" "$new_disk_size"; then
+                if qemu-img resize "$IMG_FILE" "$new_disk_size" 2>/dev/null; then
                     DISK_SIZE="$new_disk_size"
                     save_vm_config
                     print_status "SUCCESS" "Disk resized successfully to $new_disk_size"
@@ -749,21 +759,19 @@ show_vm_performance() {
         
         if is_vm_running "$vm_name"; then
             # Get QEMU process ID
-            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE")
+            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE" 2>/dev/null | head -1)
             if [[ -n "$qemu_pid" ]]; then
                 # Show process stats using available tools
                 print_status "CPU" "Process Statistics:"
-                if command -v htop &> /dev/null; then
-                    echo "│ Use 'htop' to view process details"
-                elif command -v ps &> /dev/null; then
-                    ps -p "$qemu_pid" -o pid,%cpu,%mem,sz,rss,vsz,cmd --no-headers | awk '{printf "│ PID: %-5s CPU: %-4s MEM: %-4s\n", $1, $2, $3}'
+                if command -v ps &> /dev/null; then
+                    ps -p "$qemu_pid" -o pid,%cpu,%mem,sz,rss,vsz,cmd --no-headers 2>/dev/null | awk '{printf "│ PID: %-5s CPU: %-4s MEM: %-4s\n", $1, $2, $3}' || true
                 fi
                 echo "├─────────────────────────────────────────────────────────────┤"
                 
                 # Show system resources
                 print_status "INFO" "System Resources:"
                 if command -v free &> /dev/null; then
-                    free -h | awk 'NR<=2 {printf "│ %-15s %-10s %-10s %-10s\n", $1, $2, $3, $4}'
+                    free -h 2>/dev/null | awk 'NR<=2 {printf "│ %-15s %-10s %-10s %-10s\n", $1, $2, $3, $4}' || true
                 fi
             fi
         else
@@ -808,7 +816,7 @@ backup_vm() {
         
         if [ $? -eq 0 ]; then
             print_status "SUCCESS" "Backup created: $backup_file"
-            ls -lh "$backup_file"
+            ls -lh "$backup_file" 2>/dev/null || echo "    Backup saved to: $backup_file"
         else
             print_status "ERROR" "Backup failed"
         fi
@@ -828,10 +836,10 @@ restore_vm() {
     
     # Extract backup
     local temp_dir=$(mktemp -d)
-    tar -xzf "$backup_file" -C "$temp_dir"
+    tar -xzf "$backup_file" -C "$temp_dir" 2>/dev/null
     
     # Find config file
-    local config_file=$(find "$temp_dir" -name "*.conf" | head -1)
+    local config_file=$(find "$temp_dir" -name "*.conf" 2>/dev/null | head -1)
     if [ -z "$config_file" ]; then
         print_status "ERROR" "No configuration file found in backup"
         rm -rf "$temp_dir"
