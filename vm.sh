@@ -2,15 +2,13 @@
 set -euo pipefail
 
 # =============================
-# ZynexForge VM Manager
 # Enhanced Multi-VM Manager
 # =============================
 
-# Function to display header with ZynexForge branding
+# Function to display header
 display_header() {
     clear
     cat << "EOF"
-
 __________                           ___________                         
 \____    /__.__. ____   ____ ___  __\_   _____/__________  ____   ____  
   /     /<   |  |/    \_/ __ \\  \/  /|    __)/  _ \_  __ \/ ___\_/ __ \ 
@@ -22,7 +20,6 @@ __________                           ___________
                     ⚡ ZynexForge VM Manager ⚡
                     Enhanced Multi-VM Manager
 ========================================================================
-
 EOF
     echo
 }
@@ -38,7 +35,6 @@ print_status() {
         "ERROR") echo -e "\033[1;31m[ERROR]\033[0m $message" ;;
         "SUCCESS") echo -e "\033[1;32m[SUCCESS]\033[0m $message" ;;
         "INPUT") echo -e "\033[1;36m[INPUT]\033[0m $message" ;;
-        "ZYNEX") echo -e "\033[1;33m[ZynexForge]\033[0m $message" ;;
         *) echo "[$type] $message" ;;
     esac
 }
@@ -85,8 +81,6 @@ validate_input() {
 
 # Function to check dependencies
 check_dependencies() {
-    print_status "ZYNEX" "Checking system dependencies..."
-    
     local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img")
     local missing_deps=()
     
@@ -114,18 +108,15 @@ get_vm_list() {
     find "$VM_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort
 }
 
-# Function to load VM configuration with default values
+# Function to load VM configuration
 load_vm_config() {
     local vm_name=$1
     local config_file="$VM_DIR/$vm_name.conf"
     
     if [[ -f "$config_file" ]]; then
-        # Clear previous variables and set defaults
+        # Clear previous variables
         unset VM_NAME OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
-        unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED INSTALL_DISK
-        
-        # Set defaults
-        INSTALL_DISK=""
+        unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
         
         source "$config_file"
         return 0
@@ -141,9 +132,9 @@ save_vm_config() {
     
     cat > "$config_file" <<EOF
 VM_NAME="$VM_NAME"
-OS_TYPE="${OS_TYPE:-}"
-CODENAME="${CODENAME:-}"
-IMG_URL="${IMG_URL:-}"
+OS_TYPE="$OS_TYPE"
+CODENAME="$CODENAME"
+IMG_URL="$IMG_URL"
 HOSTNAME="$HOSTNAME"
 USERNAME="$USERNAME"
 PASSWORD="$PASSWORD"
@@ -152,11 +143,10 @@ MEMORY="$MEMORY"
 CPUS="$CPUS"
 SSH_PORT="$SSH_PORT"
 GUI_MODE="$GUI_MODE"
-PORT_FORWARDS="${PORT_FORWARDS:-}"
+PORT_FORWARDS="$PORT_FORWARDS"
 IMG_FILE="$IMG_FILE"
-SEED_FILE="${SEED_FILE:-}"
+SEED_FILE="$SEED_FILE"
 CREATED="$CREATED"
-INSTALL_DISK="${INSTALL_DISK:-}"
 EOF
     
     print_status "SUCCESS" "Configuration saved to $config_file"
@@ -165,7 +155,6 @@ EOF
 # Function to create new VM
 create_new_vm() {
     print_status "INFO" "Creating a new VM"
-    print_status "ZYNEX" "Enhanced Multi-VM Manager"
     
     # OS Selection
     print_status "INFO" "Select an OS to set up:"
@@ -283,19 +272,8 @@ create_new_vm() {
     # Additional network options
     read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
 
-    # Set file names based on OS type
-    if [[ "$OS_TYPE" == "proxmox" ]] || [[ "$IMG_URL" == *.iso ]] || [[ "$IMG_URL" == *.ISO ]]; then
-        # ISO-based installation
-        IMG_FILE="$VM_DIR/$VM_NAME.iso"
-        INSTALL_DISK="$VM_DIR/$VM_NAME.qcow2"
-        SEED_FILE=""  # No seed file for ISO installations
-    else
-        # Cloud image
-        IMG_FILE="$VM_DIR/$VM_NAME.qcow2"
-        INSTALL_DISK="$IMG_FILE"
-        SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
-    fi
-    
+    IMG_FILE="$VM_DIR/$VM_NAME.img"
+    SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
     CREATED="$(date)"
 
     # Download and setup VM image
@@ -317,69 +295,27 @@ setup_vm_image() {
         print_status "INFO" "Image file already exists. Skipping download."
     else
         print_status "INFO" "Downloading image from $IMG_URL..."
-        
-        # Try with curl first, then wget
-        if command -v curl &> /dev/null; then
-            if curl -k -L --progress-bar "$IMG_URL" -o "$IMG_FILE.tmp"; then
-                mv "$IMG_FILE.tmp" "$IMG_FILE"
-                print_status "SUCCESS" "Image downloaded successfully with curl"
-            else
-                print_status "ERROR" "Failed to download image with curl"
-                exit 1
-            fi
-        elif command -v wget &> /dev/null; then
-            if wget --no-check-certificate --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp"; then
-                mv "$IMG_FILE.tmp" "$IMG_FILE"
-                print_status "SUCCESS" "Image downloaded successfully"
-            else
-                print_status "ERROR" "Failed to download image from $IMG_URL"
-                print_status "INFO" "Trying alternative method..."
-                if wget --no-check-certificate "$IMG_URL" -O "$IMG_FILE.tmp"; then
-                    mv "$IMG_FILE.tmp" "$IMG_FILE"
-                    print_status "SUCCESS" "Image downloaded (insecure mode)"
-                else
-                    print_status "ERROR" "Failed to download image. Please check your internet connection."
-                    exit 1
-                fi
-            fi
-        else
-            print_status "ERROR" "Neither curl nor wget found. Cannot download image."
+        if ! wget --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp"; then
+            print_status "ERROR" "Failed to download image from $IMG_URL"
             exit 1
         fi
+        mv "$IMG_FILE.tmp" "$IMG_FILE"
     fi
     
-    # Handle different image types
-    if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-        # ISO installation - create installation disk
-        print_status "INFO" "Setting up ISO installation..."
-        
-        if [[ ! -f "$INSTALL_DISK" ]]; then
-            print_status "INFO" "Creating installation disk: $DISK_SIZE"
-            qemu-img create -f qcow2 "$INSTALL_DISK" "$DISK_SIZE"
+    # Resize the disk image if needed
+    if ! qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
+        print_status "WARN" "Failed to resize disk image. Creating new image with specified size..."
+        # Create a new image with the specified size
+        rm -f "$IMG_FILE"
+        qemu-img create -f qcow2 -F qcow2 -b "$IMG_FILE" "$IMG_FILE.tmp" "$DISK_SIZE" 2>/dev/null || \
+        qemu-img create -f qcow2 "$IMG_FILE" "$DISK_SIZE"
+        if [ -f "$IMG_FILE.tmp" ]; then
+            mv "$IMG_FILE.tmp" "$IMG_FILE"
         fi
-        
-        # For ISO installations, we don't need seed file
-        if [[ -f "$SEED_FILE" ]]; then
-            rm -f "$SEED_FILE"
-            SEED_FILE=""
-        fi
-        
-        print_status "SUCCESS" "ISO installation setup ready"
-    else
-        # Cloud image - setup cloud-init
-        print_status "INFO" "Setting up cloud image..."
-        
-        # Resize the disk image if needed
-        if ! qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
-            print_status "WARN" "Failed to resize disk image. Creating new image with specified size..."
-            # Create a new image with the specified size
-            local temp_file="$IMG_FILE.tmp"
-            qemu-img create -f qcow2 "$temp_file" "$DISK_SIZE"
-            mv "$temp_file" "$IMG_FILE"
-        fi
+    fi
 
-        # cloud-init configuration
-        cat > user-data <<EOF
+    # cloud-init configuration
+    cat > user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
 ssh_pwauth: true
@@ -396,17 +332,14 @@ chpasswd:
   expire: false
 EOF
 
-        cat > meta-data <<EOF
+    cat > meta-data <<EOF
 instance-id: iid-$VM_NAME
 local-hostname: $HOSTNAME
 EOF
 
-        if ! cloud-localds "$SEED_FILE" user-data meta-data; then
-            print_status "ERROR" "Failed to create cloud-init seed image"
-            exit 1
-        fi
-        
-        print_status "SUCCESS" "Cloud image setup complete"
+    if ! cloud-localds "$SEED_FILE" user-data meta-data; then
+        print_status "ERROR" "Failed to create cloud-init seed image"
+        exit 1
     fi
     
     print_status "SUCCESS" "VM '$VM_NAME' created successfully."
@@ -418,6 +351,8 @@ start_vm() {
     
     if load_vm_config "$vm_name"; then
         print_status "INFO" "Starting VM: $vm_name"
+        print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
+        print_status "INFO" "Password: $PASSWORD"
         
         # Check if image file exists
         if [[ ! -f "$IMG_FILE" ]]; then
@@ -425,70 +360,22 @@ start_vm() {
             return 1
         fi
         
-        # Build QEMU command based on image type
+        # Check if seed file exists
+        if [[ ! -f "$SEED_FILE" ]]; then
+            print_status "WARN" "Seed file not found, recreating..."
+            setup_vm_image
+        fi
+        
+        # Base QEMU command
         local qemu_cmd=(
             qemu-system-x86_64
             -enable-kvm
             -m "$MEMORY"
             -smp "$CPUS"
             -cpu host
-        )
-
-        if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-            # ISO installation
-            print_status "INFO" "Booting from ISO installation media"
-            
-            # Set default INSTALL_DISK if not set
-            if [[ -z "$INSTALL_DISK" ]] || [[ ! -f "$INSTALL_DISK" ]]; then
-                INSTALL_DISK="${IMG_FILE%.*}.qcow2"
-                if [[ ! -f "$INSTALL_DISK" ]]; then
-                    print_status "INFO" "Creating installation disk..."
-                    qemu-img create -f qcow2 "$INSTALL_DISK" "$DISK_SIZE"
-                fi
-            fi
-            
-            qemu_cmd+=(
-                -drive "file=$INSTALL_DISK,format=qcow2,if=virtio"
-                -cdrom "$IMG_FILE"
-                -boot order=d
-            )
-            
-            # Proxmox specific instructions
-            if [[ "$OS_TYPE" == "proxmox" ]]; then
-                print_status "INFO" "=================================================================="
-                print_status "INFO" "PROXMOX VE INSTALLATION INSTRUCTIONS:"
-                print_status "INFO" "1. Select 'Install Proxmox VE'"
-                print_status "INFO" "2. Follow installation wizard"
-                print_status "INFO" "3. Choose the VirtIO disk for installation"
-                print_status "INFO" "4. Set password: $PASSWORD"
-                print_status "INFO" "5. After installation, access at: https://localhost:8006"
-                print_status "INFO" "=================================================================="
-            else
-                print_status "INFO" "=================================================================="
-                print_status "INFO" "ISO INSTALLATION INSTRUCTIONS:"
-                print_status "INFO" "1. Follow the on-screen installation wizard"
-                print_status "INFO" "2. Use credentials: $USERNAME / $PASSWORD"
-                print_status "INFO" "=================================================================="
-            fi
-        else
-            # Cloud image
-            print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
-            print_status "INFO" "Password: $PASSWORD"
-            
-            if [[ ! -f "$SEED_FILE" ]]; then
-                print_status "WARN" "Seed file not found, recreating..."
-                setup_vm_image
-            fi
-            
-            qemu_cmd+=(
-                -drive "file=$IMG_FILE,format=qcow2,if=virtio"
-                -drive "file=$SEED_FILE,format=raw,if=virtio"
-                -boot order=c
-            )
-        fi
-
-        # Network configuration
-        qemu_cmd+=(
+            -drive "file=$IMG_FILE,format=qcow2,if=virtio"
+            -drive "file=$SEED_FILE,format=raw,if=virtio"
+            -boot order=c
             -device virtio-net-pci,netdev=n0
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
@@ -524,7 +411,7 @@ start_vm() {
     fi
 }
 
-# Function to delete a VM - FIXED to handle missing INSTALL_DISK
+# Function to delete a VM
 delete_vm() {
     local vm_name=$1
     
@@ -533,25 +420,8 @@ delete_vm() {
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         if load_vm_config "$vm_name"; then
-            # Delete all possible VM files
             rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
-            
-            # Delete INSTALL_DISK if it exists (handle missing variable)
-            if [[ -n "${INSTALL_DISK:-}" ]] && [[ -f "$INSTALL_DISK" ]]; then
-                rm -f "$INSTALL_DISK"
-            fi
-            
-            # Also try to delete common file patterns
-            rm -f "$VM_DIR/$vm_name.img" "$VM_DIR/$vm_name.iso" "$VM_DIR/$vm_name.qcow2" 2>/dev/null
-            rm -f "$VM_DIR/$vm_name-seed.iso" 2>/dev/null
-            
             print_status "SUCCESS" "VM '$vm_name' has been deleted"
-        else
-            # If config can't be loaded, try to delete common files
-            rm -f "$VM_DIR/$vm_name.conf" 2>/dev/null
-            rm -f "$VM_DIR/$vm_name.img" "$VM_DIR/$vm_name.iso" "$VM_DIR/$vm_name.qcow2" 2>/dev/null
-            rm -f "$VM_DIR/$vm_name-seed.iso" 2>/dev/null
-            print_status "SUCCESS" "VM '$vm_name' files have been deleted"
         fi
     else
         print_status "INFO" "Deletion cancelled"
@@ -566,7 +436,7 @@ show_vm_info() {
         echo
         print_status "INFO" "VM Information: $vm_name"
         echo "=========================================="
-        echo "OS: ${OS_TYPE:-Unknown}"
+        echo "OS: $OS_TYPE"
         echo "Hostname: $HOSTNAME"
         echo "Username: $USERNAME"
         echo "Password: $PASSWORD"
@@ -578,22 +448,7 @@ show_vm_info() {
         echo "Port Forwards: ${PORT_FORWARDS:-None}"
         echo "Created: $CREATED"
         echo "Image File: $IMG_FILE"
-        
-        if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-            echo "Type: ISO Installation"
-            echo "Installation Disk: ${INSTALL_DISK:-Not created yet}"
-        else
-            echo "Type: Cloud Image"
-            echo "Seed File: ${SEED_FILE:-Not found}"
-        fi
-        
-        # Check if VM is running
-        if is_vm_running "$vm_name"; then
-            echo "Status: \033[1;32mRunning\033[0m"
-        else
-            echo "Status: \033[1;31mStopped\033[0m"
-        fi
-        
+        echo "Seed File: $SEED_FILE"
         echo "=========================================="
         echo
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
@@ -603,12 +458,11 @@ show_vm_info() {
 # Function to check if VM is running
 is_vm_running() {
     local vm_name=$1
-    if load_vm_config "$vm_name" 2>/dev/null; then
-        if pgrep -f "qemu-system-x86_64.*$(basename "$IMG_FILE")" >/dev/null; then
-            return 0
-        fi
+    if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null; then
+        return 0
+    else
+        return 1
     fi
-    return 1
 }
 
 # Function to stop a running VM
@@ -765,7 +619,7 @@ edit_vm_config() {
             
             # Recreate seed image with new configuration if user/password/hostname changed
             if [[ "$edit_choice" -eq 1 || "$edit_choice" -eq 2 || "$edit_choice" -eq 3 ]]; then
-                print_status "INFO" "Updating configuration..."
+                print_status "INFO" "Updating cloud-init configuration..."
                 setup_vm_image
             fi
             
@@ -786,20 +640,6 @@ resize_vm_disk() {
     
     if load_vm_config "$vm_name"; then
         print_status "INFO" "Current disk size: $DISK_SIZE"
-        
-        # Check if image is an ISO (can't resize ISO)
-        if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-            print_status "ERROR" "Cannot resize ISO installation media"
-            if [[ -n "${INSTALL_DISK:-}" ]] && [[ -f "$INSTALL_DISK" ]]; then
-                print_status "INFO" "Resize the installation disk instead: $INSTALL_DISK"
-                local resize_disk="$INSTALL_DISK"
-            else
-                print_status "INFO" "No installation disk found to resize"
-                return 1
-            fi
-        else
-            local resize_disk="$IMG_FILE"
-        fi
         
         while true; do
             read -p "$(print_status "INPUT" "Enter new disk size (e.g., 50G): ")" new_disk_size
@@ -834,7 +674,7 @@ resize_vm_disk() {
                 
                 # Resize the disk
                 print_status "INFO" "Resizing disk to $new_disk_size..."
-                if qemu-img resize "$resize_disk" "$new_disk_size"; then
+                if qemu-img resize "$IMG_FILE" "$new_disk_size"; then
                     DISK_SIZE="$new_disk_size"
                     save_vm_config
                     print_status "SUCCESS" "Disk resized successfully to $new_disk_size"
@@ -858,7 +698,7 @@ show_vm_performance() {
             echo "=========================================="
             
             # Get QEMU process ID
-            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$(basename "$IMG_FILE")")
+            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*$IMG_FILE")
             if [[ -n "$qemu_pid" ]]; then
                 # Show process stats
                 echo "QEMU Process Stats:"
@@ -873,11 +713,6 @@ show_vm_performance() {
                 # Show disk usage
                 echo "Disk Usage:"
                 df -h "$IMG_FILE" 2>/dev/null || du -h "$IMG_FILE"
-                
-                # Show network connections
-                echo
-                echo "Network Connections for port $SSH_PORT:"
-                ss -tlnp | grep ":$SSH_PORT" || echo "No active connections on port $SSH_PORT"
             else
                 print_status "ERROR" "Could not find QEMU process for VM $vm_name"
             fi
@@ -887,227 +722,9 @@ show_vm_performance() {
             echo "  Memory: $MEMORY MB"
             echo "  CPUs: $CPUS"
             echo "  Disk: $DISK_SIZE"
-            echo "  Image: $(basename "$IMG_FILE")"
-            if [[ -f "$IMG_FILE" ]]; then
-                echo "  Image Size: $(du -h "$IMG_FILE" | cut -f1)"
-            fi
         fi
         echo "=========================================="
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
-    fi
-}
-
-# Function to fix VM configuration
-fix_vm_config() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        print_status "INFO" "Fixing VM configuration: $vm_name"
-        
-        # Check if IMG_FILE exists but has wrong extension
-        if [[ -f "$IMG_FILE" ]]; then
-            # Check if it's actually an ISO file with wrong extension
-            if file "$IMG_FILE" 2>/dev/null | grep -q "ISO 9660"; then
-                if [[ "$IMG_FILE" != *.iso ]] && [[ "$IMG_FILE" != *.ISO ]]; then
-                    print_status "INFO" "Found ISO file with wrong extension: $IMG_FILE"
-                    local new_name="${IMG_FILE%.*}.iso"
-                    mv "$IMG_FILE" "$new_name"
-                    IMG_FILE="$new_name"
-                    print_status "SUCCESS" "Renamed to: $IMG_FILE"
-                    
-                    # Create installation disk if needed
-                    if [[ -z "${INSTALL_DISK:-}" ]] || [[ ! -f "$INSTALL_DISK" ]]; then
-                        INSTALL_DISK="${IMG_FILE%.*}.qcow2"
-                        print_status "INFO" "Creating installation disk: $INSTALL_DISK"
-                        qemu-img create -f qcow2 "$INSTALL_DISK" "$DISK_SIZE"
-                    fi
-                fi
-            fi
-        fi
-        
-        # For ISO installations, ensure INSTALL_DISK is set
-        if [[ "$IMG_FILE" == *.iso ]] || [[ "$IMG_FILE" == *.ISO ]]; then
-            if [[ -z "${INSTALL_DISK:-}" ]] || [[ ! -f "$INSTALL_DISK" ]]; then
-                INSTALL_DISK="${IMG_FILE%.*}.qcow2"
-                print_status "INFO" "Creating installation disk: $INSTALL_DISK"
-                qemu-img create -f qcow2 "$INSTALL_DISK" "$DISK_SIZE"
-            fi
-        fi
-        
-        # Save fixed configuration
-        save_vm_config
-        print_status "SUCCESS" "VM configuration fixed: $vm_name"
-    fi
-}
-
-# Function to backup VM
-backup_vm() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        local backup_dir="$VM_DIR/backups"
-        mkdir -p "$backup_dir"
-        
-        local timestamp=$(date +%Y%m%d_%H%M%S)
-        local backup_file="$backup_dir/${vm_name}_${timestamp}.tar.gz"
-        
-        print_status "INFO" "Backing up VM: $vm_name"
-        print_status "INFO" "Backup file: $backup_file"
-        
-        # Stop VM if running
-        if is_vm_running "$vm_name"; then
-            print_status "WARN" "VM is running. Stopping for backup..."
-            stop_vm "$vm_name"
-            sleep 3
-        fi
-        
-        # Create list of files to backup
-        local files_to_backup=("$vm_name.conf" "$(basename "$IMG_FILE")")
-        if [[ -n "${SEED_FILE:-}" ]] && [[ -f "$SEED_FILE" ]]; then
-            files_to_backup+=("$(basename "$SEED_FILE")")
-        fi
-        if [[ -n "${INSTALL_DISK:-}" ]] && [[ -f "$INSTALL_DISK" ]]; then
-            files_to_backup+=("$(basename "$INSTALL_DISK")")
-        fi
-        
-        # Create backup
-        (cd "$VM_DIR" && tar -czf "$backup_file" "${files_to_backup[@]}" 2>/dev/null)
-        
-        if [[ -f "$backup_file" ]]; then
-            print_status "SUCCESS" "Backup created successfully: $backup_file"
-            echo "  Size: $(du -h "$backup_file" | cut -f1)"
-        else
-            print_status "ERROR" "Failed to create backup"
-        fi
-    fi
-}
-
-# Function to restore VM from backup
-restore_vm() {
-    local backup_file="$1"
-    
-    if [[ ! -f "$backup_file" ]]; then
-        print_status "ERROR" "Backup file not found: $backup_file"
-        return 1
-    fi
-    
-    # Extract VM name from backup filename
-    local vm_name=$(basename "$backup_file" | cut -d'_' -f1)
-    
-    print_status "INFO" "Restoring VM: $vm_name"
-    print_status "WARN" "This will overwrite any existing VM with the same name!"
-    
-    read -p "$(print_status "INPUT" "Continue? (y/N): ")" confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        print_status "INFO" "Restore cancelled"
-        return 0
-    fi
-    
-    # Stop VM if running
-    if is_vm_running "$vm_name" 2>/dev/null; then
-        stop_vm "$vm_name"
-    fi
-    
-    # Extract backup
-    tar -xzf "$backup_file" -C "$VM_DIR"
-    
-    if [[ $? -eq 0 ]]; then
-        print_status "SUCCESS" "VM restored successfully: $vm_name"
-        show_vm_info "$vm_name"
-    else
-        print_status "ERROR" "Failed to restore VM"
-    fi
-}
-
-# Function to list backups
-list_backups() {
-    local backup_dir="$VM_DIR/backups"
-    
-    if [[ -d "$backup_dir" ]]; then
-        local backups=($(ls -1 "$backup_dir"/*.tar.gz 2>/dev/null))
-        local backup_count=${#backups[@]}
-        
-        if [[ $backup_count -gt 0 ]]; then
-            print_status "INFO" "Found $backup_count backup(s):"
-            for i in "${!backups[@]}"; do
-                local file=$(basename "${backups[$i]}")
-                local size=$(du -h "${backups[$i]}" | cut -f1)
-                printf "  %2d) %s (%s)\n" $((i+1)) "$file" "$size"
-            done
-            echo
-            return 0
-        fi
-    fi
-    
-    print_status "INFO" "No backups found"
-    return 1
-}
-
-# Function to clone VM
-clone_vm() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        local new_vm_name
-        while true; do
-            read -p "$(print_status "INPUT" "Enter name for cloned VM: ")" new_vm_name
-            if validate_input "name" "$new_vm_name"; then
-                if [[ -f "$VM_DIR/$new_vm_name.conf" ]]; then
-                    print_status "ERROR" "VM with name '$new_vm_name' already exists"
-                else
-                    break
-                fi
-            fi
-        done
-        
-        print_status "INFO" "Cloning VM '$vm_name' to '$new_vm_name'..."
-        
-        # Clone the disk image
-        local new_img_file="$VM_DIR/$new_vm_name.${IMG_FILE##*.}"
-        if [[ -f "$IMG_FILE" ]]; then
-            if qemu-img create -f qcow2 -b "$IMG_FILE" "$new_img_file" 2>/dev/null || \
-               cp "$IMG_FILE" "$new_img_file"; then
-                print_status "SUCCESS" "Disk image cloned"
-            else
-                print_status "ERROR" "Failed to clone disk image"
-                return 1
-            fi
-        fi
-        
-        # Clone the seed file if it exists
-        local new_seed_file=""
-        if [[ -n "${SEED_FILE:-}" ]] && [[ -f "$SEED_FILE" ]]; then
-            new_seed_file="$VM_DIR/$new_vm_name-seed.iso"
-            if cp "$SEED_FILE" "$new_seed_file"; then
-                print_status "SUCCESS" "Seed file cloned"
-            fi
-        fi
-        
-        # Clone installation disk if it exists
-        local new_install_disk=""
-        if [[ -n "${INSTALL_DISK:-}" ]] && [[ -f "$INSTALL_DISK" ]]; then
-            new_install_disk="$VM_DIR/$new_vm_name.qcow2"
-            if qemu-img create -f qcow2 -b "$INSTALL_DISK" "$new_install_disk" 2>/dev/null || \
-               cp "$INSTALL_DISK" "$new_install_disk"; then
-                print_status "SUCCESS" "Installation disk cloned"
-            fi
-        fi
-        
-        # Create new configuration
-        local original_name="$VM_NAME"
-        VM_NAME="$new_vm_name"
-        IMG_FILE="$new_img_file"
-        SEED_FILE="$new_seed_file"
-        INSTALL_DISK="$new_install_disk"
-        CREATED="$(date)"
-        
-        # Modify hostname if it's the same as VM name
-        if [[ "$HOSTNAME" == "$original_name" ]]; then
-            HOSTNAME="$new_vm_name"
-        fi
-        
-        save_vm_config
-        print_status "SUCCESS" "VM cloned successfully: $new_vm_name"
     fi
 }
 
@@ -1119,15 +736,12 @@ main_menu() {
         local vms=($(get_vm_list))
         local vm_count=${#vms[@]}
         
-        print_status "ZYNEX" "Enhanced Multi-VM Manager"
-        echo
-        
         if [ $vm_count -gt 0 ]; then
             print_status "INFO" "Found $vm_count existing VM(s):"
             for i in "${!vms[@]}"; do
-                local status="\033[1;31mStopped\033[0m"
+                local status="Stopped"
                 if is_vm_running "${vms[$i]}"; then
-                    status="\033[1;32mRunning\033[0m"
+                    status="Running"
                 fi
                 printf "  %2d) %s (%s)\n" $((i+1)) "${vms[$i]}" "$status"
             done
@@ -1144,11 +758,6 @@ main_menu() {
             echo "  6) Delete a VM"
             echo "  7) Resize VM disk"
             echo "  8) Show VM performance"
-            echo "  9) Backup VM"
-            echo " 10) Restore VM from backup"
-            echo " 11) List backups"
-            echo " 12) Clone VM"
-            echo " 13) Fix VM configuration"
         fi
         echo "  0) Exit"
         echo
@@ -1229,61 +838,8 @@ main_menu() {
                     fi
                 fi
                 ;;
-            9)
-                if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to backup: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
-                        backup_vm "${vms[$((vm_num-1))]}"
-                    else
-                        print_status "ERROR" "Invalid selection"
-                    fi
-                fi
-                ;;
-            10)
-                # List backups and let user choose one to restore
-                if list_backups; then
-                    read -p "$(print_status "INPUT" "Enter backup number to restore (or 0 to cancel): ")" backup_num
-                    if [[ "$backup_num" =~ ^[0-9]+$ ]] && [ "$backup_num" -ge 1 ]; then
-                        local backups=($(ls -1 "$VM_DIR/backups"/*.tar.gz 2>/dev/null))
-                        if [ "$backup_num" -le ${#backups[@]} ]; then
-                            restore_vm "${backups[$((backup_num-1))]}"
-                        else
-                            print_status "ERROR" "Invalid selection"
-                        fi
-                    elif [[ "$backup_num" != "0" ]]; then
-                        print_status "ERROR" "Invalid selection"
-                    fi
-                else
-                    print_status "INFO" "No backups available to restore"
-                fi
-                ;;
-            11)
-                list_backups
-                read -p "$(print_status "INPUT" "Press Enter to continue...")"
-                ;;
-            12)
-                if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to clone: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
-                        clone_vm "${vms[$((vm_num-1))]}"
-                    else
-                        print_status "ERROR" "Invalid selection"
-                    fi
-                fi
-                ;;
-            13)
-                if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to fix: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
-                        fix_vm_config "${vms[$((vm_num-1))]}"
-                    else
-                        print_status "ERROR" "Invalid selection"
-                    fi
-                fi
-                ;;
             0)
-                print_status "ZYNEX" "Thank you for using ZynexForge VM Manager!"
-                echo "Goodbye!"
+                print_status "INFO" "Goodbye!"
                 exit 0
                 ;;
             *)
@@ -1304,30 +860,17 @@ check_dependencies
 # Initialize paths
 VM_DIR="${VM_DIR:-$HOME/vms}"
 mkdir -p "$VM_DIR"
-mkdir -p "$VM_DIR/backups"
 
 # Supported OS list
 declare -A OS_OPTIONS=(
-    # Cloud images (qcow2 format)
-    ["Ubuntu 22.04 LTS (Cloud Image)"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
-    ["Ubuntu 24.04 LTS (Cloud Image)"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
-    ["Debian 11 Bullseye (Cloud Image)"]="debian|bullseye|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|debian11|debian|debian"
-    ["Debian 12 Bookworm (Cloud Image)"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
-    ["Fedora 40 (Cloud Image)"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|fedora"
-    ["CentOS Stream 9 (Cloud Image)"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
-    ["AlmaLinux 9 (Cloud Image)"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
-    ["Rocky Linux 9 (Cloud Image)"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
-    
-    # ISO installations
-    ["Ubuntu 22.04 LTS (ISO)"]="ubuntu|jammy|https://releases.ubuntu.com/22.04/ubuntu-22.04.3-live-server-amd64.iso|ubuntu22|ubuntu|ubuntu"
-    ["Ubuntu 24.04 LTS (ISO)"]="ubuntu|noble|https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso|ubuntu24|ubuntu|ubuntu"
-    ["Debian 12 (ISO)"]="debian|bookworm|https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.5.0-amd64-netinst.iso|debian12|debian|debian"
-    
-    # Proxmox VE ISO
-    ["Proxmox VE 8.2 (ISO)"]="proxmox|ve82|https://download.proxmox.com/iso/proxmox-ve_8.2-1.iso|proxmox-ve82|root|proxmox123"
-    ["Proxmox VE 8.1 (ISO)"]="proxmox|ve81|https://download.proxmox.com/iso/proxmox-ve_8.1-1.iso|proxmox-ve81|root|proxmox123"
-    ["Proxmox VE 8.0 (ISO)"]="proxmox|ve80|https://download.proxmox.com/iso/proxmox-ve_8.0-2.iso|proxmox-ve80|root|proxmox123"
-    ["Proxmox VE 7.4 (ISO)"]="proxmox|ve74|https://download.proxmox.com/iso/proxmox-ve_7.4-1.iso|proxmox-ve74|root|proxmox123"
+    ["Ubuntu 22.04"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
+    ["Ubuntu 24.04"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
+    ["Debian 11"]="debian|bullseye|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|debian11|debian|debian"
+    ["Debian 12"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
+    ["Fedora 40"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|fedora"
+    ["CentOS Stream 9"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
+    ["AlmaLinux 9"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
+    ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
 )
 
 # Start the main menu
