@@ -151,15 +151,11 @@ packages:
   - qemu-guest-agent
   - curl
   - wget
-  - htop
-  - neofetch
 runcmd:
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
   - echo "=== ZynexForge Optimized VM ===" > /etc/motd
   - echo "Powered by ZynexForge Universal VM Manager" >> /etc/motd
-  - echo "Optimized for Performance & Speed" >> /etc/motd
-  - curl -s https://raw.githubusercontent.com/zynexforge/optimize/main/ubuntu.sh | bash -s -- --all 2>/dev/null || true
 EOF
 
     cat > meta-data <<EOF
@@ -246,34 +242,87 @@ EOF
     print_status "SUCCESS" "Configuration saved to $config_file"
 }
 
-# Function to configure ultra performance options
+# Function to configure performance options
 configure_performance() {
-    print_status "PERF" "Configuring Ultra Performance Optimizations"
+    print_status "PERF" "Performance Configuration"
     
-    # Always enable performance boost
-    PERF_BOOST=true
+    # Performance boost option
+    while true; do
+        read -p "$(print_status "INPUT" "Enable Performance Boost? (y/n, default: y): ")" perf_input
+        perf_input="${perf_input:-y}"
+        if [[ "$perf_input" =~ ^[Yy]$ ]]; then 
+            PERF_BOOST=true
+            break
+        elif [[ "$perf_input" =~ ^[Nn]$ ]]; then
+            PERF_BOOST=false
+            break
+        else
+            print_status "ERROR" "Please answer y or n"
+        fi
+    done
     
-    # CPU Pinning
-    CPU_PIN=true
-    print_status "INFO" "✓ CPU Pinning enabled for better CPU utilization"
+    if [[ "$PERF_BOOST" == true ]]; then
+        # CPU Pinning
+        while true; do
+            read -p "$(print_status "INPUT" "Enable CPU Pinning? (y/n, default: y): ")" cpu_pin_input
+            cpu_pin_input="${cpu_pin_input:-y}"
+            if [[ "$cpu_pin_input" =~ ^[Yy]$ ]]; then
+                CPU_PIN=true
+                break
+            elif [[ "$cpu_pin_input" =~ ^[Nn]$ ]]; then
+                CPU_PIN=false
+                break
+            else
+                print_status "ERROR" "Please answer y or n"
+            fi
+        done
+        
+        # IO Uring for faster disk I/O
+        while true; do
+            read -p "$(print_status "INPUT" "Enable IO Uring (faster disk I/O)? (y/n, default: y): ")" io_input
+            io_input="${io_input:-y}"
+            if [[ "$io_input" =~ ^[Yy]$ ]]; then
+                IO_URING=true
+                break
+            elif [[ "$io_input" =~ ^[Nn]$ ]]; then
+                IO_URING=false
+                break
+            else
+                print_status "ERROR" "Please answer y or n"
+            fi
+        done
+        
+        # Disk cache mode
+        echo "Select Disk Cache Mode:"
+        echo "  1) none - Direct I/O (Fastest, No Cache)"
+        echo "  2) writethrough - Write Through Cache"
+        echo "  3) writeback - Write Back Cache (Balanced)"
+        echo "  4) unsafe - No Sync (Fastest but Risky)"
+        
+        while true; do
+            read -p "$(print_status "INPUT" "Enter choice (1-4, default: 1): ")" cache_choice
+            cache_choice="${cache_choice:-1}"
+            case $cache_choice in
+                1) DISK_CACHE="none" ;;
+                2) DISK_CACHE="writethrough" ;;
+                3) DISK_CACHE="writeback" ;;
+                4) DISK_CACHE="unsafe" ;;
+                *) print_status "ERROR" "Invalid choice"; continue ;;
+            esac
+            break
+        done
+        
+        print_status "SUCCESS" "Performance optimizations configured"
+    else
+        PERF_BOOST=false
+        CPU_PIN=false
+        IO_URING=false
+        DISK_CACHE="writeback"
+    fi
     
-    # IO Uring for faster disk I/O (if kernel supports)
-    IO_URING=true
-    print_status "INFO" "✓ IO Uring enabled for ultra-fast disk I/O"
-    
-    # VirtIO optimizations
+    # Always enable VirtIO and set network type
     VIRTIO_OPT=true
-    print_status "INFO" "✓ VirtIO optimizations enabled"
-    
-    # Disk cache mode
-    DISK_CACHE="none"  # Direct I/O for maximum performance
-    print_status "INFO" "✓ Direct I/O disk cache for maximum speed"
-    
-    # Network type
     NET_TYPE="virtio-net-pci"
-    print_status "INFO" "✓ VirtIO network for high-speed networking"
-    
-    print_status "SUCCESS" "Ultra Performance mode activated!"
 }
 
 # Function to create new VM
@@ -310,9 +359,9 @@ create_new_vm() {
                 6) OS_TYPE="Rocky Linux 9"; IMG_URL="https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2"; DEFAULT_HOSTNAME="rocky9"; DEFAULT_USERNAME="rocky"; DEFAULT_PASSWORD="rocky123" ;;
                 7) OS_TYPE="Ubuntu 24.04"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="ubuntu24"; DEFAULT_USERNAME="ubuntu"; DEFAULT_PASSWORD="ubuntu123" ;;
                 8) OS_TYPE="Debian 11"; IMG_URL="https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2"; DEFAULT_HOSTNAME="debian11"; DEFAULT_USERNAME="debian"; DEFAULT_PASSWORD="debian123" ;;
-                9) OS_TYPE="Debian 12 Fast"; IMG_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"; DEFAULT_HOSTNAME="debian12-fast"; DEFAULT_USERNAME="zynex"; DEFAULT_PASSWORD="ZynexForge123" ;;
-                10) OS_TYPE="AlmaLinux 9 Fast"; IMG_URL="https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"; DEFAULT_HOSTNAME="alma9-fast"; DEFAULT_USERNAME="zynex"; DEFAULT_PASSWORD="ZynexForge123" ;;
-                11) OS_TYPE="Ubuntu 24.04 Fast"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="ubuntu24-fast"; DEFAULT_USERNAME="zynex"; DEFAULT_PASSWORD="ZynexForge123" ;;
+                9) OS_TYPE="Debian 12"; IMG_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"; DEFAULT_HOSTNAME="debian12"; DEFAULT_USERNAME="debian"; DEFAULT_PASSWORD="debian123" ;;
+                10) OS_TYPE="AlmaLinux 9"; IMG_URL="https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"; DEFAULT_HOSTNAME="almalinux9"; DEFAULT_USERNAME="alma"; DEFAULT_PASSWORD="alma123" ;;
+                11) OS_TYPE="Ubuntu 24.04"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="ubuntu24"; DEFAULT_USERNAME="ubuntu"; DEFAULT_PASSWORD="ubuntu123" ;;
                 12) OS_TYPE="Proxmox"; IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"; DEFAULT_HOSTNAME="proxmox-vm"; DEFAULT_USERNAME="proxmox"; DEFAULT_PASSWORD="proxmox123" ;;
             esac
             break
@@ -362,20 +411,33 @@ create_new_vm() {
         fi
     done
 
-    # Auto-configure optimal settings based on OS type
-    if [[ "$OS_TYPE" == *"Fast"* ]] || [[ "$choice" -ge 9 ]]; then
-        print_status "PERF" "Configuring Fast OS with optimal settings..."
-        DISK_SIZE="30G"
-        MEMORY="4096"
-        CPUS="4"
-    else
-        DISK_SIZE="20G"
-        MEMORY="2048"
-        CPUS="2"
-    fi
+    # Disk Size
+    while true; do
+        read -p "$(print_status "INPUT" "Disk size (default: 20G): ")" DISK_SIZE
+        DISK_SIZE="${DISK_SIZE:-20G}"
+        if validate_input "size" "$DISK_SIZE"; then
+            break
+        fi
+    done
 
-    print_status "INFO" "Using optimal settings: Disk=$DISK_SIZE, RAM=${MEMORY}MB, CPUs=$CPUS"
-    
+    # Memory
+    while true; do
+        read -p "$(print_status "INPUT" "Memory in MB (default: 2048): ")" MEMORY
+        MEMORY="${MEMORY:-2048}"
+        if validate_input "number" "$MEMORY"; then
+            break
+        fi
+    done
+
+    # CPUs
+    while true; do
+        read -p "$(print_status "INPUT" "Number of CPUs (default: 2): ")" CPUS
+        CPUS="${CPUS:-2}"
+        if validate_input "number" "$CPUS"; then
+            break
+        fi
+    done
+
     # SSH Port
     while true; do
         read -p "$(print_status "INPUT" "SSH Port (default: $((2200 + RANDOM % 1000))): ")" SSH_PORT
@@ -410,7 +472,7 @@ create_new_vm() {
     # Additional port forwards
     read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
 
-    # Configure ultra performance options
+    # Configure performance options
     configure_performance
 
     IMG_FILE="$VM_DIR/$VM_NAME.qcow2"
@@ -423,7 +485,7 @@ create_new_vm() {
     # Save configuration
     save_vm_config
     
-    print_status "ZYNEX" "VM '$VM_NAME' created successfully with Ultra Performance optimizations!"
+    print_status "ZYNEX" "VM '$VM_NAME' created successfully!"
     echo
     print_status "INFO" "To start VM: Select option 2 from main menu"
     print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
@@ -463,7 +525,7 @@ setup_vm_image() {
     fi
     
     # Create optimized disk image
-    print_status "INFO" "Creating optimized disk image..."
+    print_status "INFO" "Creating disk image..."
     
     # Convert to qcow2 format with compression if not already
     if [[ ! "$IMG_FILE" == *.qcow2 ]]; then
@@ -487,7 +549,7 @@ setup_vm_image() {
     print_status "SUCCESS" "VM image setup complete"
 }
 
-# Function to build ultra-optimized QEMU command
+# Function to build QEMU command
 build_qemu_command() {
     local vm_name=$1
     local qemu_cmd=()
@@ -496,28 +558,30 @@ build_qemu_command() {
     qemu_cmd=(
         qemu-system-x86_64
         -enable-kvm
-        -cpu host,kvm=on,+invtsc
+        -cpu host
         -machine type=q35,accel=kvm
-        -smp "$CPUS,sockets=1,cores=$CPUS,threads=1"
+        -smp "$CPUS"
         -m "$MEMORY"
-        -overcommit mem-lock=on
     )
     
-    # CPU pinning for performance
-    if [[ "$CPU_PIN" == true ]]; then
-        local cpu_count=$(nproc 2>/dev/null || echo 1)
-        if [ "$cpu_count" -gt "$CPUS" ]; then
-            qemu_cmd+=(-numa node,cpus=0-$((CPUS-1)),nodeid=0)
+    # Performance optimizations
+    if [[ "$PERF_BOOST" == true ]]; then
+        # CPU pinning for performance
+        if [[ "$CPU_PIN" == true ]]; then
+            local cpu_count=$(nproc 2>/dev/null || echo 1)
+            if [ "$cpu_count" -gt "$CPUS" ]; then
+                qemu_cmd+=(-numa node,cpus=0-$((CPUS-1)),nodeid=0)
+            fi
         fi
     fi
     
-    # Disk configuration with ultra-fast settings
+    # Disk configuration
     qemu_cmd+=(
-        -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=$DISK_CACHE,discard=unmap"
+        -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=$DISK_CACHE"
         -drive "file=$SEED_FILE,format=raw,if=virtio,readonly=on"
     )
     
-    # IO Uring for ultra-fast I/O (if supported)
+    # IO Uring for fast I/O
     if [[ "$IO_URING" == true ]]; then
         qemu_cmd+=(-object iothread,id=iothread0)
         qemu_cmd+=(-device virtio-blk-pci,drive=drive0,iothread=iothread0)
@@ -526,7 +590,7 @@ build_qemu_command() {
     # Network configuration
     qemu_cmd+=(
         -netdev "user,id=net0,hostfwd=tcp::$SSH_PORT-:22"
-        -device "$NET_TYPE,netdev=net0,mac=52:54:00:$(dd if=/dev/urandom bs=3 count=1 2>/dev/null | hexdump -e '/1 "-%02X"' | tr -d '-')"
+        -device "$NET_TYPE,netdev=net0"
     )
     
     # Add port forwards if specified
@@ -539,35 +603,21 @@ build_qemu_command() {
         done
     fi
     
-    # Additional performance optimizations
+    # Additional devices
     qemu_cmd+=(
         -device virtio-balloon-pci
         -object rng-random,filename=/dev/urandom,id=rng0
         -device virtio-rng-pci,rng=rng0
-        -device virtio-vga
-        -device virtio-keyboard-pci
-        -device virtio-mouse-pci
-        -usb
-        -device usb-tablet
     )
     
-    # VirtIO optimizations
-    if [[ "$VIRTIO_OPT" == true ]]; then
-        qemu_cmd+=(
-            -global virtio-pci.disable-modern=false
-            -global virtio-pci.ats=on
-            -global virtio-pci.iommu_platform=on
-        )
-    fi
-    
     # Boot order
-    qemu_cmd+=(-boot order=c,menu=off)
+    qemu_cmd+=(-boot order=c)
     
     # GUI or console mode
     if [[ "$GUI_MODE" == true ]]; then
-        qemu_cmd+=(-vga virtio -display gtk,gl=on)
+        qemu_cmd+=(-vga virtio -display gtk)
     else
-        qemu_cmd+=(-nographic -serial mon:stdio)
+        qemu_cmd+=(-nographic)
     fi
     
     echo "${qemu_cmd[@]}"
@@ -579,7 +629,6 @@ start_vm() {
     
     if load_vm_config "$vm_name"; then
         print_status "INFO" "Starting VM: $vm_name"
-        print_status "PERF" "Launching with Ultra Performance optimizations..."
         echo
         print_status "INFO" "=== Connection Details ==="
         print_status "INFO" "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
@@ -603,7 +652,7 @@ start_vm() {
         # Build and execute QEMU command
         local qemu_cmd=$(build_qemu_command "$vm_name")
         
-        print_status "PERF" "Starting QEMU with optimized parameters..."
+        print_status "INFO" "Starting QEMU..."
         print_status "INFO" "Press Ctrl+A then X to stop the VM"
         echo
         
@@ -651,13 +700,12 @@ show_vm_info() {
         echo "Port Forwards: ${PORT_FORWARDS:-None}"
         echo "Created: $CREATED"
         echo ""
-        print_status "PERF" "Performance Optimizations:"
-        echo "  ✓ Performance Boost: $PERF_BOOST"
-        echo "  ✓ CPU Pinning: $CPU_PIN"
-        echo "  ✓ IO Uring: $IO_URING"
-        echo "  ✓ VirtIO Optimized: $VIRTIO_OPT"
-        echo "  ✓ Disk Cache: $DISK_CACHE"
-        echo "  ✓ Network Type: $NET_TYPE"
+        if [[ "$PERF_BOOST" == true ]]; then
+            print_status "PERF" "Performance Optimizations:"
+            echo "  CPU Pinning: $CPU_PIN"
+            echo "  IO Uring: $IO_URING"
+            echo "  Disk Cache: $DISK_CACHE"
+        fi
         echo "=========================================="
         echo
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
@@ -860,28 +908,6 @@ resize_vm_disk() {
                     return 0
                 fi
                 
-                # Check if new size is smaller than current
-                local current_size_num=${DISK_SIZE%[GgMm]}
-                local new_size_num=${new_disk_size%[GgMm]}
-                local current_unit=${DISK_SIZE: -1}
-                local new_unit=${new_disk_size: -1}
-                
-                if [[ "$current_unit" =~ [Gg] ]]; then
-                    current_size_num=$((current_size_num * 1024))
-                fi
-                if [[ "$new_unit" =~ [Gg] ]]; then
-                    new_size_num=$((new_size_num * 1024))
-                fi
-                
-                if [[ $new_size_num -lt $current_size_num ]]; then
-                    print_status "WARN" "Shrinking disk size may cause data loss!"
-                    read -p "$(print_status "INPUT" "Are you sure? (y/N): ")" confirm_shrink
-                    if [[ ! "$confirm_shrink" =~ ^[Yy]$ ]]; then
-                        print_status "INFO" "Disk resize cancelled."
-                        return 0
-                    fi
-                fi
-                
                 # Resize the disk
                 print_status "INFO" "Resizing disk to $new_disk_size..."
                 if qemu-img resize -f qcow2 "$IMG_FILE" "$new_disk_size"; then
@@ -903,7 +929,7 @@ show_vm_performance() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
-        print_status "PERF" "Performance metrics for VM: $vm_name"
+        print_status "INFO" "Performance metrics for VM: $vm_name"
         echo "=========================================="
         
         if is_vm_running "$vm_name"; then
@@ -924,12 +950,6 @@ show_vm_performance() {
             echo "  Memory: $MEMORY MB"
             echo "  CPUs: $CPUS"
             echo "  Disk: $DISK_SIZE"
-            echo ""
-            print_status "PERF" "Optimizations Status:"
-            echo "  Performance Boost: $PERF_BOOST"
-            echo "  CPU Pinning: $CPU_PIN"
-            echo "  IO Uring: $IO_URING"
-            echo "  Disk Cache: $DISK_CACHE"
         fi
         echo "=========================================="
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
@@ -944,74 +964,6 @@ export_vm_config() {
         local export_file="$VM_DIR/$vm_name-export.conf"
         cp "$VM_DIR/$vm_name.conf" "$export_file"
         print_status "SUCCESS" "VM configuration exported to $export_file"
-        echo "You can use this file to recreate the VM on another system."
-    fi
-}
-
-# Function to benchmark VM performance
-benchmark_vm() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        print_status "PERF" "Benchmarking VM: $vm_name"
-        echo "=========================================="
-        
-        # Disk I/O benchmark
-        if [[ -f "$IMG_FILE" ]]; then
-            echo "1. Disk I/O Speed:"
-            local disk_size=$(ls -lh "$IMG_FILE" | awk '{print $5}')
-            echo "   Disk Size: $disk_size"
-            echo "   Format: qcow2 (compressed)"
-            echo "   Cache: $DISK_CACHE"
-            echo "   IO Uring: $IO_URING"
-        fi
-        
-        # CPU benchmark
-        echo ""
-        echo "2. CPU Configuration:"
-        echo "   CPUs: $CPUS"
-        echo "   CPU Pinning: $CPU_PIN"
-        echo "   KVM Acceleration: Enabled"
-        
-        # Memory benchmark
-        echo ""
-        echo "3. Memory Configuration:"
-        echo "   RAM: ${MEMORY}MB"
-        echo "   Memory Lock: Enabled"
-        echo "   Balloon Device: Enabled"
-        
-        # Network benchmark
-        echo ""
-        echo "4. Network Configuration:"
-        echo "   Type: $NET_TYPE"
-        echo "   SSH Port: $SSH_PORT"
-        echo "   Port Forwards: ${PORT_FORWARDS:-None}"
-        
-        # Overall score
-        echo ""
-        echo "5. Performance Score:"
-        local score=$((CPUS * 10 + MEMORY / 1024 * 5))
-        if [[ "$PERF_BOOST" == true ]]; then
-            score=$((score + 50))
-        fi
-        if [[ "$CPU_PIN" == true ]]; then
-            score=$((score + 20))
-        fi
-        if [[ "$IO_URING" == true ]]; then
-            score=$((score + 30))
-        fi
-        
-        echo "   Total Score: $score/200"
-        if [ $score -ge 150 ]; then
-            print_status "SUCCESS" "   Rating: Excellent ⚡⚡⚡"
-        elif [ $score -ge 100 ]; then
-            print_status "INFO" "   Rating: Good ⚡⚡"
-        else
-            print_status "INFO" "   Rating: Standard ⚡"
-        fi
-        
-        echo "=========================================="
-        read -p "$(print_status "INPUT" "Press Enter to continue...")"
     fi
 }
 
@@ -1049,7 +1001,6 @@ main_menu() {
             echo "  7) Resize VM disk"
             echo "  8) Show VM performance"
             echo "  9) Export VM configuration"
-            echo "  10) Benchmark VM"
         fi
         echo "  0) Exit"
         echo
@@ -1135,16 +1086,6 @@ main_menu() {
                     read -p "$(print_status "INPUT" "Enter VM number to export: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         export_vm_config "${vms[$((vm_num-1))]}"
-                    else
-                        print_status "ERROR" "Invalid selection"
-                    fi
-                fi
-                ;;
-            10)
-                if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to benchmark: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
-                        benchmark_vm "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
