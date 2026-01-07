@@ -38,6 +38,7 @@ print_status() {
         "SECURITY") echo -e "\033[1;35m[SECURITY]\033[0m $message" ;;
         "NETWORK") echo -e "\033[1;94m[NETWORK]\033[0m $message" ;;
         "TMATCHAT") echo -e "\033[1;93m[TMATCHAT]\033[0m $message" ;;
+        "PERFORMANCE") echo -e "\033[1;95m[PERFORMANCE]\033[0m $message" ;;
         *) echo "[$type] $message" ;;
     esac
 }
@@ -96,7 +97,7 @@ validate_input() {
 
 # Function to check dependencies
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "tmate" "bridge-utils" "ipcalc")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "tmate" "git" "htop" "docker" "docker-compose" "python3" "node" "java")
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
@@ -107,7 +108,7 @@ check_dependencies() {
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "On Ubuntu/Debian, try: sudo apt install qemu-system cloud-image-utils wget tmate bridge-utils ipcalc"
+        print_status "INFO" "Please install required packages first"
         exit 1
     fi
 }
@@ -123,6 +124,21 @@ generate_password() {
     local length=${1:-12}
     tr -dc 'A-Za-z0-9@#$%^&*+' < /dev/urandom | head -c "$length"
     echo
+}
+
+# Function to calculate network using python
+calculate_network() {
+    local ip_cidr=$1
+    python3 -c "
+import ipaddress
+try:
+    net = ipaddress.ip_network('$ip_cidr', strict=False)
+    print(f'{net.network_address}/{net.prefixlen}')
+    print(f'{net.netmask}')
+    print(f'{net.network_address + 1}')  # Gateway
+except Exception as e:
+    print('ERROR')
+"
 }
 
 # Function to generate SSH keys
@@ -143,6 +159,11 @@ generate_ssh_keys() {
         ssh-keygen -t rsa -b 4096 -f "$ssh_dir/user_id_rsa" -N "" -q
         cat "$ssh_dir/user_id_rsa.pub" >> "$ssh_dir/authorized_keys"
     fi
+    
+    # Generate tmate keys if needed
+    if [ ! -f "$ssh_dir/tmate_rsa" ]; then
+        ssh-keygen -t rsa -b 4096 -f "$ssh_dir/tmate_rsa" -N "" -q
+    fi
 }
 
 # Function to get all VM configurations
@@ -161,7 +182,8 @@ load_vm_config() {
         unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
         unset NETWORK_MODE BRIDGE_NAME MAC_ADDRESS IPV4_ADDRESS GATEWAY DNS_SERVERS
         unset XRDP_INSTALLED XRDP_PORT XRDP_ENABLED OPEN_PORTS
-        unset DDoS_PROTECTION CPU_PINNING LOW_LATENCY TUNING
+        unset DDoS_PROTECTION CPU_PINNING LOW_LATENCY_TUNING
+        unset MONITOR_SOCKET SERIAL_SOCKET TAP_INTERFACE
         
         source "$config_file"
         return 0
@@ -209,19 +231,26 @@ OPEN_PORTS="$OPEN_PORTS"
 DDoS_PROTECTION="$DDoS_PROTECTION"
 CPU_PINNING="$CPU_PINNING"
 LOW_LATENCY_TUNING="$LOW_LATENCY_TUNING"
+MONITOR_SOCKET="$MONITOR_SOCKET"
+SERIAL_SOCKET="$SERIAL_SOCKET"
+TAP_INTERFACE="$TAP_INTERFACE"
 EOF
     
     print_status "SUCCESS" "Configuration saved to $config_file"
 }
 
-# Function to configure network bridge
+# Function to create network bridge using ip command
 setup_network_bridge() {
     print_status "NETWORK" "Configuring network..."
     
-    # Check if bridge exists
+    # Check if bridge exists using ip command
     if ! ip link show "$BRIDGE_NAME" &>/dev/null; then
         print_status "WARN" "Bridge $BRIDGE_NAME does not exist. Creating..."
-        sudo brctl addbr "$BRIDGE_NAME"
+        sudo ip link add name "$BRIDGE_NAME" type bridge
+        sudo ip link set "$BRIDGE_NAME" up
+        print_status "SUCCESS" "Bridge $BRIDGE_NAME created and activated"
+    else
+        # Ensure bridge is up
         sudo ip link set "$BRIDGE_NAME" up
     fi
     
@@ -229,6 +258,22 @@ setup_network_bridge() {
     if [ -z "$MAC_ADDRESS" ]; then
         MAC_ADDRESS="52:54:00:$(openssl rand -hex 3 | sed 's/\(..\)/\1:/g; s/.$//')"
         print_status "INFO" "Generated MAC address: $MAC_ADDRESS"
+    fi
+    
+    # Calculate network info if static IP
+    if [[ "$IPV4_ADDRESS" != "dhcp" ]]; then
+        local network_info
+        network_info=$(calculate_network "$IPV4_ADDRESS")
+        if [[ "$network_info" == "ERROR" ]]; then
+            print_status "ERROR" "Invalid network configuration: $IPV4_ADDRESS"
+            return 1
+        fi
+        IFS=$'\n' read -r NETWORK NETMASK GATEWAY <<< "$network_info"
+        
+        # Set IP on bridge if not already configured
+        if ! ip addr show "$BRIDGE_NAME" | grep -q "$NETWORK"; then
+            sudo ip addr add "$NETWORK" dev "$BRIDGE_NAME"
+        fi
     fi
 }
 
@@ -243,13 +288,19 @@ apply_vm_profile() {
             CPU_PINNING=true
             DDoS_PROTECTION=true
             OPEN_PORTS="22,80,443,25565-25575,27015-27030,9987,30033"
+            MEMORY="${MEMORY:-8192}"
+            CPUS="${CPUS:-4}"
+            DISK_SIZE="${DISK_SIZE:-100G}"
             ;;
         "workload")
             VM_ROLE="Heavy Workload"
             LOW_LATENCY_TUNING=false
             CPU_PINNING=true
             DDoS_PROTECTION=true
-            OPEN_PORTS="22,80,443,3306,5432,6379"
+            OPEN_PORTS="22,80,443,3306,5432,6379,8080,9000"
+            MEMORY="${MEMORY:-16384}"
+            CPUS="${CPUS:-8}"
+            DISK_SIZE="${DISK_SIZE:-200G}"
             ;;
         "desktop")
             VM_ROLE="XRDP Desktop"
@@ -261,6 +312,9 @@ apply_vm_profile() {
             CPU_PINNING=false
             DDoS_PROTECTION=true
             OPEN_PORTS="22,3389"
+            MEMORY="${MEMORY:-4096}"
+            CPUS="${CPUS:-2}"
+            DISK_SIZE="${DISK_SIZE:-50G}"
             ;;
         "custom")
             VM_ROLE="Custom"
@@ -272,7 +326,7 @@ apply_vm_profile() {
     esac
 }
 
-# Function to setup DDoS protection
+# Function to setup DDoS protection using iptables
 setup_ddos_protection() {
     local vm_name=$1
     local ip_address=$2
@@ -283,58 +337,64 @@ setup_ddos_protection() {
     
     print_status "SECURITY" "Setting up DDoS protection for $ip_address"
     
-    # Create nftables ruleset for the VM
-    local nft_rules="/etc/nftables.conf.d/$vm_name.conf"
+    # Create iptables rules
+    local iptables_rules="/tmp/iptables-$vm_name.rules"
     
-    sudo tee "$nft_rules" > /dev/null <<EOF
-table inet $vm_name {
-    set blacklist {
-        type ipv4_addr
-        flags timeout
-        timeout 1h
-    }
-    
-    chain input {
-        type filter hook input priority 0; policy drop;
-        
-        # Allow established connections
-        ct state established,related accept
-        
-        # Allow loopback
-        iif lo accept
-        
-        # Rate limiting for SYN packets
-        tcp flags syn tcp dport {22,80,443} limit rate over 10/second burst 20 packets add @blacklist { ip saddr }
-        
-        # Rate limiting for UDP packets
-        udp dport {27015,27016,27017,25565} limit rate over 1000/second burst 2000 packets add @blacklist { ip saddr }
-        
-        # Drop blacklisted IPs
-        ip saddr @blacklist drop
-        
-        # Connection tracking limits
-        ct state new limit rate over 50/second burst 100 packets drop
-        
-        # Allow specific ports
-        tcp dport { ${OPEN_PORTS//,/ } } accept
-        udp dport { ${OPEN_PORTS//,/ } } accept
-        
-        # Drop everything else
-        drop
-    }
-    
-    chain forward {
-        type filter hook forward priority 0; policy accept;
-        
-        # Limit forwarded packets to VM
-        ip daddr $ip_address limit rate over 10000/second burst 20000 packets drop
-    }
-}
+    cat > "$iptables_rules" <<EOF
+# Flush existing rules
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+
+# Default policies
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT ACCEPT
+
+# Allow loopback
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
+
+# Allow established connections
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Rate limiting for SSH
+iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --set
+iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --update --seconds 60 --hitcount 4 -j DROP
+
+# Rate limiting for game ports
+iptables -A INPUT -p udp -m multiport --dports 27015,27016,25565 -m state --state NEW -m limit --limit 50/sec --limit-burst 100 -j ACCEPT
+iptables -A INPUT -p udp -m multiport --dports 27015,27016,25565 -m state --state NEW -j DROP
+
+# SYN flood protection
+iptables -A INPUT -p tcp --syn -m limit --limit 1/s --limit-burst 3 -j ACCEPT
+iptables -A INPUT -p tcp --syn -j DROP
+
+# UDP flood protection
+iptables -A INPUT -p udp -m limit --limit 1000/sec --limit-burst 2000 -j ACCEPT
+iptables -A INPUT -p udp -j DROP
+
+# Allow specific ports
 EOF
     
-    # Reload nftables
-    sudo nft -f "$nft_rules"
-    print_status "SUCCESS" "DDoS protection rules applied"
+    # Add allowed ports
+    IFS=',' read -ra ports <<< "$OPEN_PORTS"
+    for port_range in "${ports[@]}"; do
+        if [[ "$port_range" =~ ^[0-9]+-[0-9]+$ ]]; then
+            echo "iptables -A INPUT -p tcp --match multiport --dports $port_range -j ACCEPT" >> "$iptables_rules"
+            echo "iptables -A INPUT -p udp --match multiport --dports $port_range -j ACCEPT" >> "$iptables_rules"
+        else
+            echo "iptables -A INPUT -p tcp --dport $port_range -j ACCEPT" >> "$iptables_rules"
+            echo "iptables -A INPUT -p udp --dport $port_range -j ACCEPT" >> "$iptables_rules"
+        fi
+    done
+    
+    # Apply rules
+    sudo bash "$iptables_rules"
+    sudo iptables-save > "/etc/iptables/rules.v4"
+    
+    print_status "SUCCESS" "DDoS protection rules applied for $vm_name"
 }
 
 # Function to start tmate session
@@ -344,14 +404,24 @@ start_tmate_session() {
     print_status "TMATCHAT" "Starting secure tmate session for VM: $vm_name"
     echo "================================================================================"
     echo "This tmate session will allow you to connect to this VM management interface"
-    echo "from anywhere for 24 hours. Share the SSH connection string below securely."
+    echo "from anywhere. Share the connection strings below securely."
     echo "================================================================================"
     echo
     
-    # Start tmate with specific socket
-    TMATE_SOCKET="/tmp/tmate-$vm_name.sock"
+    # Create tmate configuration
+    local tmate_conf="$VM_DIR/$vm_name/tmate.conf"
+    cat > "$tmate_conf" <<EOF
+set -g tmate-server-host tmate.io
+set -g tmate-server-port 22
+set -g tmate-server-rsa-fingerprint SHA256:2e:1c:70:cf:1d:46:68:bc:95:cb:07:40:07:9b:3a:8d:6b:22:25:bb:ee:d5:0a:ff:83:59:ba:90:2c:9d:fb:1f
+set -g tmate-server-ed25519-fingerprint SHA256:KE1kXKxE8PM5mCv7jGgujKzF2cO8oGJXzbqKl2WjJPs
+set -g tmate-session-name "$vm_name-$(date +%s)"
+set -g tmate-session-length 24
+EOF
     
-    tmate -S "$TMATE_SOCKET" new-session -d -s "$vm_name"
+    # Start tmate session
+    TMATE_SOCKET="/tmp/tmate-$vm_name.sock"
+    tmate -S "$TMATE_SOCKET" -f "$tmate_conf" new-session -d -s "$vm_name"
     tmate -S "$TMATE_SOCKET" wait tmate-ready
     
     # Get connection strings
@@ -362,10 +432,14 @@ start_tmate_session() {
     print_status "TMATCHAT" "Web URL: https://$TMATE_WEB"
     print_status "TMATCHAT" ""
     print_status "TMATCHAT" "This session will expire in 24 hours."
-    print_status "TMATCHAT" "To close session: Ctrl+C or 'tmate -S $TMATE_SOCKET kill-session'"
+    print_status "TMATCHAT" "To close session: Ctrl+C or kill the tmate process"
     echo
     
-    # Show session in background
+    # Save connection info
+    echo "SSH: $TMATE_SSH" > "$VM_DIR/$vm_name/tmate_connection.txt"
+    echo "Web: https://$TMATE_WEB" >> "$VM_DIR/$vm_name/tmate_connection.txt"
+    
+    # Show session
     tmate -S "$TMATE_SOCKET" attach
 }
 
@@ -479,37 +553,54 @@ create_new_vm() {
     done
     
     if [[ "$IPV4_ADDRESS" != "dhcp" ]]; then
-        IFS='/' read -r ip_addr cidr <<< "$IPV4_ADDRESS"
-        GATEWAY="${ip_addr%.*}.1"
+        local network_info
+        network_info=$(calculate_network "$IPV4_ADDRESS")
+        if [[ "$network_info" == "ERROR" ]]; then
+            print_status "ERROR" "Invalid network configuration"
+            IPV4_ADDRESS="dhcp"
+            GATEWAY=""
+            DNS_SERVERS="8.8.8.8,8.8.4.4"
+        else
+            IFS=$'\n' read -r NETWORK NETMASK GATEWAY <<< "$network_info"
+            DNS_SERVERS="8.8.8.8,8.8.4.4"
+        fi
+    else
+        GATEWAY=""
         DNS_SERVERS="8.8.8.8,8.8.4.4"
     fi
 
-    # Resource Configuration
+    # Resource Configuration (respecting profile defaults)
     while true; do
-        read -p "$(print_status "INPUT" "Disk size (default: 50G): ")" DISK_SIZE
-        DISK_SIZE="${DISK_SIZE:-50G}"
+        read -p "$(print_status "INPUT" "Disk size (default: $DISK_SIZE): ")" input_disk
+        if [ -n "$input_disk" ]; then
+            DISK_SIZE="$input_disk"
+        fi
         if validate_input "size" "$DISK_SIZE"; then
             break
         fi
     done
 
     while true; do
-        read -p "$(print_status "INPUT" "Memory in MB (default: 4096): ")" MEMORY
-        MEMORY="${MEMORY:-4096}"
+        read -p "$(print_status "INPUT" "Memory in MB (default: $MEMORY): ")" input_mem
+        if [ -n "$input_mem" ]; then
+            MEMORY="$input_mem"
+        fi
         if validate_input "number" "$MEMORY"; then
             break
         fi
     done
 
     while true; do
-        read -p "$(print_status "INPUT" "Number of CPUs (default: 4): ")" CPUS
-        CPUS="${CPUS:-4}"
+        read -p "$(print_status "INPUT" "Number of CPUs (default: $CPUS): ")" input_cpus
+        if [ -n "$input_cpus" ]; then
+            CPUS="$input_cpus"
+        fi
         if validate_input "number" "$CPUS"; then
             break
         fi
     done
 
-    SSH_PORT=22  # Standard SSH port for bridge networking
+    SSH_PORT=22
     
     # GUI mode for desktop VMs
     if [[ "$VM_ROLE" == "XRDP Desktop" ]]; then
@@ -519,18 +610,22 @@ create_new_vm() {
             XRDP_INSTALLED=true
             XRDP_PORT=3389
             XRDP_ENABLED=true
+            OPEN_PORTS="22,3389"
+        else
+            XRDP_INSTALLED=false
+            XRDP_ENABLED=false
         fi
     else
         GUI_MODE=false
         XRDP_INSTALLED=false
+        XRDP_ENABLED=false
     fi
 
     # Additional port configuration
-    if [[ "$VM_ROLE" == "Game Server" ]]; then
-        PORT_FORWARDS=""
-        print_status "INFO" "Game Server ports will be open: $OPEN_PORTS"
-    else
+    if [[ "$VM_ROLE" != "Game Server" ]] && [[ "$VM_ROLE" != "XRDP Desktop" ]]; then
         read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
+    else
+        PORT_FORWARDS=""
     fi
 
     # DDoS Protection
@@ -541,11 +636,28 @@ create_new_vm() {
         ddos_choice="${ddos_choice:-y}"
         if [[ "$ddos_choice" =~ ^[Yy]$ ]]; then
             DDoS_PROTECTION=true
+        else
+            DDoS_PROTECTION=false
+        fi
+    fi
+
+    # CPU Pinning
+    if [[ "$CPU_PINNING" == "true" ]]; then
+        print_status "PERFORMANCE" "CPU pinning will be enabled"
+    else
+        read -p "$(print_status "INPUT" "Enable CPU pinning? (y/N): ")" cpu_pin_choice
+        if [[ "$cpu_pin_choice" =~ ^[Yy]$ ]]; then
+            CPU_PINNING=true
+        else
+            CPU_PINNING=false
         fi
     fi
 
     IMG_FILE="$VM_DIR/$VM_NAME/disk.img"
     SEED_FILE="$VM_DIR/$VM_NAME/seed.iso"
+    MONITOR_SOCKET="/tmp/qemu-$VM_NAME.monitor"
+    SERIAL_SOCKET="/tmp/qemu-$VM_NAME.serial"
+    TAP_INTERFACE="tap-$VM_NAME"
     CREATED="$(date)"
 
     # Generate SSH keys
@@ -562,17 +674,21 @@ create_new_vm() {
     
     # Setup DDoS protection if enabled
     if [[ "$DDoS_PROTECTION" == "true" ]] && [[ "$IPV4_ADDRESS" != "dhcp" ]]; then
-        setup_ddos_protection "$VM_NAME" "$ip_addr"
+        setup_ddos_protection "$VM_NAME" "${IPV4_ADDRESS%/*}"
     fi
     
+    # Display summary
+    echo
     print_status "SUCCESS" "VM '$VM_NAME' created successfully!"
     print_status "INFO" "Role: $VM_ROLE"
     print_status "INFO" "IP: $IPV4_ADDRESS"
-    print_status "INFO" "SSH: ssh $USERNAME@${ip_addr:-$HOSTNAME}"
+    print_status "INFO" "SSH: ssh $USERNAME@${HOSTNAME}"
     print_status "INFO" "Password: $PASSWORD"
     if [[ "$XRDP_INSTALLED" == "true" ]]; then
-        print_status "INFO" "XRDP: xfreerdp /v:${ip_addr:-$HOSTNAME}:$XRDP_PORT"
+        print_status "INFO" "XRDP: xfreerdp /v:\${VM_IP}:$XRDP_PORT"
     fi
+    print_status "INFO" "Open Ports: $OPEN_PORTS"
+    echo
 }
 
 # Function to setup VM image with dual authentication
@@ -588,7 +704,7 @@ setup_vm_image() {
         print_status "INFO" "Image file already exists. Skipping download."
     else
         print_status "INFO" "Downloading image from $IMG_URL..."
-        if ! wget --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp"; then
+        if ! wget --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp" 2>&1 | tail -f -n +2; then
             print_status "ERROR" "Failed to download image from $IMG_URL"
             exit 1
         fi
@@ -615,13 +731,13 @@ setup_vm_image() {
     cat > user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
-ssh_pwauth: true  # Enable password authentication
+ssh_pwauth: true
 disable_root: false
 users:
   - name: $USERNAME
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
-    password: $(openssl passwd -6 "$PASSWORD" | tr -d '\n')
+    password: $(mkpasswd -m sha-512 "$PASSWORD" | tr -d '\n')
     ssh_authorized_keys:
 $(awk '{print "      - " $0}' "$auth_keys")
   - name: root
@@ -663,12 +779,11 @@ echo "packages:
 runcmd:
   - systemctl enable xrdp
   - systemctl start xrdp
-  - ufw allow 3389/tcp
   - echo 'xfce4-session' > /home/$USERNAME/.xsession
   - chown $USERNAME:$USERNAME /home/$USERNAME/.xsession"
 fi)
 
-# Apply performance tuning for game servers
+# Performance tuning for game servers
 $(if [[ "$LOW_LATENCY_TUNING" == "true" ]]; then
 echo "bootcmd:
   - echo 'net.core.rmem_max=134217728' >> /etc/sysctl.conf
@@ -680,6 +795,27 @@ echo "bootcmd:
 runcmd:
   - sysctl -p"
 fi)
+
+# Install monitoring tools
+packages:
+  - htop
+  - btop
+  - iotop
+  - nethogs
+  - curl
+  - wget
+  - screen
+  - tmux
+  - neofetch
+  - python3
+  - nodejs
+  - docker.io
+  - docker-compose
+
+runcmd:
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker $USERNAME
 
 power_state:
   mode: reboot
@@ -722,17 +858,16 @@ start_vm() {
         # Check if seed file exists
         if [[ ! -f "$SEED_FILE" ]]; then
             print_status "WARN" "Seed file not found, recreating..."
-            setup_vm_image
+            setup_vm_image ""
         fi
         
         # Setup network bridge
         setup_network_bridge
         
         # Create tap interface
-        local tap_iface="tap-$vm_name"
-        sudo ip tuntap add dev "$tap_iface" mode tap user "$(whoami)"
-        sudo ip link set "$tap_iface" up
-        sudo brctl addif "$BRIDGE_NAME" "$tap_iface"
+        sudo ip tuntap add dev "$TAP_INTERFACE" mode tap user "$(whoami)"
+        sudo ip link set "$TAP_INTERFACE" up
+        sudo ip link set "$TAP_INTERFACE" master "$BRIDGE_NAME"
         
         # Build QEMU command with bridge networking
         local qemu_cmd=(
@@ -744,7 +879,7 @@ start_vm() {
             -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,discard=on"
             -drive "file=$SEED_FILE,format=raw,if=virtio"
             -boot order=c
-            -netdev "tap,id=net0,ifname=$tap_iface,script=no,downscript=no"
+            -netdev "tap,id=net0,ifname=$TAP_INTERFACE,script=no,downscript=no"
             -device "virtio-net-pci,netdev=net0,mac=$MAC_ADDRESS"
             -vga virtio
             -display none
@@ -771,11 +906,10 @@ start_vm() {
             )
         fi
         
-        # Add monitor socket for management
-        local monitor_socket="/tmp/qemu-$vm_name.monitor"
+        # Add monitor and serial sockets
         qemu_cmd+=(
-            -monitor "unix:$monitor_socket,server,nowait"
-            -serial "unix:/tmp/qemu-$vm_name.serial,server,nowait"
+            -monitor "unix:$MONITOR_SOCKET,server,nowait"
+            -serial "unix:$SERIAL_SOCKET,server,nowait"
         )
         
         print_status "INFO" "Starting QEMU with bridge networking..."
@@ -785,7 +919,7 @@ start_vm() {
         # Start QEMU
         if ! "${qemu_cmd[@]}"; then
             print_status "ERROR" "Failed to start QEMU"
-            sudo ip link delete "$tap_iface"
+            sudo ip link delete "$TAP_INTERFACE"
             return 1
         fi
         
@@ -797,7 +931,7 @@ start_vm() {
         if [[ "$IPV4_ADDRESS" != "dhcp" ]]; then
             vm_ip="${IPV4_ADDRESS%/*}"
         else
-            # Try to get IP from DHCP
+            # Try to get IP from ARP table
             for i in {1..30}; do
                 vm_ip=$(sudo arp -n | grep -i "$MAC_ADDRESS" | awk '{print $1}')
                 if [ -n "$vm_ip" ]; then
@@ -807,16 +941,21 @@ start_vm() {
             done
         fi
         
+        # Setup DDoS protection if needed
+        if [[ "$DDoS_PROTECTION" == "true" ]] && [ -n "$vm_ip" ]; then
+            setup_ddos_protection "$vm_name" "$vm_ip"
+        fi
+        
         # Display connection information
         echo
         print_status "SUCCESS" "VM '$vm_name' is now running!"
         print_status "INFO" "Role: $VM_ROLE"
         print_status "INFO" "IP Address: ${vm_ip:-$IPV4_ADDRESS}"
-        print_status "INFO" "SSH Access: ssh $USERNAME@${vm_ip:-$IPV4_ADDRESS}"
+        print_status "INFO" "SSH Access: ssh $USERNAME@${vm_ip:-$HOSTNAME}"
         print_status "INFO" "Password: $PASSWORD"
         
         if [[ "$XRDP_INSTALLED" == "true" ]] && [[ "$XRDP_ENABLED" == "true" ]]; then
-            print_status "INFO" "XRDP Access: xfreerdp /v:${vm_ip:-$IPV4_ADDRESS}:$XRDP_PORT"
+            print_status "INFO" "XRDP Access: xfreerdp /v:${vm_ip:-$HOSTNAME}:$XRDP_PORT"
             print_status "INFO" "XRDP Username: $USERNAME"
             print_status "INFO" "XRDP Password: $PASSWORD"
         fi
@@ -857,9 +996,8 @@ stop_vm() {
             print_status "INFO" "Stopping VM: $vm_name"
             
             # Try graceful shutdown via monitor
-            local monitor_socket="/tmp/qemu-$vm_name.monitor"
-            if [ -S "$monitor_socket" ]; then
-                echo "system_powerdown" | socat - UNIX-CONNECT:"$monitor_socket"
+            if [ -S "$MONITOR_SOCKET" ]; then
+                echo "system_powerdown" | sudo socat - UNIX-CONNECT:"$MONITOR_SOCKET"
                 sleep 5
             fi
             
@@ -873,11 +1011,14 @@ stop_vm() {
             fi
             
             # Cleanup tap interface
-            local tap_iface="tap-$vm_name"
-            sudo ip link delete "$tap_iface" 2>/dev/null || true
+            sudo ip link delete "$TAP_INTERFACE" 2>/dev/null || true
             
             # Cleanup sockets
-            rm -f "/tmp/qemu-$vm_name.monitor" "/tmp/qemu-$vm_name.serial"
+            sudo rm -f "$MONITOR_SOCKET" "$SERIAL_SOCKET"
+            
+            # Cleanup DDoS rules
+            sudo iptables -F
+            sudo iptables -X
             
             print_status "SUCCESS" "VM $vm_name stopped"
         else
@@ -900,10 +1041,11 @@ delete_vm() {
         fi
         
         # Remove DDoS protection rules
-        sudo rm -f "/etc/nftables.conf.d/$vm_name.conf"
+        sudo iptables -F
+        sudo iptables -X
         
         # Remove VM files
-        rm -rf "$VM_DIR/$vm_name" "$VM_DIR/$vm_name.conf"
+        sudo rm -rf "$VM_DIR/$vm_name" "$VM_DIR/$vm_name.conf"
         
         print_status "SUCCESS" "VM '$vm_name' has been deleted"
     else
@@ -923,11 +1065,11 @@ show_vm_info() {
         echo "OS: $OS_TYPE"
         echo "Hostname: $HOSTNAME"
         echo "Username: $USERNAME"
-        echo "Password: $PASSWORD (use SSH keys for better security)"
+        echo "Password: $PASSWORD"
         echo "IP Address: $IPV4_ADDRESS"
         echo "MAC Address: $MAC_ADDRESS"
         echo "Bridge: $BRIDGE_NAME"
-        echo "SSH Access: ssh $USERNAME@${IPV4_ADDRESS%/*}"
+        echo "SSH Access: ssh $USERNAME@${HOSTNAME}"
         echo "Memory: $MEMORY MB"
         echo "CPUs: $CPUS"
         echo "Disk: $DISK_SIZE"
@@ -938,10 +1080,25 @@ show_vm_info() {
         
         if [[ "$XRDP_INSTALLED" == "true" ]]; then
             echo "XRDP: Enabled (Port: $XRDP_PORT)"
-            echo "XRDP Connection: xfreerdp /v:${IPV4_ADDRESS%/*}:$XRDP_PORT"
+            echo "XRDP Connection: xfreerdp /v:\${VM_IP}:$XRDP_PORT"
         fi
         
         echo "Open Ports: ${OPEN_PORTS:-None}"
+        
+        # Show status
+        if is_vm_running "$vm_name"; then
+            echo "Status: Running"
+            # Try to get actual IP
+            local vm_ip=$(sudo arp -n | grep -i "$MAC_ADDRESS" | awk '{print $1}')
+            if [ -n "$vm_ip" ]; then
+                echo "Current IP: $vm_ip"
+                if [[ "$XRDP_INSTALLED" == "true" ]]; then
+                    echo "Current XRDP: xfreerdp /v:$vm_ip:$XRDP_PORT"
+                fi
+            fi
+        else
+            echo "Status: Stopped"
+        fi
         echo "=========================================="
         echo
         
@@ -951,6 +1108,198 @@ show_vm_info() {
         fi
         
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
+    fi
+}
+
+# Function to show VM performance metrics
+show_vm_performance() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        if is_vm_running "$vm_name"; then
+            print_status "PERFORMANCE" "Performance metrics for VM: $vm_name"
+            echo "=========================================="
+            
+            # Get QEMU process ID
+            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*-name $vm_name")
+            if [[ -n "$qemu_pid" ]]; then
+                # Show process stats
+                echo "QEMU Process Stats:"
+                ps -p "$qemu_pid" -o pid,%cpu,%mem,sz,rss,vsz,cmd --no-headers
+                echo
+                
+                # Show memory usage using htop-style output
+                echo "Memory Usage:"
+                free -h
+                echo
+                
+                # Show disk usage
+                echo "Disk Usage:"
+                if command -v btop &> /dev/null; then
+                    df -h "$IMG_FILE" 2>/dev/null || du -h "$IMG_FILE"
+                else
+                    du -h "$IMG_FILE"
+                fi
+                echo
+                
+                # Show network statistics
+                echo "Network Interface: $TAP_INTERFACE"
+                if command -v nethogs &> /dev/null; then
+                    echo "Run 'sudo nethogs $TAP_INTERFACE' for network usage"
+                fi
+                
+                # Show CPU information
+                echo
+                echo "CPU Information:"
+                if command -v cpuid &> /dev/null; then
+                    cpuid | grep -E "(vendor|model name|cache size)" | head -5
+                else
+                    lscpu | grep -E "(Model name|CPU\(s\)|Thread)"
+                fi
+            else
+                print_status "ERROR" "Could not find QEMU process for VM $vm_name"
+            fi
+        else
+            print_status "INFO" "VM $vm_name is not running"
+            echo "Configuration:"
+            echo "  Memory: $MEMORY MB"
+            echo "  CPUs: $CPUS"
+            echo "  Disk: $DISK_SIZE"
+            echo "  CPU Pinning: $CPU_PINNING"
+            echo "  Low Latency Tuning: $LOW_LATENCY_TUNING"
+        fi
+        echo "=========================================="
+        read -p "$(print_status "INPUT" "Press Enter to continue...")"
+    fi
+}
+
+# Function to edit VM configuration
+edit_vm_config() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        print_status "INFO" "Editing VM: $vm_name"
+        
+        while true; do
+            echo "What would you like to edit?"
+            echo "  1) Hostname"
+            echo "  2) Username"
+            echo "  3) Password"
+            echo "  4) Memory (RAM)"
+            echo "  5) CPU Count"
+            echo "  6) Disk Size"
+            echo "  7) DDoS Protection"
+            echo "  8) CPU Pinning"
+            echo "  9) Open Ports"
+            echo "  0) Back to main menu"
+            
+            read -p "$(print_status "INPUT" "Enter your choice: ")" edit_choice
+            
+            case $edit_choice in
+                1)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new hostname (current: $HOSTNAME): ")" new_hostname
+                        new_hostname="${new_hostname:-$HOSTNAME}"
+                        if validate_input "name" "$new_hostname"; then
+                            HOSTNAME="$new_hostname"
+                            break
+                        fi
+                    done
+                    ;;
+                2)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new username (current: $USERNAME): ")" new_username
+                        new_username="${new_username:-$USERNAME}"
+                        if validate_input "username" "$new_username"; then
+                            USERNAME="$new_username"
+                            break
+                        fi
+                    done
+                    ;;
+                3)
+                    while true; do
+                        read -s -p "$(print_status "INPUT" "Enter new password (current: ****): ")" new_password
+                        new_password="${new_password:-$PASSWORD}"
+                        echo
+                        if [ -n "$new_password" ]; then
+                            PASSWORD="$new_password"
+                            break
+                        else
+                            print_status "ERROR" "Password cannot be empty"
+                        fi
+                    done
+                    ;;
+                4)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new memory in MB (current: $MEMORY): ")" new_memory
+                        new_memory="${new_memory:-$MEMORY}"
+                        if validate_input "number" "$new_memory"; then
+                            MEMORY="$new_memory"
+                            break
+                        fi
+                    done
+                    ;;
+                5)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new CPU count (current: $CPUS): ")" new_cpus
+                        new_cpus="${new_cpus:-$CPUS}"
+                        if validate_input "number" "$new_cpus"; then
+                            CPUS="$new_cpus"
+                            break
+                        fi
+                    done
+                    ;;
+                6)
+                    while true; do
+                        read -p "$(print_status "INPUT" "Enter new disk size (current: $DISK_SIZE): ")" new_disk_size
+                        new_disk_size="${new_disk_size:-$DISK_SIZE}"
+                        if validate_input "size" "$new_disk_size"; then
+                            DISK_SIZE="$new_disk_size"
+                            break
+                        fi
+                    done
+                    ;;
+                7)
+                    read -p "$(print_status "INPUT" "Enable DDoS protection? (current: $DDoS_PROTECTION) (y/N): ")" ddos_choice
+                    if [[ "$ddos_choice" =~ ^[Yy]$ ]]; then
+                        DDoS_PROTECTION=true
+                    else
+                        DDoS_PROTECTION=false
+                    fi
+                    ;;
+                8)
+                    read -p "$(print_status "INPUT" "Enable CPU pinning? (current: $CPU_PINNING) (y/N): ")" cpu_pin_choice
+                    if [[ "$cpu_pin_choice" =~ ^[Yy]$ ]]; then
+                        CPU_PINNING=true
+                    else
+                        CPU_PINNING=false
+                    fi
+                    ;;
+                9)
+                    read -p "$(print_status "INPUT" "Enter open ports (current: ${OPEN_PORTS:-None}): ")" new_ports
+                    OPEN_PORTS="${new_ports:-$OPEN_PORTS}"
+                    ;;
+                0)
+                    return 0
+                    ;;
+                *)
+                    print_status "ERROR" "Invalid selection"
+                    continue
+                    ;;
+            esac
+            
+            # Recreate seed image with new configuration
+            print_status "INFO" "Updating cloud-init configuration..."
+            setup_vm_image ""
+            
+            # Save configuration
+            save_vm_config
+            
+            read -p "$(print_status "INPUT" "Continue editing? (y/N): ")" continue_editing
+            if [[ ! "$continue_editing" =~ ^[Yy]$ ]]; then
+                break
+            fi
+        done
     fi
 }
 
@@ -980,9 +1329,12 @@ main_menu() {
             echo "  2) Start a VM"
             echo "  3) Stop a VM"
             echo "  4) Show VM info"
-            echo "  5) Start tmate session for VM"
-            echo "  6) Delete a VM"
+            echo "  5) Show VM performance"
+            echo "  6) Edit VM configuration"
+            echo "  7) Start tmate session for VM"
+            echo "  8) Delete a VM"
         fi
+        echo "  9) System Information"
         echo "  0) Exit"
         echo
         
@@ -1024,6 +1376,26 @@ main_menu() {
                 ;;
             5)
                 if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to show performance: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        show_vm_performance "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                fi
+                ;;
+            6)
+                if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to edit: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        edit_vm_config "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                fi
+                ;;
+            7)
+                if [ $vm_count -gt 0 ]; then
                     read -p "$(print_status "INPUT" "Enter VM number for tmate session: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         start_tmate_session "${vms[$((vm_num-1))]}"
@@ -1032,7 +1404,7 @@ main_menu() {
                     fi
                 fi
                 ;;
-            6)
+            8)
                 if [ $vm_count -gt 0 ]; then
                     read -p "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
@@ -1041,6 +1413,24 @@ main_menu() {
                         print_status "ERROR" "Invalid selection"
                     fi
                 fi
+                ;;
+            9)
+                echo
+                print_status "INFO" "System Information:"
+                echo "=========================================="
+                if command -v neofetch &> /dev/null; then
+                    neofetch --stdout | head -20
+                else
+                    echo "Hostname: $(hostname)"
+                    echo "Kernel: $(uname -r)"
+                    echo "CPU: $(lscpu | grep "Model name" | cut -d: -f2 | xargs)"
+                    echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
+                    echo "Disk: $(df -h / | awk 'NR==2 {print $2}')"
+                fi
+                echo "QEMU Version: $(qemu-system-x86_64 --version | head -1)"
+                echo "Running VMs: $(pgrep -c qemu-system-x86_64 || echo 0)"
+                echo "=========================================="
+                read -p "$(print_status "INPUT" "Press Enter to continue...")"
                 ;;
             0)
                 print_status "INFO" "Goodbye!"
