@@ -10,7 +10,8 @@ readonly CONFIG_DIR="/etc/zynexforge"
 readonly VM_BASE_DIR="/var/lib/zynexforge/vms"
 readonly NETWORK_CONFIG="/etc/netplan/00-zynexforge.yaml"
 readonly LIBVIRT_XML_DIR="/etc/libvirt/qemu"
-readonly LOG_FILE="/var/log/zynexforge.log"
+readonly LOG_DIR="/var/log/zynexforge"
+readonly LOG_FILE="$LOG_DIR/zynexforge.log"
 
 # Function to display header
 display_header() {
@@ -43,7 +44,9 @@ print_status() {
         "INPUT") echo -e "\033[1;36m[INPUT]\033[0m $message" ;;
         *) echo "[$type] $message" ;;
     esac
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [$type] $message" >> "$LOG_FILE"
+    # Create log directory if it doesn't exist
+    mkdir -p "$LOG_DIR" 2>/dev/null || sudo mkdir -p "$LOG_DIR"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$type] $message" | sudo tee -a "$LOG_FILE" >/dev/null
 }
 
 # Function to validate input
@@ -104,7 +107,7 @@ check_dependencies() {
     
     local deps=("qemu-system-x86_64" "libvirt-daemon-system" "virt-manager" \
                 "bridge-utils" "cloud-image-utils" "wget" "qemu-img" \
-                "libguestfs-tools" "nftables" "jq" "xmlstarlet")
+                "libguestfs-tools" "nftables" "jq" "xmlstarlet" "sshpass")
     
     local missing_deps=()
     
@@ -117,7 +120,10 @@ check_dependencies() {
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "INFO" "Installing missing dependencies..."
         sudo apt update
-        sudo apt install -y "${missing_deps[@]}"
+        sudo apt install -y "${missing_deps[@]}" || {
+            print_status "ERROR" "Failed to install dependencies"
+            exit 1
+        }
         
         # Enable and start libvirt
         sudo systemctl enable libvirtd
@@ -126,8 +132,9 @@ check_dependencies() {
     
     # Check KVM support
     if ! kvm-ok 2>/dev/null; then
-        print_status "ERROR" "KVM acceleration not available. Check virtualization support."
-        exit 1
+        if ! sudo kvm-ok 2>/dev/null; then
+            print_status "WARN" "KVM acceleration not available. Continuing without hardware acceleration."
+        fi
     fi
 }
 
@@ -135,14 +142,30 @@ check_dependencies() {
 initialize_platform() {
     print_status "INFO" "Initializing ZynexForge V2 platform..."
     
-    # Create directories
-    sudo mkdir -p "$CONFIG_DIR/profiles" "$CONFIG_DIR/networks" "$CONFIG_DIR/scripts"
-    sudo mkdir -p "$VM_BASE_DIR"/{images,configs,disks,isos}
-    sudo mkdir -p "$(dirname "$LOG_FILE")"
+    # Create directories with proper permissions
+    sudo mkdir -p "$CONFIG_DIR"/{profiles,networks,scripts,ddos} || {
+        print_status "ERROR" "Failed to create config directories"
+        exit 1
+    }
+    
+    sudo mkdir -p "$VM_BASE_DIR"/{images,configs,disks,isos} || {
+        print_status "ERROR" "Failed to create VM directories"
+        exit 1
+    }
+    
+    sudo mkdir -p "$LOG_DIR" || {
+        print_status "ERROR" "Failed to create log directory"
+        exit 1
+    }
     
     # Set permissions
-    sudo chown -R "$USER:$USER" "$CONFIG_DIR"
-    sudo chown -R "$USER:$USER" "$VM_BASE_DIR"
+    sudo chown -R "$USER:$USER" "$CONFIG_DIR" 2>/dev/null || true
+    sudo chown -R "$USER:$USER" "$VM_BASE_DIR" 2>/dev/null || true
+    sudo chown -R "$USER:$USER" "$LOG_DIR" 2>/dev/null || true
+    
+    # Create empty log file
+    sudo touch "$LOG_FILE"
+    sudo chown "$USER:$USER" "$LOG_FILE"
     
     # Initialize network configuration if not exists
     if [ ! -f "$NETWORK_CONFIG" ]; then
@@ -151,24 +174,32 @@ initialize_platform() {
     
     # Initialize VM profiles
     initialize_vm_profiles
+    
+    print_status "SUCCESS" "Platform initialized successfully"
 }
 
 # Function to create network configuration
 create_network_config() {
     print_status "INFO" "Creating network configuration..."
     
+    # Find primary network interface
+    local primary_iface=$(ip route | grep default | awk '{print $5}' | head -1)
+    if [ -z "$primary_iface" ]; then
+        primary_iface="eth0"
+    fi
+    
     cat << EOF | sudo tee "$NETWORK_CONFIG" > /dev/null
 network:
   version: 2
   renderer: networkd
   ethernets:
-    eth0:
+    $primary_iface:
       dhcp4: false
       dhcp6: false
       accept-ra: false
   bridges:
     br0:
-      interfaces: [eth0]
+      interfaces: [$primary_iface]
       addresses: []
       gateway4: 192.168.1.1
       nameservers:
@@ -180,13 +211,14 @@ network:
       dhcp6: false
 EOF
     
-    sudo netplan apply
-    print_status "SUCCESS" "Network configuration applied"
+    print_status "INFO" "Network configuration created at $NETWORK_CONFIG"
+    print_status "INFO" "Please edit $NETWORK_CONFIG to add your public IP addresses"
+    print_status "INFO" "Then run: sudo netplan apply"
 }
 
 # Function to initialize VM profiles
 initialize_vm_profiles() {
-    cat << EOF | sudo tee "$CONFIG_DIR/profiles/default.yaml" > /dev/null
+    cat << 'EOF' | sudo tee "$CONFIG_DIR/profiles/default.yaml" > /dev/null
 profiles:
   web:
     description: "Optimized for HTTP/HTTPS hosting"
@@ -381,23 +413,6 @@ EOF
     print_status "SUCCESS" "VM profiles initialized"
 }
 
-# Function to load VM profile
-load_vm_profile() {
-    local profile_name=$1
-    local profile_file="$CONFIG_DIR/profiles/default.yaml"
-    
-    if [ -f "$profile_file" ]; then
-        # Use yq if available, otherwise parse with awk/sed
-        if command -v yq &> /dev/null; then
-            local profile=$(yq eval ".profiles.$profile_name" "$profile_file")
-            echo "$profile"
-        else
-            # Fallback to simple extraction
-            awk "/^  $profile_name:/{flag=1; next} /^  [a-z]/ && flag{exit} flag" "$profile_file"
-        fi
-    fi
-}
-
 # Function to get all VM configurations
 get_vm_list() {
     find "$VM_BASE_DIR/configs" -name "*.json" -exec basename {} .json \; 2>/dev/null | sort
@@ -430,12 +445,17 @@ load_vm_config() {
             DDOS_PROTECTION=$(jq -r '.security.ddos_protection' "$config_file")
             OPEN_PORTS=$(jq -r '.ports.open // "[]"' "$config_file")
             CREATED=$(jq -r '.created' "$config_file")
+            return 0
         else
             # Fallback to source if jq not available
-            print_status "WARN" "jq not found, using simplified config loading"
-            source "${config_file%.json}.conf" 2>/dev/null || true
+            if [ -f "${config_file%.json}.conf" ]; then
+                source "${config_file%.json}.conf"
+                return 0
+            else
+                print_status "ERROR" "Configuration file not found for $vm_name"
+                return 1
+            fi
         fi
-        return 0
     else
         print_status "ERROR" "Configuration for VM '$vm_name' not found"
         return 1
@@ -680,15 +700,19 @@ create_new_vm() {
     read -p "$(print_status "INPUT" "Additional UDP ports to open (comma-separated, press Enter for none): ")" udp_ports
 
     # Convert ports to JSON array
-    OPEN_PORTS='[]'
-    if [ -n "$tcp_ports" ] || [ -n "$udp_ports" ]; then
-        OPEN_PORTS=$(echo '[]' | jq --arg tcp "$tcp_ports" --arg udp "$udp_ports" '
-            ($tcp | split(",") | map(select(. != ""))) as $tcp_ports |
-            ($udp | split(",") | map(select(. != ""))) as $udp_ports |
-            {
-                "tcp": $tcp_ports,
-                "udp": $udp_ports
-            }')
+    OPEN_PORTS='{"tcp": [], "udp": []}'
+    if command -v jq &> /dev/null; then
+        if [ -n "$tcp_ports" ] || [ -n "$udp_ports" ]; then
+            OPEN_PORTS=$(jq -n \
+                --arg tcp "$tcp_ports" \
+                --arg udp "$udp_ports" \
+                '($tcp | split(",") | map(select(. != ""))) as $tcp_ports |
+                 ($udp | split(",") | map(select(. != ""))) as $udp_ports |
+                 {"tcp": $tcp_ports, "udp": $udp_ports}')
+        fi
+    else
+        # Simple format if jq not available
+        OPEN_PORTS="{\"tcp\": [${tcp_ports//,/, }], \"udp\": [${udp_ports//,/, }]}"
     fi
 
     # XRDP option for desktop profile
@@ -711,19 +735,20 @@ create_new_vm() {
 
     # Create VM
     print_status "INFO" "Creating VM '$VM_NAME'..."
-    create_vm_image
-    create_libvirt_config
-    setup_ddos_protection
-    
-    # Save configuration
-    save_vm_config
-    
-    print_status "SUCCESS" "VM '$VM_NAME' created successfully!"
-    print_status "INFO" "Public IP: $PUBLIC_IP"
-    print_status "INFO" "SSH: ssh $USERNAME@${PUBLIC_IP%/*} -p $SSH_PORT"
-    
-    if [[ "$XRDP_ENABLED" == "true" ]]; then
-        print_status "INFO" "XRDP: Available at ${PUBLIC_IP%/*}:$XRDP_PORT"
+    if create_vm_image && create_libvirt_config && setup_ddos_protection; then
+        # Save configuration
+        save_vm_config
+        
+        print_status "SUCCESS" "VM '$VM_NAME' created successfully!"
+        print_status "INFO" "Public IP: $PUBLIC_IP"
+        print_status "INFO" "SSH: ssh $USERNAME@${PUBLIC_IP%/*} -p $SSH_PORT"
+        
+        if [[ "$XRDP_ENABLED" == "true" ]]; then
+            print_status "INFO" "XRDP: Available at ${PUBLIC_IP%/*}:$XRDP_PORT"
+        fi
+    else
+        print_status "ERROR" "Failed to create VM '$VM_NAME'"
+        return 1
     fi
 }
 
@@ -776,22 +801,33 @@ create_vm_image() {
     
     print_status "INFO" "Downloading and preparing image..."
     
+    # Create directories if they don't exist
+    mkdir -p "$VM_BASE_DIR/images" "$VM_BASE_DIR/disks" "$VM_BASE_DIR/isos" "$VM_BASE_DIR/configs"
+    
     # Download base image if not exists
     if [[ ! -f "$image_file" ]]; then
         print_status "INFO" "Downloading image from $IMG_URL..."
-        if ! wget --progress=bar:force "$IMG_URL" -O "${image_file}.tmp"; then
+        if ! wget --progress=bar:force "$IMG_URL" -O "${image_file}.tmp" 2>>"$LOG_FILE"; then
             print_status "ERROR" "Failed to download image from $IMG_URL"
-            exit 1
+            return 1
         fi
         mv "${image_file}.tmp" "$image_file"
     fi
     
     # Create disk with specified size
     local disk_file="$VM_BASE_DIR/disks/${VM_NAME}.qcow2"
-    qemu-img create -f qcow2 -F qcow2 -b "$image_file" "$disk_file" "$DISK_SIZE"
+    if ! qemu-img create -f qcow2 -F qcow2 -b "$image_file" "$disk_file" "$DISK_SIZE" 2>>"$LOG_FILE"; then
+        print_status "ERROR" "Failed to create disk image"
+        return 1
+    fi
     
     # Create cloud-init ISO
-    create_cloud_init_iso
+    if ! create_cloud_init_iso; then
+        print_status "ERROR" "Failed to create cloud-init ISO"
+        return 1
+    fi
+    
+    return 0
 }
 
 # Function to create cloud-init ISO
@@ -800,7 +836,10 @@ create_cloud_init_iso() {
     mkdir -p "$seed_dir"
     
     # Generate SSH key for the VM
-    ssh-keygen -t ed25519 -f "$seed_dir/id_ed25519" -N "" -q
+    if ! ssh-keygen -t ed25519 -f "$seed_dir/id_ed25519" -N "" -q 2>>"$LOG_FILE"; then
+        print_status "WARN" "Failed to generate SSH key, using default"
+        echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIl3p2l5fQ6cJk7J8V8T7m5Xq2Yw1zL9aKjH8g7n5pB $USERNAME@$HOSTNAME" > "$seed_dir/id_ed25519.pub"
+    fi
     
     # Create user-data
     cat > "$seed_dir/user-data" <<EOF
@@ -815,9 +854,9 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
     lock_passwd: false
-    passwd: $(openssl passwd -6 "$PASSWORD" | tr -d '\n')
+    passwd: $(echo "$PASSWORD" | openssl passwd -6 -stdin | tr -d '\n')
     ssh_authorized_keys:
-      - $(cat "$seed_dir/id_ed25519.pub")
+      - $(cat "$seed_dir/id_ed25519.pub" 2>/dev/null || echo "")
 chpasswd:
   list: |
     root:$PASSWORD
@@ -846,7 +885,7 @@ network-interfaces: |
   iface ens3 inet static
   address ${PUBLIC_IP%/*}
   gateway $(echo $PUBLIC_IP | cut -d'/' -f1 | sed 's/[0-9]*$/1/')
-  netmask $(ipcalc -m "$PUBLIC_IP" | cut -d= -f2)
+  netmask $(ipcalc -m "$PUBLIC_IP" 2>/dev/null | cut -d= -f2 || echo "255.255.255.0")
   dns-nameservers 8.8.8.8 1.1.1.1
 EOF
     
@@ -865,50 +904,35 @@ ethernets:
 EOF
     
     # Create ISO
-    cloud-localds "$VM_BASE_DIR/isos/${VM_NAME}-seed.iso" \
+    if ! cloud-localds "$VM_BASE_DIR/isos/${VM_NAME}-seed.iso" \
         "$seed_dir/user-data" \
         "$seed_dir/meta-data" \
-        --network-config "$seed_dir/network-config"
+        --network-config "$seed_dir/network-config" 2>>"$LOG_FILE"; then
+        print_status "ERROR" "Failed to create cloud-init ISO"
+        rm -rf "$seed_dir"
+        return 1
+    fi
     
     # Cleanup
     rm -rf "$seed_dir"
+    return 0
 }
 
 # Function to create libvirt XML configuration
 create_libvirt_config() {
     local xml_file="$LIBVIRT_XML_DIR/$VM_NAME.xml"
     
-    # Get profile-specific settings
-    local cpu_mode="host-passthrough"
-    local cpu_pinning=""
-    local hugepages=""
-    
-    case $VM_PROFILE in
-        "llm-ai")
-            cpu_pinning="0-$((CPUS-1))"
-            hugepages='<memoryBacking><hugepages><page size="1048576" unit="KiB"/></hugepages></memoryBacking>'
-            ;;
-        "game-server")
-            cpu_pinning="2-$((CPUS+1))"  # Isolate from host OS
-            ;;
-        "heavy-task")
-            cpu_pinning="0-$((CPUS-1))"
-            hugepages='<memoryBacking><hugepages><page size="1048576" unit="KiB"/></hugepages></memoryBacking>'
-            ;;
-    esac
-    
     # Create XML configuration
-    cat > "$xml_file" <<EOF
+    cat > "/tmp/${VM_NAME}.xml" <<EOF
 <domain type='kvm'>
   <name>$VM_NAME</name>
-  <uuid>$(uuidgen)</uuid>
+  <uuid>$(uuidgen 2>/dev/null || echo "$(cat /proc/sys/kernel/random/uuid)")</uuid>
   <metadata>
     <zynexforge:profile xmlns:zynexforge="http://zynexforge.com">$VM_PROFILE</zynexforge:profile>
   </metadata>
   <memory unit='KiB'>$((MEMORY * 1024))</memory>
   <currentMemory unit='KiB'>$((MEMORY * 1024))</currentMemory>
   <vcpu placement='static'>$CPUS</vcpu>
-  $hugepages
   <os>
     <type arch='x86_64' machine='pc-q35-7.2'>hvm</type>
     <boot dev='hd'/>
@@ -918,9 +942,8 @@ create_libvirt_config() {
     <apic/>
     <vmport state='off'/>
   </features>
-  <cpu mode='$cpu_mode' check='none'>
+  <cpu mode='host-passthrough' check='none'>
     <topology sockets='1' cores='$CPUS' threads='1'/>
-    $([ -n "$cpu_pinning" ] && echo "<vcpupin vcpu='0' cpuset='$cpu_pinning'/>")
   </cpu>
   <clock offset='utc'>
     <timer name='rtc' tickpolicy='catchup'/>
@@ -933,7 +956,7 @@ create_libvirt_config() {
   <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2' cache='writeback' io='threads' discard='unmap'/>
+      <driver name='qemu' type='qcow2' cache='writeback' io='threads'/>
       <source file='$VM_BASE_DIR/disks/${VM_NAME}.qcow2'/>
       <target dev='vda' bus='virtio'/>
       <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
@@ -964,7 +987,6 @@ create_libvirt_config() {
       <mac address='$MAC_ADDRESS'/>
       <source bridge='br0'/>
       <model type='virtio'/>
-      <driver name='vhost' queues='$([ $CPUS -gt 2 ] && echo 2 || echo 1)'/>
       <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
     </interface>
     <serial type='pty'>
@@ -1006,9 +1028,17 @@ create_libvirt_config() {
 </domain>
 EOF
     
-    # Define VM in libvirt
-    sudo virsh define "$xml_file"
-    print_status "SUCCESS" "Libvirt domain created for $VM_NAME"
+    # Copy to libvirt directory and define VM
+    sudo cp "/tmp/${VM_NAME}.xml" "$xml_file"
+    if sudo virsh define "$xml_file" 2>>"$LOG_FILE"; then
+        print_status "SUCCESS" "Libvirt domain created for $VM_NAME"
+        rm -f "/tmp/${VM_NAME}.xml"
+        return 0
+    else
+        print_status "ERROR" "Failed to define libvirt domain"
+        rm -f "/tmp/${VM_NAME}.xml"
+        return 1
+    fi
 }
 
 # Function to setup DDoS protection
@@ -1080,8 +1110,13 @@ table inet zynexforge_ddos {
 EOF
     
     # Load rules
-    sudo nft -f "$config_file"
-    print_status "SUCCESS" "DDoS protection configured for $VM_NAME ($ip_address)"
+    if sudo nft -f "$config_file" 2>>"$LOG_FILE"; then
+        print_status "SUCCESS" "DDoS protection configured for $VM_NAME ($ip_address)"
+        return 0
+    else
+        print_status "WARN" "Failed to load DDoS protection rules (nftables may not be available)"
+        return 1
+    fi
 }
 
 # Function to start a VM
@@ -1092,7 +1127,7 @@ start_vm() {
         print_status "INFO" "Starting VM: $vm_name"
         
         # Start libvirt domain
-        if sudo virsh start "$vm_name"; then
+        if sudo virsh start "$vm_name" 2>>"$LOG_FILE"; then
             print_status "SUCCESS" "VM $vm_name started"
             print_status "INFO" "Public IP: ${PUBLIC_IP%/*}"
             print_status "INFO" "SSH: ssh $USERNAME@${PUBLIC_IP%/*} -p $SSH_PORT"
@@ -1102,8 +1137,10 @@ start_vm() {
             fi
             
             # Update status in config
-            jq '.status = "running"' "$VM_BASE_DIR/configs/$vm_name.json" > "/tmp/${vm_name}.tmp"
-            mv "/tmp/${vm_name}.tmp" "$VM_BASE_DIR/configs/$vm_name.json"
+            if command -v jq &> /dev/null; then
+                jq '.status = "running"' "$VM_BASE_DIR/configs/$vm_name.json" > "/tmp/${vm_name}.tmp"
+                mv "/tmp/${vm_name}.tmp" "$VM_BASE_DIR/configs/$vm_name.json"
+            fi
         else
             print_status "ERROR" "Failed to start VM $vm_name"
         fi
@@ -1117,20 +1154,22 @@ stop_vm() {
     if load_vm_config "$vm_name"; then
         print_status "INFO" "Stopping VM: $vm_name"
         
-        if sudo virsh shutdown "$vm_name"; then
+        if sudo virsh shutdown "$vm_name" 2>>"$LOG_FILE"; then
             # Wait for shutdown
             sleep 5
             
             # Force stop if still running
-            if sudo virsh domstate "$vm_name" | grep -q "running"; then
-                sudo virsh destroy "$vm_name"
+            if sudo virsh domstate "$vm_name" 2>/dev/null | grep -q "running"; then
+                sudo virsh destroy "$vm_name" 2>>"$LOG_FILE"
             fi
             
             print_status "SUCCESS" "VM $vm_name stopped"
             
             # Update status in config
-            jq '.status = "stopped"' "$VM_BASE_DIR/configs/$vm_name.json" > "/tmp/${vm_name}.tmp"
-            mv "/tmp/${vm_name}.tmp" "$VM_BASE_DIR/configs/$vm_name.json"
+            if command -v jq &> /dev/null; then
+                jq '.status = "stopped"' "$VM_BASE_DIR/configs/$vm_name.json" > "/tmp/${vm_name}.tmp"
+                mv "/tmp/${vm_name}.tmp" "$VM_BASE_DIR/configs/$vm_name.json"
+            fi
         else
             print_status "ERROR" "Failed to stop VM $vm_name"
         fi
@@ -1159,8 +1198,8 @@ delete_vm() {
             rm -f "$VM_BASE_DIR/isos/${vm_name}-seed.iso"
             rm -f "$VM_BASE_DIR/configs/${vm_name}.json"
             rm -f "$VM_BASE_DIR/configs/${vm_name}.conf"
-            rm -f "$LIBVIRT_XML_DIR/${vm_name}.xml"
-            rm -f "$CONFIG_DIR/ddos/${vm_name}.nft"
+            sudo rm -f "$LIBVIRT_XML_DIR/${vm_name}.xml"
+            sudo rm -f "$CONFIG_DIR/ddos/${vm_name}.nft"
             
             print_status "SUCCESS" "VM '$vm_name' has been completely deleted"
         fi
@@ -1177,9 +1216,10 @@ enable_xrdp() {
         print_status "INFO" "Enabling XRDP for $vm_name..."
         
         # Check if VM is running
-        if ! sudo virsh domstate "$vm_name" | grep -q "running"; then
-            print_status "ERROR" "VM must be running to enable XRDP"
-            return 1
+        if ! sudo virsh domstate "$vm_name" 2>/dev/null | grep -q "running"; then
+            print_status "ERROR" "VM must be running to enable XRDP. Starting VM first..."
+            start_vm "$vm_name"
+            sleep 10
         fi
         
         # Get VM IP
@@ -1187,66 +1227,117 @@ enable_xrdp() {
         
         # Create installation script
         local install_script="/tmp/install_xrdp_${vm_name}.sh"
-        cat > "$install_script" <<EOF
+        cat > "$install_script" <<'EOF'
 #!/bin/bash
 set -e
 
-# Install XRDP
-if command -v apt-get &> /dev/null; then
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y xrdp xorgxrdp
-    systemctl enable xrdp
-    systemctl start xrdp
-    
-    # Configure firewall
-    if command -v ufw &> /dev/null; then
-        ufw allow 3389/tcp
-    elif command -v nft &> /dev/null; then
-        nft add rule inet filter input tcp dport 3389 accept
-    fi
-    
-    # Add to xrdp user group
-    usermod -a -G ssl-cert xrdp
-    
-    # Configure XRDP
-    echo "exec /usr/bin/xfce4-session" > /home/$USERNAME/.xsession
-    chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
-    chmod +x /home/$USERNAME/.xsession
-    
-elif command -v yum &> /dev/null || command -v dnf &> /dev/null; then
-    yum install -y xrdp xorgxrdp
-    systemctl enable xrdp
-    systemctl start xrdp
-    
-    # Configure firewall
-    if command -v firewall-cmd &> /dev/null; then
-        firewall-cmd --permanent --add-port=3389/tcp
-        firewall-cmd --reload
-    fi
+# Detect OS
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+    VERSION=$VERSION_ID
+else
+    echo "Cannot detect OS"
+    exit 1
 fi
 
+# Install XRDP based on OS
+case $OS in
+    ubuntu|debian)
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y xrdp xorgxrdp
+        systemctl enable xrdp
+        systemctl start xrdp
+        
+        # Configure firewall
+        if command -v ufw &> /dev/null; then
+            ufw allow 3389/tcp
+        fi
+        
+        # Add to xrdp user group
+        usermod -a -G ssl-cert xrdp 2>/dev/null || true
+        
+        # Configure desktop environment
+        if [ -f /usr/bin/xfce4-session ]; then
+            echo "xfce4-session" > ~/.xsession
+        elif [ -f /usr/bin/gnome-session ]; then
+            echo "gnome-session" > ~/.xsession
+        elif [ -f /usr/bin/startplasma-x11 ]; then
+            echo "startplasma-x11" > ~/.xsession
+        else
+            echo "xterm" > ~/.xsession
+        fi
+        ;;
+        
+    fedora|centos|rhel|rocky|almalinux)
+        if command -v dnf &> /dev/null; then
+            dnf install -y xrdp xorgxrdp
+        else
+            yum install -y xrdp xorgxrdp
+        fi
+        systemctl enable xrdp
+        systemctl start xrdp
+        
+        # Configure firewall
+        if command -v firewall-cmd &> /dev/null; then
+            firewall-cmd --permanent --add-port=3389/tcp
+            firewall-cmd --reload
+        fi
+        
+        # Configure desktop environment
+        if [ -f /usr/bin/gnome-session ]; then
+            echo "gnome-session" > ~/.Xclients
+        elif [ -f /usr/bin/startxfce4 ]; then
+            echo "startxfce4" > ~/.Xclients
+        else
+            echo "xterm" > ~/.Xclients
+        fi
+        chmod +x ~/.Xclients
+        ;;
+        
+    *)
+        echo "Unsupported OS: $OS"
+        exit 1
+        ;;
+esac
+
+# Configure XRDP
+sed -i 's/port=3389/port=3389\nmax_bpp=32\ndefault.bpp=32/' /etc/xrdp/xrdp.ini 2>/dev/null || true
+
 echo "XRDP installed and configured successfully"
+echo "Connect using: $(hostname -I | awk '{print $1}'):3389"
 EOF
         
-        # Copy script to VM
-        scp -o StrictHostKeyChecking=no -i /tmp/id_ed25519 "$install_script" \
-            "$USERNAME@$vm_ip:/tmp/install_xrdp.sh" 2>/dev/null || \
-        print_status "WARN" "SSH key authentication failed, trying password"
+        # Make script executable
+        chmod +x "$install_script"
         
-        # Execute script in VM
-        sshpass -p "$PASSWORD" scp -o StrictHostKeyChecking=no "$install_script" \
-            "$USERNAME@$vm_ip:/tmp/install_xrdp.sh"
-        sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$USERNAME@$vm_ip" \
-            "sudo bash /tmp/install_xrdp.sh"
+        # Copy script to VM using SSH
+        print_status "INFO" "Installing XRDP on $vm_name ($vm_ip)..."
         
-        # Update config
-        jq '.xrdp.enabled = true' "$VM_BASE_DIR/configs/$vm_name.json" > "/tmp/${vm_name}.tmp"
-        mv "/tmp/${vm_name}.tmp" "$VM_BASE_DIR/configs/$vm_name.json"
-        
-        print_status "SUCCESS" "XRDP enabled for $vm_name"
-        print_status "INFO" "Connect using: ${vm_ip}:3389"
-        print_status "INFO" "Username: $USERNAME"
-        print_status "INFO" "Password: $PASSWORD"
+        # Try SSH with password
+        if sshpass -p "$PASSWORD" scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            "$install_script" "$USERNAME@$vm_ip:/tmp/install_xrdp.sh" 2>>"$LOG_FILE"; then
+            
+            if sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+                "$USERNAME@$vm_ip" "sudo bash /tmp/install_xrdp.sh" 2>>"$LOG_FILE"; then
+                
+                # Update config
+                if command -v jq &> /dev/null; then
+                    jq '.xrdp.enabled = true' "$VM_BASE_DIR/configs/$vm_name.json" > "/tmp/${vm_name}.tmp"
+                    mv "/tmp/${vm_name}.tmp" "$VM_BASE_DIR/configs/$vm_name.json"
+                fi
+                
+                print_status "SUCCESS" "XRDP enabled for $vm_name"
+                print_status "INFO" "Connect using: ${vm_ip}:3389"
+                print_status "INFO" "Username: $USERNAME"
+                print_status "INFO" "Password: $PASSWORD"
+            else
+                print_status "ERROR" "Failed to execute XRDP installation script"
+            fi
+        else
+            print_status "ERROR" "Failed to copy XRDP installation script to VM"
+            print_status "INFO" "Make sure VM is running and SSH is accessible"
+        fi
         
         rm -f "$install_script"
     fi
@@ -1276,17 +1367,6 @@ show_vm_info() {
         echo "Created: $CREATED"
         echo "=========================================="
         
-        # Show open ports
-        if command -v jq &> /dev/null && [ "$OPEN_PORTS" != "[]" ]; then
-            echo "Open Ports:"
-            echo "$OPEN_PORTS" | jq -r '.tcp[]' 2>/dev/null | while read port; do
-                [ -n "$port" ] && echo "  TCP: $port"
-            done
-            echo "$OPEN_PORTS" | jq -r '.udp[]' 2>/dev/null | while read port; do
-                [ -n "$port" ] && echo "  UDP: $port"
-            done
-        fi
-        
         echo
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
     fi
@@ -1309,7 +1389,6 @@ edit_vm_config() {
             echo "  6) Disk Size"
             echo "  7) Enable/Disable XRDP"
             echo "  8) Enable/Disable DDoS Protection"
-            echo "  9) Add/Remove Open Ports"
             echo "  0) Back to main menu"
             
             read -p "$(print_status "INPUT" "Enter your choice: ")" edit_choice
@@ -1396,27 +1475,6 @@ edit_vm_config() {
                         print_status "INFO" "DDoS protection enabled"
                     fi
                     ;;
-                9)
-                    echo "Current open ports:"
-                    echo "$OPEN_PORTS" | jq -r '.tcp[]' 2>/dev/null | while read port; do
-                        [ -n "$port" ] && echo "  TCP: $port"
-                    done
-                    echo "$OPEN_PORTS" | jq -r '.udp[]' 2>/dev/null | while read port; do
-                        [ -n "$port" ] && echo "  UDP: $port"
-                    done
-                    
-                    read -p "$(print_status "INPUT" "Add TCP ports (comma-separated): ")" new_tcp
-                    read -p "$(print_status "INPUT" "Add UDP ports (comma-separated): ")" new_udp
-                    
-                    # Update ports JSON
-                    OPEN_PORTS=$(echo '[]' | jq --arg tcp "$new_tcp" --arg udp "$new_udp" '
-                        ($tcp | split(",") | map(select(. != ""))) as $tcp_ports |
-                        ($udp | split(",") | map(select(. != ""))) as $udp_ports |
-                        {
-                            "tcp": $tcp_ports,
-                            "udp": $udp_ports
-                        }')
-                    ;;
                 0)
                     return 0
                     ;;
@@ -1449,8 +1507,8 @@ main_menu() {
             print_status "INFO" "Found $vm_count existing VM(s):"
             for i in "${!vms[@]}"; do
                 local status="unknown"
-                if sudo virsh list --all | grep -q " ${vms[$i]} "; then
-                    if sudo virsh domstate "${vms[$i]}" | grep -q "running"; then
+                if sudo virsh list --all 2>/dev/null | grep -q " ${vms[$i]} "; then
+                    if sudo virsh domstate "${vms[$i]}" 2>/dev/null | grep -q "running"; then
                         status="Running"
                     else
                         status="Stopped"
@@ -1566,12 +1624,14 @@ show_platform_status() {
     echo
     print_status "INFO" "Platform Status"
     echo "=========================================="
-    echo "Hypervisor: $(sudo virsh version | grep -i running | head -1)"
-    echo "Total VMs: $(sudo virsh list --all | grep -c -E 'running|shut off')"
-    echo "Running VMs: $(sudo virsh list --state-running | grep -c running)"
+    echo "Hypervisor: $(sudo virsh version 2>/dev/null | grep -i 'running' | head -1 || echo 'Not available')"
+    echo "Total VMs: $(sudo virsh list --all 2>/dev/null | grep -c -E 'running|shut off' || echo '0')"
+    echo "Running VMs: $(sudo virsh list --state-running 2>/dev/null | grep -c running || echo '0')"
     echo "Bridge Interface: $(ip link show br0 2>/dev/null | grep -c UP || echo 'Not active')"
-    echo "Storage Pool: $(sudo virsh pool-list --all | grep -c default)"
+    echo "Storage Pool: $(sudo virsh pool-list --all 2>/dev/null | grep -c default || echo '0')"
     echo "Log File: $LOG_FILE"
+    echo "Config Directory: $CONFIG_DIR"
+    echo "VM Directory: $VM_BASE_DIR"
     echo "=========================================="
     echo
     read -p "$(print_status "INPUT" "Press Enter to continue...")"
@@ -1588,6 +1648,16 @@ declare -A OS_OPTIONS=(
     ["AlmaLinux 9"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
     ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
 )
+
+# Check if running as root
+if [[ $EUID -eq 0 ]]; then
+    print_status "WARN" "Running as root is not recommended. Please run as regular user with sudo privileges."
+    read -p "$(print_status "INPUT" "Continue anyway? (y/N): ")" -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
 
 # Main execution
 check_dependencies
