@@ -2,8 +2,15 @@
 set -euo pipefail
 
 # =============================
-# ZynexForge VPS Platform
+# ZynexForge V2 - Production VPS Platform
 # =============================
+
+# Configuration
+readonly CONFIG_DIR="/etc/zynexforge"
+readonly VM_BASE_DIR="/var/lib/zynexforge/vms"
+readonly NETWORK_CONFIG="/etc/netplan/00-zynexforge.yaml"
+readonly LIBVIRT_XML_DIR="/etc/libvirt/qemu"
+readonly LOG_FILE="/var/log/zynexforge.log"
 
 # Function to display header
 display_header() {
@@ -15,10 +22,9 @@ __________                           ___________
  /     /_ \___  |   |  \  ___/ >    < |     \(  <_> )  | \/ /_/  >  ___/ 
 /_______ \/ ____|___|  /\___  >__/\_ \\___  / \____/|__|  \___  / \___  >
         \/\/         \/     \/      \/    \/             /_____/      \/ 
-                                                                         
 
-                ⚡ ZynexForge VPS Platform - Professional VM Management ⚡
-                High-Performance KVM Virtualization with DDoS Protection
+                    ⚡ ZynexForge V2 ⚡
+              Production VPS/VM Management Platform
 ========================================================================
 EOF
     echo
@@ -35,12 +41,9 @@ print_status() {
         "ERROR") echo -e "\033[1;31m[ERROR]\033[0m $message" ;;
         "SUCCESS") echo -e "\033[1;32m[SUCCESS]\033[0m $message" ;;
         "INPUT") echo -e "\033[1;36m[INPUT]\033[0m $message" ;;
-        "SECURITY") echo -e "\033[1;35m[SECURITY]\033[0m $message" ;;
-        "NETWORK") echo -e "\033[1;94m[NETWORK]\033[0m $message" ;;
-        "TMATCHAT") echo -e "\033[1;93m[TMATCHAT]\033[0m $message" ;;
-        "PERFORMANCE") echo -e "\033[1;95m[PERFORMANCE]\033[0m $message" ;;
         *) echo "[$type] $message" ;;
     esac
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$type] $message" >> "$LOG_FILE"
 }
 
 # Function to validate input
@@ -62,8 +65,8 @@ validate_input() {
             fi
             ;;
         "port")
-            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
-                print_status "ERROR" "Must be a valid port number (1-65535)"
+            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 23 ] || [ "$value" -gt 65535 ]; then
+                print_status "ERROR" "Must be a valid port number (23-65535)"
                 return 1
             fi
             ;;
@@ -79,9 +82,9 @@ validate_input() {
                 return 1
             fi
             ;;
-        "ipv4")
-            if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]] && ! [[ "$value" =~ ^dhcp$ ]]; then
-                print_status "ERROR" "Must be a valid IPv4 address with optional CIDR (e.g., 192.168.1.100/24) or 'dhcp'"
+        "ip")
+            if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+                print_status "ERROR" "Must be a valid IP address with CIDR (e.g., 192.168.1.10/24)"
                 return 1
             fi
             ;;
@@ -95,9 +98,14 @@ validate_input() {
     return 0
 }
 
-# Function to check dependencies
+# Function to check and install dependencies
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "tmate" "git" "htop" "docker" "docker-compose" "python3" "node" "java")
+    print_status "INFO" "Checking dependencies..."
+    
+    local deps=("qemu-system-x86_64" "libvirt-daemon-system" "virt-manager" \
+                "bridge-utils" "cloud-image-utils" "wget" "qemu-img" \
+                "libguestfs-tools" "nftables" "jq" "xmlstarlet")
+    
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
@@ -107,85 +115,326 @@ check_dependencies() {
     done
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
-        print_status "ERROR" "Missing dependencies: ${missing_deps[*]}"
-        print_status "INFO" "Please install required packages first"
+        print_status "INFO" "Installing missing dependencies..."
+        sudo apt update
+        sudo apt install -y "${missing_deps[@]}"
+        
+        # Enable and start libvirt
+        sudo systemctl enable libvirtd
+        sudo systemctl start libvirtd
+    fi
+    
+    # Check KVM support
+    if ! kvm-ok 2>/dev/null; then
+        print_status "ERROR" "KVM acceleration not available. Check virtualization support."
         exit 1
     fi
 }
 
-# Function to cleanup temporary files
-cleanup() {
-    if [ -f "user-data" ]; then rm -f "user-data"; fi
-    if [ -f "meta-data" ]; then rm -f "meta-data"; fi
-}
-
-# Function to generate secure password
-generate_password() {
-    local length=${1:-12}
-    tr -dc 'A-Za-z0-9@#$%^&*+' < /dev/urandom | head -c "$length"
-    echo
-}
-
-# Function to calculate network using python
-calculate_network() {
-    local ip_cidr=$1
-    python3 -c "
-import ipaddress
-try:
-    net = ipaddress.ip_network('$ip_cidr', strict=False)
-    print(f'{net.network_address}/{net.prefixlen}')
-    print(f'{net.netmask}')
-    print(f'{net.network_address + 1}')  # Gateway
-except Exception as e:
-    print('ERROR')
-"
-}
-
-# Function to generate SSH keys
-generate_ssh_keys() {
-    local vm_name=$1
-    local ssh_dir="$VM_DIR/$vm_name/ssh"
+# Function to initialize platform
+initialize_platform() {
+    print_status "INFO" "Initializing ZynexForge V2 platform..."
     
-    mkdir -p "$ssh_dir"
+    # Create directories
+    sudo mkdir -p "$CONFIG_DIR/profiles" "$CONFIG_DIR/networks" "$CONFIG_DIR/scripts"
+    sudo mkdir -p "$VM_BASE_DIR"/{images,configs,disks,isos}
+    sudo mkdir -p "$(dirname "$LOG_FILE")"
     
-    # Generate root SSH key
-    if [ ! -f "$ssh_dir/root_id_rsa" ]; then
-        ssh-keygen -t rsa -b 4096 -f "$ssh_dir/root_id_rsa" -N "" -q
-        cp "$ssh_dir/root_id_rsa.pub" "$ssh_dir/authorized_keys"
+    # Set permissions
+    sudo chown -R "$USER:$USER" "$CONFIG_DIR"
+    sudo chown -R "$USER:$USER" "$VM_BASE_DIR"
+    
+    # Initialize network configuration if not exists
+    if [ ! -f "$NETWORK_CONFIG" ]; then
+        create_network_config
     fi
     
-    # Generate user SSH key
-    if [ ! -f "$ssh_dir/user_id_rsa" ]; then
-        ssh-keygen -t rsa -b 4096 -f "$ssh_dir/user_id_rsa" -N "" -q
-        cat "$ssh_dir/user_id_rsa.pub" >> "$ssh_dir/authorized_keys"
-    fi
+    # Initialize VM profiles
+    initialize_vm_profiles
+}
+
+# Function to create network configuration
+create_network_config() {
+    print_status "INFO" "Creating network configuration..."
     
-    # Generate tmate keys if needed
-    if [ ! -f "$ssh_dir/tmate_rsa" ]; then
-        ssh-keygen -t rsa -b 4096 -f "$ssh_dir/tmate_rsa" -N "" -q
+    cat << EOF | sudo tee "$NETWORK_CONFIG" > /dev/null
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    eth0:
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+  bridges:
+    br0:
+      interfaces: [eth0]
+      addresses: []
+      gateway4: 192.168.1.1
+      nameservers:
+        addresses: [8.8.8.8, 1.1.1.1]
+      parameters:
+        stp: false
+        forward-delay: 0
+      dhcp4: false
+      dhcp6: false
+EOF
+    
+    sudo netplan apply
+    print_status "SUCCESS" "Network configuration applied"
+}
+
+# Function to initialize VM profiles
+initialize_vm_profiles() {
+    cat << EOF | sudo tee "$CONFIG_DIR/profiles/default.yaml" > /dev/null
+profiles:
+  web:
+    description: "Optimized for HTTP/HTTPS hosting"
+    cpu_type: "host-passthrough"
+    cpu_topology:
+      sockets: 1
+      cores: 2
+      threads: 1
+    cpu_pinning: "auto"
+    memory: 4096
+    memory_backing: "hugepages-2M"
+    disk:
+      size: "50G"
+      cache: "writeback"
+      io: "threads"
+      iothreads: 2
+    network:
+      model: "virtio"
+      driver: "vhost"
+      queues: 2
+    features:
+      acpi: true
+      apic: true
+      hyperv: true
+      kvm_hidden: false
+    optimization:
+      hugepages: true
+      numa: true
+      iothread: true
+    default_ports:
+      tcp: [22, 80, 443]
+      udp: []
+    
+  backend:
+    description: "APIs, databases, workers"
+    cpu_type: "host-passthrough"
+    cpu_topology:
+      sockets: 1
+      cores: 4
+      threads: 1
+    cpu_pinning: "0-3"
+    memory: 8192
+    memory_backing: "hugepages-2M"
+    disk:
+      size: "100G"
+      cache: "writethrough"
+      io: "native"
+      iothreads: 4
+    network:
+      model: "virtio"
+      driver: "vhost"
+      queues: 4
+    features:
+      acpi: true
+      apic: true
+      hyperv: true
+    optimization:
+      hugepages: true
+      numa: true
+    default_ports:
+      tcp: [22, 3306, 5432, 6379]
+      udp: []
+    
+  llm-ai:
+    description: "High CPU/Memory for AI workloads"
+    cpu_type: "host-passthrough"
+    cpu_topology:
+      sockets: 2
+      cores: 8
+      threads: 2
+    cpu_pinning: "0-31"
+    memory: 65536
+    memory_backing: "hugepages-1G"
+    disk:
+      size: "500G"
+      cache: "none"
+      io: "native"
+      iothreads: 8
+      discard: "unmap"
+    network:
+      model: "virtio"
+      driver: "vhost"
+      queues: 8
+    features:
+      acpi: true
+      apic: true
+      hyperv: false
+      kvm_hidden: true
+    optimization:
+      hugepages: true
+      numa: true
+      cpu_mode: "maximum"
+    default_ports:
+      tcp: [22, 7860, 8000, 8080]
+      udp: []
+    
+  game-server:
+    description: "Low-latency game servers"
+    cpu_type: "host-passthrough"
+    cpu_topology:
+      sockets: 1
+      cores: 4
+      threads: 2
+    cpu_pinning: "isolated"
+    memory: 16384
+    memory_backing: ""
+    disk:
+      size: "200G"
+      cache: "writethrough"
+      io: "threads"
+      iothreads: 2
+    network:
+      model: "virtio"
+      driver: "vhost"
+      queues: 2
+      latency: "low"
+    features:
+      acpi: true
+      apic: true
+      hyperv: false
+    optimization:
+      cpu_realtime: true
+      no_hypervisor: true
+    default_ports:
+      tcp: [22, 25565, 27015]
+      udp: [19132, 25565, 27015]
+    
+  desktop:
+    description: "XRDP-ready desktop VM"
+    cpu_type: "host-passthrough"
+    cpu_topology:
+      sockets: 1
+      cores: 4
+      threads: 1
+    cpu_pinning: "0-3"
+    memory: 8192
+    memory_backing: ""
+    disk:
+      size: "100G"
+      cache: "writeback"
+      io: "threads"
+      iothreads: 2
+    network:
+      model: "virtio"
+      driver: "vhost"
+      queues: 2
+    features:
+      acpi: true
+      apic: true
+      hyperv: true
+      virgl: true
+    devices:
+      graphics: "spice"
+      video: "qxl"
+      sound: "ac97"
+    default_ports:
+      tcp: [22, 3389]
+      udp: []
+    
+  heavy-task:
+    description: "High CPU/Memory/Disk workloads"
+    cpu_type: "host-passthrough"
+    cpu_topology:
+      sockets: 2
+      cores: 12
+      threads: 2
+    cpu_pinning: "0-47"
+    memory: 131072
+    memory_backing: "hugepages-1G"
+    disk:
+      size: "1000G"
+      cache: "none"
+      io: "native"
+      iothreads: 16
+      discard: "unmap"
+    network:
+      model: "virtio"
+      driver: "vhost"
+      queues: 8
+    features:
+      acpi: true
+      apic: true
+      hyperv: false
+    optimization:
+      hugepages: true
+      numa: true
+      iothread_poll: true
+    default_ports:
+      tcp: [22]
+      udp: []
+EOF
+    print_status "SUCCESS" "VM profiles initialized"
+}
+
+# Function to load VM profile
+load_vm_profile() {
+    local profile_name=$1
+    local profile_file="$CONFIG_DIR/profiles/default.yaml"
+    
+    if [ -f "$profile_file" ]; then
+        # Use yq if available, otherwise parse with awk/sed
+        if command -v yq &> /dev/null; then
+            local profile=$(yq eval ".profiles.$profile_name" "$profile_file")
+            echo "$profile"
+        else
+            # Fallback to simple extraction
+            awk "/^  $profile_name:/{flag=1; next} /^  [a-z]/ && flag{exit} flag" "$profile_file"
+        fi
     fi
 }
 
 # Function to get all VM configurations
 get_vm_list() {
-    find "$VM_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null | sort
+    find "$VM_BASE_DIR/configs" -name "*.json" -exec basename {} .json \; 2>/dev/null | sort
 }
 
 # Function to load VM configuration
 load_vm_config() {
     local vm_name=$1
-    local config_file="$VM_DIR/$vm_name.conf"
+    local config_file="$VM_BASE_DIR/configs/$vm_name.json"
     
     if [[ -f "$config_file" ]]; then
-        # Clear previous variables
-        unset VM_NAME VM_ROLE OS_TYPE CODENAME IMG_URL HOSTNAME USERNAME PASSWORD
-        unset DISK_SIZE MEMORY CPUS SSH_PORT GUI_MODE PORT_FORWARDS IMG_FILE SEED_FILE CREATED
-        unset NETWORK_MODE BRIDGE_NAME MAC_ADDRESS IPV4_ADDRESS GATEWAY DNS_SERVERS
-        unset XRDP_INSTALLED XRDP_PORT XRDP_ENABLED OPEN_PORTS
-        unset DDoS_PROTECTION CPU_PINNING LOW_LATENCY_TUNING
-        unset MONITOR_SOCKET SERIAL_SOCKET TAP_INTERFACE
-        
-        source "$config_file"
+        # Parse JSON configuration
+        if command -v jq &> /dev/null; then
+            VM_NAME=$(jq -r '.vm_name' "$config_file")
+            VM_PROFILE=$(jq -r '.profile' "$config_file")
+            OS_TYPE=$(jq -r '.os_type' "$config_file")
+            CODENAME=$(jq -r '.codename' "$config_file")
+            IMG_URL=$(jq -r '.img_url' "$config_file")
+            HOSTNAME=$(jq -r '.hostname' "$config_file")
+            USERNAME=$(jq -r '.username' "$config_file")
+            PASSWORD=$(jq -r '.password' "$config_file")
+            PUBLIC_IP=$(jq -r '.network.public_ip' "$config_file")
+            MAC_ADDRESS=$(jq -r '.network.mac_address' "$config_file")
+            DISK_SIZE=$(jq -r '.disk.size' "$config_file")
+            MEMORY=$(jq -r '.memory' "$config_file")
+            CPUS=$(jq -r '.cpus' "$config_file")
+            SSH_PORT=$(jq -r '.ports.ssh' "$config_file")
+            XRDP_ENABLED=$(jq -r '.xrdp.enabled' "$config_file")
+            XRDP_PORT=$(jq -r '.xrdp.port' "$config_file")
+            DDOS_PROTECTION=$(jq -r '.security.ddos_protection' "$config_file")
+            OPEN_PORTS=$(jq -r '.ports.open // "[]"' "$config_file")
+            CREATED=$(jq -r '.created' "$config_file")
+        else
+            # Fallback to source if jq not available
+            print_status "WARN" "jq not found, using simplified config loading"
+            source "${config_file%.json}.conf" 2>/dev/null || true
+        fi
         return 0
     else
         print_status "ERROR" "Configuration for VM '$vm_name' not found"
@@ -195,278 +444,79 @@ load_vm_config() {
 
 # Function to save VM configuration
 save_vm_config() {
-    local config_file="$VM_DIR/$VM_NAME.conf"
-    local vm_dir="$VM_DIR/$VM_NAME"
+    local config_file="$VM_BASE_DIR/configs/$VM_NAME.json"
     
-    mkdir -p "$vm_dir"
+    # Create JSON configuration
+    cat > "$config_file" << EOF
+{
+  "vm_name": "$VM_NAME",
+  "profile": "$VM_PROFILE",
+  "os_type": "$OS_TYPE",
+  "codename": "$CODENAME",
+  "img_url": "$IMG_URL",
+  "hostname": "$HOSTNAME",
+  "username": "$USERNAME",
+  "password": "$PASSWORD",
+  "network": {
+    "public_ip": "$PUBLIC_IP",
+    "mac_address": "$MAC_ADDRESS",
+    "bridge": "br0"
+  },
+  "disk": {
+    "size": "$DISK_SIZE",
+    "path": "$VM_BASE_DIR/disks/$VM_NAME.qcow2"
+  },
+  "memory": $MEMORY,
+  "cpus": $CPUS,
+  "ports": {
+    "ssh": $SSH_PORT,
+    "open": $OPEN_PORTS
+  },
+  "xrdp": {
+    "enabled": $XRDP_ENABLED,
+    "port": $XRDP_PORT
+  },
+  "security": {
+    "ddos_protection": $DDOS_PROTECTION,
+    "ssh_key_only": true
+  },
+  "created": "$CREATED",
+  "status": "stopped"
+}
+EOF
     
-    cat > "$config_file" <<EOF
+    # Also create a shell-readable config for compatibility
+    cat > "${config_file%.json}.conf" << EOF
 VM_NAME="$VM_NAME"
-VM_ROLE="$VM_ROLE"
+VM_PROFILE="$VM_PROFILE"
 OS_TYPE="$OS_TYPE"
 CODENAME="$CODENAME"
 IMG_URL="$IMG_URL"
 HOSTNAME="$HOSTNAME"
 USERNAME="$USERNAME"
 PASSWORD="$PASSWORD"
+PUBLIC_IP="$PUBLIC_IP"
+MAC_ADDRESS="$MAC_ADDRESS"
 DISK_SIZE="$DISK_SIZE"
 MEMORY="$MEMORY"
 CPUS="$CPUS"
 SSH_PORT="$SSH_PORT"
-GUI_MODE="$GUI_MODE"
-PORT_FORWARDS="$PORT_FORWARDS"
-IMG_FILE="$IMG_FILE"
-SEED_FILE="$SEED_FILE"
-CREATED="$CREATED"
-NETWORK_MODE="$NETWORK_MODE"
-BRIDGE_NAME="$BRIDGE_NAME"
-MAC_ADDRESS="$MAC_ADDRESS"
-IPV4_ADDRESS="$IPV4_ADDRESS"
-GATEWAY="$GATEWAY"
-DNS_SERVERS="$DNS_SERVERS"
-XRDP_INSTALLED="$XRDP_INSTALLED"
-XRDP_PORT="$XRDP_PORT"
 XRDP_ENABLED="$XRDP_ENABLED"
-OPEN_PORTS="$OPEN_PORTS"
-DDoS_PROTECTION="$DDoS_PROTECTION"
-CPU_PINNING="$CPU_PINNING"
-LOW_LATENCY_TUNING="$LOW_LATENCY_TUNING"
-MONITOR_SOCKET="$MONITOR_SOCKET"
-SERIAL_SOCKET="$SERIAL_SOCKET"
-TAP_INTERFACE="$TAP_INTERFACE"
+XRDP_PORT="$XRDP_PORT"
+DDOS_PROTECTION="$DDOS_PROTECTION"
+OPEN_PORTS='$OPEN_PORTS'
+CREATED="$CREATED"
 EOF
     
     print_status "SUCCESS" "Configuration saved to $config_file"
 }
 
-# Function to create network bridge using ip command
-setup_network_bridge() {
-    print_status "NETWORK" "Configuring network..."
-    
-    # Check if bridge exists using ip command
-    if ! ip link show "$BRIDGE_NAME" &>/dev/null; then
-        print_status "WARN" "Bridge $BRIDGE_NAME does not exist. Creating..."
-        sudo ip link add name "$BRIDGE_NAME" type bridge
-        sudo ip link set "$BRIDGE_NAME" up
-        print_status "SUCCESS" "Bridge $BRIDGE_NAME created and activated"
-    else
-        # Ensure bridge is up
-        sudo ip link set "$BRIDGE_NAME" up
-    fi
-    
-    # Generate MAC if not provided
-    if [ -z "$MAC_ADDRESS" ]; then
-        MAC_ADDRESS="52:54:00:$(openssl rand -hex 3 | sed 's/\(..\)/\1:/g; s/.$//')"
-        print_status "INFO" "Generated MAC address: $MAC_ADDRESS"
-    fi
-    
-    # Calculate network info if static IP
-    if [[ "$IPV4_ADDRESS" != "dhcp" ]]; then
-        local network_info
-        network_info=$(calculate_network "$IPV4_ADDRESS")
-        if [[ "$network_info" == "ERROR" ]]; then
-            print_status "ERROR" "Invalid network configuration: $IPV4_ADDRESS"
-            return 1
-        fi
-        IFS=$'\n' read -r NETWORK NETMASK GATEWAY <<< "$network_info"
-        
-        # Set IP on bridge if not already configured
-        if ! ip addr show "$BRIDGE_NAME" | grep -q "$NETWORK"; then
-            sudo ip addr add "$NETWORK" dev "$BRIDGE_NAME"
-        fi
-    fi
-}
-
-# Function to create VM profiles
-apply_vm_profile() {
-    local profile="$1"
-    
-    case "$profile" in
-        "gameserver")
-            VM_ROLE="Game Server"
-            LOW_LATENCY_TUNING=true
-            CPU_PINNING=true
-            DDoS_PROTECTION=true
-            OPEN_PORTS="22,80,443,25565-25575,27015-27030,9987,30033"
-            MEMORY="${MEMORY:-8192}"
-            CPUS="${CPUS:-4}"
-            DISK_SIZE="${DISK_SIZE:-100G}"
-            ;;
-        "workload")
-            VM_ROLE="Heavy Workload"
-            LOW_LATENCY_TUNING=false
-            CPU_PINNING=true
-            DDoS_PROTECTION=true
-            OPEN_PORTS="22,80,443,3306,5432,6379,8080,9000"
-            MEMORY="${MEMORY:-16384}"
-            CPUS="${CPUS:-8}"
-            DISK_SIZE="${DISK_SIZE:-200G}"
-            ;;
-        "desktop")
-            VM_ROLE="XRDP Desktop"
-            GUI_MODE=true
-            XRDP_INSTALLED=false
-            XRDP_PORT=3389
-            XRDP_ENABLED=false
-            LOW_LATENCY_TUNING=false
-            CPU_PINNING=false
-            DDoS_PROTECTION=true
-            OPEN_PORTS="22,3389"
-            MEMORY="${MEMORY:-4096}"
-            CPUS="${CPUS:-2}"
-            DISK_SIZE="${DISK_SIZE:-50G}"
-            ;;
-        "custom")
-            VM_ROLE="Custom"
-            LOW_LATENCY_TUNING=false
-            CPU_PINNING=false
-            DDoS_PROTECTION=false
-            OPEN_PORTS="22"
-            ;;
-    esac
-}
-
-# Function to setup DDoS protection using iptables
-setup_ddos_protection() {
-    local vm_name=$1
-    local ip_address=$2
-    
-    if [[ "$DDoS_PROTECTION" != "true" ]]; then
-        return 0
-    fi
-    
-    print_status "SECURITY" "Setting up DDoS protection for $ip_address"
-    
-    # Create iptables rules
-    local iptables_rules="/tmp/iptables-$vm_name.rules"
-    
-    cat > "$iptables_rules" <<EOF
-# Flush existing rules
-iptables -F
-iptables -X
-iptables -t nat -F
-iptables -t nat -X
-
-# Default policies
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-iptables -P OUTPUT ACCEPT
-
-# Allow loopback
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A OUTPUT -o lo -j ACCEPT
-
-# Allow established connections
-iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-# Rate limiting for SSH
-iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --set
-iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --update --seconds 60 --hitcount 4 -j DROP
-
-# Rate limiting for game ports
-iptables -A INPUT -p udp -m multiport --dports 27015,27016,25565 -m state --state NEW -m limit --limit 50/sec --limit-burst 100 -j ACCEPT
-iptables -A INPUT -p udp -m multiport --dports 27015,27016,25565 -m state --state NEW -j DROP
-
-# SYN flood protection
-iptables -A INPUT -p tcp --syn -m limit --limit 1/s --limit-burst 3 -j ACCEPT
-iptables -A INPUT -p tcp --syn -j DROP
-
-# UDP flood protection
-iptables -A INPUT -p udp -m limit --limit 1000/sec --limit-burst 2000 -j ACCEPT
-iptables -A INPUT -p udp -j DROP
-
-# Allow specific ports
-EOF
-    
-    # Add allowed ports
-    IFS=',' read -ra ports <<< "$OPEN_PORTS"
-    for port_range in "${ports[@]}"; do
-        if [[ "$port_range" =~ ^[0-9]+-[0-9]+$ ]]; then
-            echo "iptables -A INPUT -p tcp --match multiport --dports $port_range -j ACCEPT" >> "$iptables_rules"
-            echo "iptables -A INPUT -p udp --match multiport --dports $port_range -j ACCEPT" >> "$iptables_rules"
-        else
-            echo "iptables -A INPUT -p tcp --dport $port_range -j ACCEPT" >> "$iptables_rules"
-            echo "iptables -A INPUT -p udp --dport $port_range -j ACCEPT" >> "$iptables_rules"
-        fi
-    done
-    
-    # Apply rules
-    sudo bash "$iptables_rules"
-    sudo iptables-save > "/etc/iptables/rules.v4"
-    
-    print_status "SUCCESS" "DDoS protection rules applied for $vm_name"
-}
-
-# Function to start tmate session
-start_tmate_session() {
-    local vm_name=$1
-    
-    print_status "TMATCHAT" "Starting secure tmate session for VM: $vm_name"
-    echo "================================================================================"
-    echo "This tmate session will allow you to connect to this VM management interface"
-    echo "from anywhere. Share the connection strings below securely."
-    echo "================================================================================"
-    echo
-    
-    # Create tmate configuration
-    local tmate_conf="$VM_DIR/$vm_name/tmate.conf"
-    cat > "$tmate_conf" <<EOF
-set -g tmate-server-host tmate.io
-set -g tmate-server-port 22
-set -g tmate-server-rsa-fingerprint SHA256:2e:1c:70:cf:1d:46:68:bc:95:cb:07:40:07:9b:3a:8d:6b:22:25:bb:ee:d5:0a:ff:83:59:ba:90:2c:9d:fb:1f
-set -g tmate-server-ed25519-fingerprint SHA256:KE1kXKxE8PM5mCv7jGgujKzF2cO8oGJXzbqKl2WjJPs
-set -g tmate-session-name "$vm_name-$(date +%s)"
-set -g tmate-session-length 24
-EOF
-    
-    # Start tmate session
-    TMATE_SOCKET="/tmp/tmate-$vm_name.sock"
-    tmate -S "$TMATE_SOCKET" -f "$tmate_conf" new-session -d -s "$vm_name"
-    tmate -S "$TMATE_SOCKET" wait tmate-ready
-    
-    # Get connection strings
-    TMATE_SSH=$(tmate -S "$TMATE_SOCKET" display -p '#{tmate_ssh}')
-    TMATE_WEB=$(tmate -S "$TMATE_SOCKET" display -p '#{tmate_web}')
-    
-    print_status "TMATCHAT" "SSH Connection: $TMATE_SSH"
-    print_status "TMATCHAT" "Web URL: https://$TMATE_WEB"
-    print_status "TMATCHAT" ""
-    print_status "TMATCHAT" "This session will expire in 24 hours."
-    print_status "TMATCHAT" "To close session: Ctrl+C or kill the tmate process"
-    echo
-    
-    # Save connection info
-    echo "SSH: $TMATE_SSH" > "$VM_DIR/$vm_name/tmate_connection.txt"
-    echo "Web: https://$TMATE_WEB" >> "$VM_DIR/$vm_name/tmate_connection.txt"
-    
-    # Show session
-    tmate -S "$TMATE_SOCKET" attach
-}
-
-# Function to create new VM
+# Function to create new VM (with same user experience as original)
 create_new_vm() {
     print_status "INFO" "Creating a new VM"
     
-    # VM Profile Selection
-    print_status "INFO" "Select VM Profile:"
-    echo "  1) Game Server (Low latency, DDoS protection, UDP optimized)"
-    echo "  2) Heavy Workload (High CPU/Memory, Production ready)"
-    echo "  3) XRDP Desktop (GUI, Remote desktop ready)"
-    echo "  4) Custom (Configure manually)"
-    
-    while true; do
-        read -p "$(print_status "INPUT" "Enter your choice (1-4): ")" profile_choice
-        case "$profile_choice" in
-            1) apply_vm_profile "gameserver"; break ;;
-            2) apply_vm_profile "workload"; break ;;
-            3) apply_vm_profile "desktop"; break ;;
-            4) apply_vm_profile "custom"; break ;;
-            *) print_status "ERROR" "Invalid selection. Try again." ;;
-        esac
-    done
-    
-    # OS Selection
-    print_status "INFO" "Select an OS:"
+    # OS Selection (same as original)
+    print_status "INFO" "Select an OS to set up:"
     local os_options=()
     local i=1
     for os in "${!OS_OPTIONS[@]}"; do
@@ -486,12 +536,36 @@ create_new_vm() {
         fi
     done
 
-    # Custom Inputs with validation
+    # VM Profile Selection (NEW)
+    print_status "INFO" "Select VM Profile:"
+    echo "  1) WEB - Website hosting (HTTP/HTTPS)"
+    echo "  2) BACKEND - APIs, databases, workers"
+    echo "  3) LLM/AI - High CPU/Memory for AI workloads"
+    echo "  4) GAME SERVER - Low-latency game servers"
+    echo "  5) DESKTOP - XRDP-ready desktop"
+    echo "  6) HEAVY TASK - High CPU/Memory/Disk workloads"
+    
+    while true; do
+        read -p "$(print_status "INPUT" "Enter profile choice (1-6): ")" profile_choice
+        case $profile_choice in
+            1) VM_PROFILE="web" ;;
+            2) VM_PROFILE="backend" ;;
+            3) VM_PROFILE="llm-ai" ;;
+            4) VM_PROFILE="game-server" ;;
+            5) VM_PROFILE="desktop" ;;
+            6) VM_PROFILE="heavy-task" ;;
+            *) print_status "ERROR" "Invalid selection. Try again."; continue ;;
+        esac
+        break
+    done
+
+    # Custom Inputs with validation (same as original)
     while true; do
         read -p "$(print_status "INPUT" "Enter VM name (default: $DEFAULT_HOSTNAME): ")" VM_NAME
         VM_NAME="${VM_NAME:-$DEFAULT_HOSTNAME}"
         if validate_input "name" "$VM_NAME"; then
-            if [[ -f "$VM_DIR/$VM_NAME.conf" ]]; then
+            # Check if VM name already exists
+            if [[ -f "$VM_BASE_DIR/configs/$VM_NAME.json" ]]; then
                 print_status "ERROR" "VM with name '$VM_NAME' already exists"
             else
                 break
@@ -515,514 +589,550 @@ create_new_vm() {
         fi
     done
 
-    # Generate secure password
-    PASSWORD=$(generate_password 16)
-    print_status "SUCCESS" "Generated secure password: $PASSWORD"
-    
-    # Ask if user wants to add their own SSH key
-    read -p "$(print_status "INPUT" "Add your SSH public key? (optional, paste key or press Enter to skip): ")" user_ssh_key
-
-    # Network Configuration
-    print_status "NETWORK" "Network Configuration"
-    NETWORK_MODE="bridge"
-    
     while true; do
-        read -p "$(print_status "INPUT" "Bridge name (default: br0): ")" BRIDGE_NAME
-        BRIDGE_NAME="${BRIDGE_NAME:-br0}"
-        if [ -n "$BRIDGE_NAME" ]; then
+        read -s -p "$(print_status "INPUT" "Enter password (default: $DEFAULT_PASSWORD): ")" PASSWORD
+        PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
+        echo
+        if [ -n "$PASSWORD" ]; then
             break
+        else
+            print_status "ERROR" "Password cannot be empty"
         fi
     done
-    
+
+    # Public IP Assignment (NEW)
+    print_status "INFO" "Network Configuration:"
     while true; do
-        read -p "$(print_status "INPUT" "MAC address (press Enter to auto-generate): ")" MAC_ADDRESS
+        read -p "$(print_status "INPUT" "Enter public IPv4 address with CIDR (e.g., 192.168.1.10/24): ")" PUBLIC_IP
+        if validate_input "ip" "$PUBLIC_IP"; then
+            # Check if IP is already assigned
+            if grep -r "$PUBLIC_IP" "$VM_BASE_DIR/configs/" >/dev/null 2>&1; then
+                print_status "ERROR" "IP address $PUBLIC_IP is already assigned to another VM"
+            else
+                break
+            fi
+        fi
+    done
+
+    # MAC Address (auto-generate or manual)
+    while true; do
+        read -p "$(print_status "INPUT" "Enter MAC address (press Enter to auto-generate): ")" MAC_ADDRESS
         if [ -z "$MAC_ADDRESS" ]; then
+            # Generate random MAC address
             MAC_ADDRESS="52:54:00:$(openssl rand -hex 3 | sed 's/\(..\)/\1:/g; s/.$//')"
+            print_status "INFO" "Auto-generated MAC: $MAC_ADDRESS"
             break
         elif validate_input "mac" "$MAC_ADDRESS"; then
             break
         fi
     done
+
+    # Resource allocation based on profile
+    load_profile_settings "$VM_PROFILE"
     
-    while true; do
-        read -p "$(print_status "INPUT" "IPv4 Address/CIDR (e.g., 192.168.1.100/24) or 'dhcp': ")" IPV4_ADDRESS
-        IPV4_ADDRESS="${IPV4_ADDRESS:-dhcp}"
-        if validate_input "ipv4" "$IPV4_ADDRESS"; then
-            break
-        fi
-    done
+    # Show proposed resources and allow customization
+    print_status "INFO" "Profile '$VM_PROFILE' settings:"
+    echo "  Memory: ${MEMORY}MB"
+    echo "  CPUs: ${CPUS}"
+    echo "  Disk: ${DISK_SIZE}"
     
-    if [[ "$IPV4_ADDRESS" != "dhcp" ]]; then
-        local network_info
-        network_info=$(calculate_network "$IPV4_ADDRESS")
-        if [[ "$network_info" == "ERROR" ]]; then
-            print_status "ERROR" "Invalid network configuration"
-            IPV4_ADDRESS="dhcp"
-            GATEWAY=""
-            DNS_SERVERS="8.8.8.8,8.8.4.4"
-        else
-            IFS=$'\n' read -r NETWORK NETMASK GATEWAY <<< "$network_info"
-            DNS_SERVERS="8.8.8.8,8.8.4.4"
-        fi
-    else
-        GATEWAY=""
-        DNS_SERVERS="8.8.8.8,8.8.4.4"
+    read -p "$(print_status "INPUT" "Press Enter to accept or 'c' to customize: ")" custom_choice
+    if [[ "$custom_choice" == "c" ]]; then
+        while true; do
+            read -p "$(print_status "INPUT" "Memory in MB (default: ${MEMORY}): ")" custom_memory
+            custom_memory="${custom_memory:-$MEMORY}"
+            if validate_input "number" "$custom_memory"; then
+                MEMORY="$custom_memory"
+                break
+            fi
+        done
+
+        while true; do
+            read -p "$(print_status "INPUT" "Number of CPUs (default: ${CPUS}): ")" custom_cpus
+            custom_cpus="${custom_cpus:-$CPUS}"
+            if validate_input "number" "$custom_cpus"; then
+                CPUS="$custom_cpus"
+                break
+            fi
+        done
+
+        while true; do
+            read -p "$(print_status "INPUT" "Disk size (default: ${DISK_SIZE}): ")" custom_disk
+            custom_disk="${custom_disk:-$DISK_SIZE}"
+            if validate_input "size" "$custom_disk"; then
+                DISK_SIZE="$custom_disk"
+                break
+            fi
+        done
     fi
 
-    # Resource Configuration (respecting profile defaults)
+    # SSH Port
     while true; do
-        read -p "$(print_status "INPUT" "Disk size (default: $DISK_SIZE): ")" input_disk
-        if [ -n "$input_disk" ]; then
-            DISK_SIZE="$input_disk"
-        fi
-        if validate_input "size" "$DISK_SIZE"; then
-            break
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "Memory in MB (default: $MEMORY): ")" input_mem
-        if [ -n "$input_mem" ]; then
-            MEMORY="$input_mem"
-        fi
-        if validate_input "number" "$MEMORY"; then
-            break
-        fi
-    done
-
-    while true; do
-        read -p "$(print_status "INPUT" "Number of CPUs (default: $CPUS): ")" input_cpus
-        if [ -n "$input_cpus" ]; then
-            CPUS="$input_cpus"
-        fi
-        if validate_input "number" "$CPUS"; then
+        read -p "$(print_status "INPUT" "SSH Port (default: 22 inside VM): ")" SSH_PORT
+        SSH_PORT="${SSH_PORT:-22}"
+        if validate_input "port" "$SSH_PORT"; then
             break
         fi
     done
 
-    SSH_PORT=22
-    
-    # GUI mode for desktop VMs
-    if [[ "$VM_ROLE" == "XRDP Desktop" ]]; then
-        GUI_MODE=true
-        read -p "$(print_status "INPUT" "Install XRDP automatically? (y/N): ")" install_xrdp
-        if [[ "$install_xrdp" =~ ^[Yy]$ ]]; then
-            XRDP_INSTALLED=true
-            XRDP_PORT=3389
-            XRDP_ENABLED=true
-            OPEN_PORTS="22,3389"
-        else
-            XRDP_INSTALLED=false
-            XRDP_ENABLED=false
-        fi
-    else
-        GUI_MODE=false
-        XRDP_INSTALLED=false
-        XRDP_ENABLED=false
+    # Additional ports
+    read -p "$(print_status "INPUT" "Additional TCP ports to open (comma-separated, press Enter for none): ")" tcp_ports
+    read -p "$(print_status "INPUT" "Additional UDP ports to open (comma-separated, press Enter for none): ")" udp_ports
+
+    # Convert ports to JSON array
+    OPEN_PORTS='[]'
+    if [ -n "$tcp_ports" ] || [ -n "$udp_ports" ]; then
+        OPEN_PORTS=$(echo '[]' | jq --arg tcp "$tcp_ports" --arg udp "$udp_ports" '
+            ($tcp | split(",") | map(select(. != ""))) as $tcp_ports |
+            ($udp | split(",") | map(select(. != ""))) as $udp_ports |
+            {
+                "tcp": $tcp_ports,
+                "udp": $udp_ports
+            }')
     fi
 
-    # Additional port configuration
-    if [[ "$VM_ROLE" != "Game Server" ]] && [[ "$VM_ROLE" != "XRDP Desktop" ]]; then
-        read -p "$(print_status "INPUT" "Additional port forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
+    # XRDP option for desktop profile
+    if [[ "$VM_PROFILE" == "desktop" ]]; then
+        XRDP_ENABLED="true"
+        XRDP_PORT="3389"
+        print_status "INFO" "XRDP will be automatically enabled for desktop VM"
     else
-        PORT_FORWARDS=""
+        XRDP_ENABLED="false"
+        XRDP_PORT="3389"
     fi
 
-    # DDoS Protection
-    if [[ "$DDoS_PROTECTION" == "true" ]]; then
-        print_status "SECURITY" "DDoS protection will be enabled for this VM"
-    else
-        read -p "$(print_status "INPUT" "Enable DDoS protection? (Y/n): ")" ddos_choice
-        ddos_choice="${ddos_choice:-y}"
-        if [[ "$ddos_choice" =~ ^[Yy]$ ]]; then
-            DDoS_PROTECTION=true
-        else
-            DDoS_PROTECTION=false
-        fi
+    # DDoS protection
+    DDOS_PROTECTION="true"
+    if [[ "$VM_PROFILE" == "web" || "$VM_PROFILE" == "game-server" ]]; then
+        print_status "INFO" "DDoS protection enabled by default for $VM_PROFILE profile"
     fi
 
-    # CPU Pinning
-    if [[ "$CPU_PINNING" == "true" ]]; then
-        print_status "PERFORMANCE" "CPU pinning will be enabled"
-    else
-        read -p "$(print_status "INPUT" "Enable CPU pinning? (y/N): ")" cpu_pin_choice
-        if [[ "$cpu_pin_choice" =~ ^[Yy]$ ]]; then
-            CPU_PINNING=true
-        else
-            CPU_PINNING=false
-        fi
-    fi
+    CREATED="$(date '+%Y-%m-%d %H:%M:%S')"
 
-    IMG_FILE="$VM_DIR/$VM_NAME/disk.img"
-    SEED_FILE="$VM_DIR/$VM_NAME/seed.iso"
-    MONITOR_SOCKET="/tmp/qemu-$VM_NAME.monitor"
-    SERIAL_SOCKET="/tmp/qemu-$VM_NAME.serial"
-    TAP_INTERFACE="tap-$VM_NAME"
-    CREATED="$(date)"
-
-    # Generate SSH keys
-    generate_ssh_keys "$VM_NAME"
-    
-    # Setup network bridge
-    setup_network_bridge
-    
-    # Download and setup VM image
-    setup_vm_image "$user_ssh_key"
+    # Create VM
+    print_status "INFO" "Creating VM '$VM_NAME'..."
+    create_vm_image
+    create_libvirt_config
+    setup_ddos_protection
     
     # Save configuration
     save_vm_config
     
-    # Setup DDoS protection if enabled
-    if [[ "$DDoS_PROTECTION" == "true" ]] && [[ "$IPV4_ADDRESS" != "dhcp" ]]; then
-        setup_ddos_protection "$VM_NAME" "${IPV4_ADDRESS%/*}"
-    fi
-    
-    # Display summary
-    echo
     print_status "SUCCESS" "VM '$VM_NAME' created successfully!"
-    print_status "INFO" "Role: $VM_ROLE"
-    print_status "INFO" "IP: $IPV4_ADDRESS"
-    print_status "INFO" "SSH: ssh $USERNAME@${HOSTNAME}"
-    print_status "INFO" "Password: $PASSWORD"
-    if [[ "$XRDP_INSTALLED" == "true" ]]; then
-        print_status "INFO" "XRDP: xfreerdp /v:\${VM_IP}:$XRDP_PORT"
+    print_status "INFO" "Public IP: $PUBLIC_IP"
+    print_status "INFO" "SSH: ssh $USERNAME@${PUBLIC_IP%/*} -p $SSH_PORT"
+    
+    if [[ "$XRDP_ENABLED" == "true" ]]; then
+        print_status "INFO" "XRDP: Available at ${PUBLIC_IP%/*}:$XRDP_PORT"
     fi
-    print_status "INFO" "Open Ports: $OPEN_PORTS"
-    echo
 }
 
-# Function to setup VM image with dual authentication
-setup_vm_image() {
-    local user_ssh_key="$1"
+# Function to load profile settings
+load_profile_settings() {
+    local profile=$1
+    
+    case $profile in
+        "web")
+            MEMORY=4096
+            CPUS=2
+            DISK_SIZE="50G"
+            ;;
+        "backend")
+            MEMORY=8192
+            CPUS=4
+            DISK_SIZE="100G"
+            ;;
+        "llm-ai")
+            MEMORY=65536
+            CPUS=16
+            DISK_SIZE="500G"
+            ;;
+        "game-server")
+            MEMORY=16384
+            CPUS=8
+            DISK_SIZE="200G"
+            ;;
+        "desktop")
+            MEMORY=8192
+            CPUS=4
+            DISK_SIZE="100G"
+            ;;
+        "heavy-task")
+            MEMORY=131072
+            CPUS=24
+            DISK_SIZE="1000G"
+            ;;
+        *)
+            MEMORY=2048
+            CPUS=2
+            DISK_SIZE="20G"
+            ;;
+    esac
+}
+
+# Function to create VM image
+create_vm_image() {
+    local image_file="$VM_BASE_DIR/images/${VM_NAME}.qcow2"
+    
     print_status "INFO" "Downloading and preparing image..."
     
-    # Create VM directory
-    mkdir -p "$VM_DIR/$VM_NAME"
-    
-    # Check if image already exists
-    if [[ -f "$IMG_FILE" ]]; then
-        print_status "INFO" "Image file already exists. Skipping download."
-    else
+    # Download base image if not exists
+    if [[ ! -f "$image_file" ]]; then
         print_status "INFO" "Downloading image from $IMG_URL..."
-        if ! wget --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp" 2>&1 | tail -f -n +2; then
+        if ! wget --progress=bar:force "$IMG_URL" -O "${image_file}.tmp"; then
             print_status "ERROR" "Failed to download image from $IMG_URL"
             exit 1
         fi
-        mv "$IMG_FILE.tmp" "$IMG_FILE"
+        mv "${image_file}.tmp" "$image_file"
     fi
     
-    # Resize the disk image
-    if ! qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null; then
-        print_status "WARN" "Failed to resize disk image. Creating new image..."
-        rm -f "$IMG_FILE"
-        qemu-img create -f qcow2 "$IMG_FILE" "$DISK_SIZE"
-    fi
-
-    # Prepare authorized_keys
-    local auth_keys="$VM_DIR/$VM_NAME/ssh/authorized_keys"
+    # Create disk with specified size
+    local disk_file="$VM_BASE_DIR/disks/${VM_NAME}.qcow2"
+    qemu-img create -f qcow2 -F qcow2 -b "$image_file" "$disk_file" "$DISK_SIZE"
     
-    # Add user's SSH key if provided
-    if [ -n "$user_ssh_key" ]; then
-        echo "$user_ssh_key" >> "$auth_keys"
-        print_status "SUCCESS" "Added your SSH key to authorized_keys"
-    fi
+    # Create cloud-init ISO
+    create_cloud_init_iso
+}
 
-    # cloud-init configuration with dual authentication
-    cat > user-data <<EOF
+# Function to create cloud-init ISO
+create_cloud_init_iso() {
+    local seed_dir="$VM_BASE_DIR/configs/${VM_NAME}-seed"
+    mkdir -p "$seed_dir"
+    
+    # Generate SSH key for the VM
+    ssh-keygen -t ed25519 -f "$seed_dir/id_ed25519" -N "" -q
+    
+    # Create user-data
+    cat > "$seed_dir/user-data" <<EOF
 #cloud-config
 hostname: $HOSTNAME
-ssh_pwauth: true
+fqdn: $HOSTNAME.localdomain
+manage_etc_hosts: true
+ssh_pwauth: false
 disable_root: false
 users:
   - name: $USERNAME
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
-    password: $(mkpasswd -m sha-512 "$PASSWORD" | tr -d '\n')
+    lock_passwd: false
+    passwd: $(openssl passwd -6 "$PASSWORD" | tr -d '\n')
     ssh_authorized_keys:
-$(awk '{print "      - " $0}' "$auth_keys")
-  - name: root
-    ssh_authorized_keys:
-$(awk '{print "      - " $0}' "$auth_keys")
-
+      - $(cat "$seed_dir/id_ed25519.pub")
 chpasswd:
   list: |
     root:$PASSWORD
     $USERNAME:$PASSWORD
   expire: false
-
-# Configure SSH for dual authentication
-ssh_genkeytypes: ['rsa', 'ecdsa']
-ssh_authorized_keys:
-$(awk '{print "  - " $0}' "$auth_keys")
-
-# Configure network if static IP
-$(if [[ "$IPV4_ADDRESS" != "dhcp" ]]; then
-echo "network:
-  version: 2
-  ethernets:
-    eth0:
-      match:
-        macaddress: '$MAC_ADDRESS'
-      addresses:
-        - $IPV4_ADDRESS
-      gateway4: $GATEWAY
-      nameservers:
-        addresses: [${DNS_SERVERS//,/ }]"
-fi)
-
-# Install XRDP for desktop VMs
-$(if [[ "$XRDP_INSTALLED" == "true" ]]; then
-echo "packages:
-  - xrdp
-  - xfce4
-  - xfce4-goodies
-runcmd:
-  - systemctl enable xrdp
-  - systemctl start xrdp
-  - echo 'xfce4-session' > /home/$USERNAME/.xsession
-  - chown $USERNAME:$USERNAME /home/$USERNAME/.xsession"
-fi)
-
-# Performance tuning for game servers
-$(if [[ "$LOW_LATENCY_TUNING" == "true" ]]; then
-echo "bootcmd:
-  - echo 'net.core.rmem_max=134217728' >> /etc/sysctl.conf
-  - echo 'net.core.wmem_max=134217728' >> /etc/sysctl.conf
-  - echo 'net.ipv4.tcp_rmem=4096 87380 134217728' >> /etc/sysctl.conf
-  - echo 'net.ipv4.tcp_wmem=4096 65536 134217728' >> /etc/sysctl.conf
-  - echo 'net.core.netdev_max_backlog=30000' >> /etc/sysctl.conf
-  - echo 'vm.swappiness=10' >> /etc/sysctl.conf
-runcmd:
-  - sysctl -p"
-fi)
-
-# Install monitoring tools
 packages:
-  - htop
-  - btop
-  - iotop
-  - nethogs
-  - curl
-  - wget
-  - screen
-  - tmux
-  - neofetch
-  - python3
-  - nodejs
-  - docker.io
-  - docker-compose
-
+  - qemu-guest-agent
+  - fail2ban
+  - nftables
 runcmd:
-  - systemctl enable docker
-  - systemctl start docker
-  - usermod -aG docker $USERNAME
-
-power_state:
-  mode: reboot
-  timeout: 300
-  message: Rebooting after cloud-init configuration
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+  - sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config
+  - systemctl restart sshd
+  - echo "vm_name=$VM_NAME" >> /etc/environment
+  - echo "vm_profile=$VM_PROFILE" >> /etc/environment
 EOF
-
-    cat > meta-data <<EOF
-instance-id: iid-$VM_NAME
-local-hostname: $HOSTNAME
-EOF
-
-    if ! cloud-localds "$SEED_FILE" user-data meta-data; then
-        print_status "ERROR" "Failed to create cloud-init seed image"
-        exit 1
-    fi
     
-    print_status "SUCCESS" "VM '$VM_NAME' configured with dual authentication"
+    # Create meta-data
+    cat > "$seed_dir/meta-data" <<EOF
+instance-id: $VM_NAME
+local-hostname: $HOSTNAME
+network-interfaces: |
+  auto ens3
+  iface ens3 inet static
+  address ${PUBLIC_IP%/*}
+  gateway $(echo $PUBLIC_IP | cut -d'/' -f1 | sed 's/[0-9]*$/1/')
+  netmask $(ipcalc -m "$PUBLIC_IP" | cut -d= -f2)
+  dns-nameservers 8.8.8.8 1.1.1.1
+EOF
+    
+    # Create network-config
+    cat > "$seed_dir/network-config" <<EOF
+version: 2
+ethernets:
+  ens3:
+    match:
+      macaddress: "$MAC_ADDRESS"
+    addresses:
+      - $PUBLIC_IP
+    gateway4: $(echo $PUBLIC_IP | cut -d'/' -f1 | sed 's/[0-9]*$/1/')
+    nameservers:
+      addresses: [8.8.8.8, 1.1.1.1]
+EOF
+    
+    # Create ISO
+    cloud-localds "$VM_BASE_DIR/isos/${VM_NAME}-seed.iso" \
+        "$seed_dir/user-data" \
+        "$seed_dir/meta-data" \
+        --network-config "$seed_dir/network-config"
+    
+    # Cleanup
+    rm -rf "$seed_dir"
 }
 
-# Function to start a VM with bridge networking
+# Function to create libvirt XML configuration
+create_libvirt_config() {
+    local xml_file="$LIBVIRT_XML_DIR/$VM_NAME.xml"
+    
+    # Get profile-specific settings
+    local cpu_mode="host-passthrough"
+    local cpu_pinning=""
+    local hugepages=""
+    
+    case $VM_PROFILE in
+        "llm-ai")
+            cpu_pinning="0-$((CPUS-1))"
+            hugepages='<memoryBacking><hugepages><page size="1048576" unit="KiB"/></hugepages></memoryBacking>'
+            ;;
+        "game-server")
+            cpu_pinning="2-$((CPUS+1))"  # Isolate from host OS
+            ;;
+        "heavy-task")
+            cpu_pinning="0-$((CPUS-1))"
+            hugepages='<memoryBacking><hugepages><page size="1048576" unit="KiB"/></hugepages></memoryBacking>'
+            ;;
+    esac
+    
+    # Create XML configuration
+    cat > "$xml_file" <<EOF
+<domain type='kvm'>
+  <name>$VM_NAME</name>
+  <uuid>$(uuidgen)</uuid>
+  <metadata>
+    <zynexforge:profile xmlns:zynexforge="http://zynexforge.com">$VM_PROFILE</zynexforge:profile>
+  </metadata>
+  <memory unit='KiB'>$((MEMORY * 1024))</memory>
+  <currentMemory unit='KiB'>$((MEMORY * 1024))</currentMemory>
+  <vcpu placement='static'>$CPUS</vcpu>
+  $hugepages
+  <os>
+    <type arch='x86_64' machine='pc-q35-7.2'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+    <vmport state='off'/>
+  </features>
+  <cpu mode='$cpu_mode' check='none'>
+    <topology sockets='1' cores='$CPUS' threads='1'/>
+    $([ -n "$cpu_pinning" ] && echo "<vcpupin vcpu='0' cpuset='$cpu_pinning'/>")
+  </cpu>
+  <clock offset='utc'>
+    <timer name='rtc' tickpolicy='catchup'/>
+    <timer name='pit' tickpolicy='delay'/>
+    <timer name='hpet' present='no'/>
+  </clock>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='writeback' io='threads' discard='unmap'/>
+      <source file='$VM_BASE_DIR/disks/${VM_NAME}.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='$VM_BASE_DIR/isos/${VM_NAME}-seed.iso'/>
+      <target dev='sda' bus='sata'/>
+      <readonly/>
+      <address type='drive' controller='0' bus='0' target='0' unit='0'/>
+    </disk>
+    <controller type='usb' index='0' model='qemu-xhci' ports='15'>
+      <address type='pci' domain='0x0000' bus='0x02' slot='0x00' function='0x0'/>
+    </controller>
+    <controller type='sata' index='0'>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x1f' function='0x2'/>
+    </controller>
+    <controller type='pci' index='0' model='pcie-root'/>
+    <controller type='pci' index='1' model='pcie-root-port'>
+      <model name='pcie-root-port'/>
+      <target chassis='1' port='0x10'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x02' function='0x0' multifunction='on'/>
+    </controller>
+    <controller type='virtio-serial' index='0'>
+      <address type='pci' domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>
+    </controller>
+    <interface type='bridge'>
+      <mac address='$MAC_ADDRESS'/>
+      <source bridge='br0'/>
+      <model type='virtio'/>
+      <driver name='vhost' queues='$([ $CPUS -gt 2 ] && echo 2 || echo 1)'/>
+      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
+    </interface>
+    <serial type='pty'>
+      <target type='isa-serial' port='0'>
+        <model name='isa-serial'/>
+      </target>
+    </serial>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+    <channel type='unix'>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+      <address type='virtio-serial' controller='0' bus='0' port='1'/>
+    </channel>
+    <input type='tablet' bus='usb'>
+      <address type='usb' bus='0' port='1'/>
+    </input>
+    <input type='mouse' bus='ps2'/>
+    <input type='keyboard' bus='ps2'/>
+    <graphics type='spice' autoport='yes'>
+      <listen type='address'/>
+      <image compression='off'/>
+    </graphics>
+    <sound model='ich9'>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x1b' function='0x0'/>
+    </sound>
+    <video>
+      <model type='qxl' ram='65536' vram='65536' vgamem='16384' heads='1' primary='yes'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x01' function='0x0'/>
+    </video>
+    <memballoon model='virtio'>
+      <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>
+    </memballoon>
+    <rng model='virtio'>
+      <backend model='random'>/dev/urandom</backend>
+      <address type='pci' domain='0x0000' bus='0x06' slot='0x00' function='0x0'/>
+    </rng>
+  </devices>
+</domain>
+EOF
+    
+    # Define VM in libvirt
+    sudo virsh define "$xml_file"
+    print_status "SUCCESS" "Libvirt domain created for $VM_NAME"
+}
+
+# Function to setup DDoS protection
+setup_ddos_protection() {
+    if [[ "$DDOS_PROTECTION" != "true" ]]; then
+        return 0
+    fi
+    
+    local ip_address="${PUBLIC_IP%/*}"
+    local config_file="$CONFIG_DIR/ddos/$VM_NAME.nft"
+    
+    mkdir -p "$(dirname "$config_file")"
+    
+    # Create nftables rules for DDoS protection
+    cat > "$config_file" <<EOF
+#!/usr/sbin/nft -f
+
+# Flush the table if it exists
+flush table inet zynexforge_ddos
+
+# Create table
+table inet zynexforge_ddos {
+    set ${VM_NAME}_blacklist {
+        type ipv4_addr
+        flags timeout
+        timeout 1h
+    }
+    
+    chain input {
+        type filter hook input priority filter - 10; policy drop;
+        
+        # Allow established connections
+        ct state established,related accept
+        
+        # Drop invalid connections
+        ct state invalid drop
+        
+        # Blacklist check
+        ip saddr @${VM_NAME}_blacklist drop
+        
+        # Rate limiting per IP
+        ip saddr $ip_address limit rate 1000/second burst 2000 packets accept
+        
+        # SYN flood protection
+        tcp flags syn limit rate 200/second burst 300 packets accept
+        tcp flags syn drop
+        
+        # UDP flood protection
+        udp limit rate 1000/second burst 2000 packets accept
+        
+        # ICMP flood protection
+        ip protocol icmp limit rate 100/second burst 200 packets accept
+        
+        # Accept SSH if needed
+        tcp dport {22} ip saddr $ip_address accept
+        
+        # Drop everything else
+        drop
+    }
+    
+    chain forward {
+        type filter hook forward priority filter - 10; policy accept;
+        
+        # Traffic shaping for this VM
+        ip daddr $ip_address limit rate 10000/second burst 20000 packets accept
+        ip saddr $ip_address limit rate 10000/second burst 20000 packets accept
+    }
+}
+EOF
+    
+    # Load rules
+    sudo nft -f "$config_file"
+    print_status "SUCCESS" "DDoS protection configured for $VM_NAME ($ip_address)"
+}
+
+# Function to start a VM
 start_vm() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
         print_status "INFO" "Starting VM: $vm_name"
         
-        # Check if VM is already running
-        if is_vm_running "$vm_name"; then
-            print_status "ERROR" "VM '$vm_name' is already running"
-            return 1
-        fi
-        
-        # Check if image file exists
-        if [[ ! -f "$IMG_FILE" ]]; then
-            print_status "ERROR" "VM image file not found: $IMG_FILE"
-            return 1
-        fi
-        
-        # Check if seed file exists
-        if [[ ! -f "$SEED_FILE" ]]; then
-            print_status "WARN" "Seed file not found, recreating..."
-            setup_vm_image ""
-        fi
-        
-        # Setup network bridge
-        setup_network_bridge
-        
-        # Create tap interface
-        sudo ip tuntap add dev "$TAP_INTERFACE" mode tap user "$(whoami)"
-        sudo ip link set "$TAP_INTERFACE" up
-        sudo ip link set "$TAP_INTERFACE" master "$BRIDGE_NAME"
-        
-        # Build QEMU command with bridge networking
-        local qemu_cmd=(
-            qemu-system-x86_64
-            -enable-kvm
-            -cpu host,migratable=off
-            -m "$MEMORY"
-            -smp "$CPUS",sockets=1,cores="$CPUS",threads=1
-            -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,discard=on"
-            -drive "file=$SEED_FILE,format=raw,if=virtio"
-            -boot order=c
-            -netdev "tap,id=net0,ifname=$TAP_INTERFACE,script=no,downscript=no"
-            -device "virtio-net-pci,netdev=net0,mac=$MAC_ADDRESS"
-            -vga virtio
-            -display none
-            -daemonize
-            -name "$vm_name"
-        )
-        
-        # Add CPU pinning for performance
-        if [[ "$CPU_PINNING" == "true" ]]; then
-            local cpu_count=$(nproc)
-            for ((i=0; i<CPUS; i++)); do
-                local cpu=$((i % cpu_count))
-                qemu_cmd+=(-vcpu "vcpu=$i,cpuset=$cpu")
-            done
-        fi
-        
-        # Add low latency tuning
-        if [[ "$LOW_LATENCY_TUNING" == "true" ]]; then
-            qemu_cmd+=(
-                -device virtio-balloon-pci
-                -object rng-random,filename=/dev/urandom,id=rng0
-                -device virtio-rng-pci,rng=rng0
-                -machine type=pc,accel=kvm,kernel-irqchip=split
-            )
-        fi
-        
-        # Add monitor and serial sockets
-        qemu_cmd+=(
-            -monitor "unix:$MONITOR_SOCKET,server,nowait"
-            -serial "unix:$SERIAL_SOCKET,server,nowait"
-        )
-        
-        print_status "INFO" "Starting QEMU with bridge networking..."
-        print_status "INFO" "MAC: $MAC_ADDRESS"
-        print_status "INFO" "Bridge: $BRIDGE_NAME"
-        
-        # Start QEMU
-        if ! "${qemu_cmd[@]}"; then
-            print_status "ERROR" "Failed to start QEMU"
-            sudo ip link delete "$TAP_INTERFACE"
-            return 1
-        fi
-        
-        # Wait for VM to boot
-        sleep 5
-        
-        # Get IP address
-        local vm_ip=""
-        if [[ "$IPV4_ADDRESS" != "dhcp" ]]; then
-            vm_ip="${IPV4_ADDRESS%/*}"
+        # Start libvirt domain
+        if sudo virsh start "$vm_name"; then
+            print_status "SUCCESS" "VM $vm_name started"
+            print_status "INFO" "Public IP: ${PUBLIC_IP%/*}"
+            print_status "INFO" "SSH: ssh $USERNAME@${PUBLIC_IP%/*} -p $SSH_PORT"
+            
+            if [[ "$XRDP_ENABLED" == "true" ]]; then
+                print_status "INFO" "XRDP: Connect to ${PUBLIC_IP%/*}:$XRDP_PORT"
+            fi
+            
+            # Update status in config
+            jq '.status = "running"' "$VM_BASE_DIR/configs/$vm_name.json" > "/tmp/${vm_name}.tmp"
+            mv "/tmp/${vm_name}.tmp" "$VM_BASE_DIR/configs/$vm_name.json"
         else
-            # Try to get IP from ARP table
-            for i in {1..30}; do
-                vm_ip=$(sudo arp -n | grep -i "$MAC_ADDRESS" | awk '{print $1}')
-                if [ -n "$vm_ip" ]; then
-                    break
-                fi
-                sleep 2
-            done
-        fi
-        
-        # Setup DDoS protection if needed
-        if [[ "$DDoS_PROTECTION" == "true" ]] && [ -n "$vm_ip" ]; then
-            setup_ddos_protection "$vm_name" "$vm_ip"
-        fi
-        
-        # Display connection information
-        echo
-        print_status "SUCCESS" "VM '$vm_name' is now running!"
-        print_status "INFO" "Role: $VM_ROLE"
-        print_status "INFO" "IP Address: ${vm_ip:-$IPV4_ADDRESS}"
-        print_status "INFO" "SSH Access: ssh $USERNAME@${vm_ip:-$HOSTNAME}"
-        print_status "INFO" "Password: $PASSWORD"
-        
-        if [[ "$XRDP_INSTALLED" == "true" ]] && [[ "$XRDP_ENABLED" == "true" ]]; then
-            print_status "INFO" "XRDP Access: xfreerdp /v:${vm_ip:-$HOSTNAME}:$XRDP_PORT"
-            print_status "INFO" "XRDP Username: $USERNAME"
-            print_status "INFO" "XRDP Password: $PASSWORD"
-        fi
-        
-        print_status "INFO" "Open Ports: $OPEN_PORTS"
-        
-        # Display SSH key locations
-        echo
-        print_status "SECURITY" "SSH Keys for this VM:"
-        print_status "INFO" "Root key: $VM_DIR/$vm_name/ssh/root_id_rsa"
-        print_status "INFO" "User key: $VM_DIR/$vm_name/ssh/user_id_rsa"
-        
-        # Offer tmate session
-        echo
-        read -p "$(print_status "INPUT" "Start tmate session for remote management? (y/N): ")" start_tmate
-        if [[ "$start_tmate" =~ ^[Yy]$ ]]; then
-            start_tmate_session "$vm_name"
+            print_status "ERROR" "Failed to start VM $vm_name"
         fi
     fi
 }
 
-# Function to check if VM is running
-is_vm_running() {
-    local vm_name=$1
-    if pgrep -f "qemu-system-x86_64.*-name $vm_name" >/dev/null; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Function to stop a running VM
+# Function to stop a VM
 stop_vm() {
     local vm_name=$1
     
     if load_vm_config "$vm_name"; then
-        if is_vm_running "$vm_name"; then
-            print_status "INFO" "Stopping VM: $vm_name"
-            
-            # Try graceful shutdown via monitor
-            if [ -S "$MONITOR_SOCKET" ]; then
-                echo "system_powerdown" | sudo socat - UNIX-CONNECT:"$MONITOR_SOCKET"
-                sleep 5
-            fi
+        print_status "INFO" "Stopping VM: $vm_name"
+        
+        if sudo virsh shutdown "$vm_name"; then
+            # Wait for shutdown
+            sleep 5
             
             # Force stop if still running
-            if is_vm_running "$vm_name"; then
-                pkill -f "qemu-system-x86_64.*-name $vm_name"
-                sleep 2
-                if is_vm_running "$vm_name"; then
-                    pkill -9 -f "qemu-system-x86_64.*-name $vm_name"
-                fi
+            if sudo virsh domstate "$vm_name" | grep -q "running"; then
+                sudo virsh destroy "$vm_name"
             fi
             
-            # Cleanup tap interface
-            sudo ip link delete "$TAP_INTERFACE" 2>/dev/null || true
-            
-            # Cleanup sockets
-            sudo rm -f "$MONITOR_SOCKET" "$SERIAL_SOCKET"
-            
-            # Cleanup DDoS rules
-            sudo iptables -F
-            sudo iptables -X
-            
             print_status "SUCCESS" "VM $vm_name stopped"
+            
+            # Update status in config
+            jq '.status = "stopped"' "$VM_BASE_DIR/configs/$vm_name.json" > "/tmp/${vm_name}.tmp"
+            mv "/tmp/${vm_name}.tmp" "$VM_BASE_DIR/configs/$vm_name.json"
         else
-            print_status "INFO" "VM $vm_name is not running"
+            print_status "ERROR" "Failed to stop VM $vm_name"
         fi
     fi
 }
@@ -1035,21 +1145,110 @@ delete_vm() {
     read -p "$(print_status "INPUT" "Are you sure? (y/N): ")" -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # Stop VM if running
-        if is_vm_running "$vm_name"; then
-            stop_vm "$vm_name"
+        if load_vm_config "$vm_name"; then
+            # Stop VM if running
+            if sudo virsh domstate "$vm_name" 2>/dev/null | grep -q "running"; then
+                stop_vm "$vm_name"
+            fi
+            
+            # Undefine libvirt domain
+            sudo virsh undefine "$vm_name" --nvram 2>/dev/null || true
+            
+            # Remove files
+            rm -f "$VM_BASE_DIR/disks/${vm_name}.qcow2"
+            rm -f "$VM_BASE_DIR/isos/${vm_name}-seed.iso"
+            rm -f "$VM_BASE_DIR/configs/${vm_name}.json"
+            rm -f "$VM_BASE_DIR/configs/${vm_name}.conf"
+            rm -f "$LIBVIRT_XML_DIR/${vm_name}.xml"
+            rm -f "$CONFIG_DIR/ddos/${vm_name}.nft"
+            
+            print_status "SUCCESS" "VM '$vm_name' has been completely deleted"
         fi
-        
-        # Remove DDoS protection rules
-        sudo iptables -F
-        sudo iptables -X
-        
-        # Remove VM files
-        sudo rm -rf "$VM_DIR/$vm_name" "$VM_DIR/$vm_name.conf"
-        
-        print_status "SUCCESS" "VM '$vm_name' has been deleted"
     else
         print_status "INFO" "Deletion cancelled"
+    fi
+}
+
+# Function to enable XRDP (one-click feature)
+enable_xrdp() {
+    local vm_name=$1
+    
+    if load_vm_config "$vm_name"; then
+        print_status "INFO" "Enabling XRDP for $vm_name..."
+        
+        # Check if VM is running
+        if ! sudo virsh domstate "$vm_name" | grep -q "running"; then
+            print_status "ERROR" "VM must be running to enable XRDP"
+            return 1
+        fi
+        
+        # Get VM IP
+        local vm_ip="${PUBLIC_IP%/*}"
+        
+        # Create installation script
+        local install_script="/tmp/install_xrdp_${vm_name}.sh"
+        cat > "$install_script" <<EOF
+#!/bin/bash
+set -e
+
+# Install XRDP
+if command -v apt-get &> /dev/null; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y xrdp xorgxrdp
+    systemctl enable xrdp
+    systemctl start xrdp
+    
+    # Configure firewall
+    if command -v ufw &> /dev/null; then
+        ufw allow 3389/tcp
+    elif command -v nft &> /dev/null; then
+        nft add rule inet filter input tcp dport 3389 accept
+    fi
+    
+    # Add to xrdp user group
+    usermod -a -G ssl-cert xrdp
+    
+    # Configure XRDP
+    echo "exec /usr/bin/xfce4-session" > /home/$USERNAME/.xsession
+    chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
+    chmod +x /home/$USERNAME/.xsession
+    
+elif command -v yum &> /dev/null || command -v dnf &> /dev/null; then
+    yum install -y xrdp xorgxrdp
+    systemctl enable xrdp
+    systemctl start xrdp
+    
+    # Configure firewall
+    if command -v firewall-cmd &> /dev/null; then
+        firewall-cmd --permanent --add-port=3389/tcp
+        firewall-cmd --reload
+    fi
+fi
+
+echo "XRDP installed and configured successfully"
+EOF
+        
+        # Copy script to VM
+        scp -o StrictHostKeyChecking=no -i /tmp/id_ed25519 "$install_script" \
+            "$USERNAME@$vm_ip:/tmp/install_xrdp.sh" 2>/dev/null || \
+        print_status "WARN" "SSH key authentication failed, trying password"
+        
+        # Execute script in VM
+        sshpass -p "$PASSWORD" scp -o StrictHostKeyChecking=no "$install_script" \
+            "$USERNAME@$vm_ip:/tmp/install_xrdp.sh"
+        sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "$USERNAME@$vm_ip" \
+            "sudo bash /tmp/install_xrdp.sh"
+        
+        # Update config
+        jq '.xrdp.enabled = true' "$VM_BASE_DIR/configs/$vm_name.json" > "/tmp/${vm_name}.tmp"
+        mv "/tmp/${vm_name}.tmp" "$VM_BASE_DIR/configs/$vm_name.json"
+        
+        print_status "SUCCESS" "XRDP enabled for $vm_name"
+        print_status "INFO" "Connect using: ${vm_ip}:3389"
+        print_status "INFO" "Username: $USERNAME"
+        print_status "INFO" "Password: $PASSWORD"
+        
+        rm -f "$install_script"
     fi
 }
 
@@ -1061,114 +1260,34 @@ show_vm_info() {
         echo
         print_status "INFO" "VM Information: $vm_name"
         echo "=========================================="
-        echo "Role: $VM_ROLE"
+        echo "Profile: $VM_PROFILE"
+        echo "Status: $(sudo virsh domstate "$vm_name" 2>/dev/null || echo 'unknown')"
         echo "OS: $OS_TYPE"
         echo "Hostname: $HOSTNAME"
         echo "Username: $USERNAME"
-        echo "Password: $PASSWORD"
-        echo "IP Address: $IPV4_ADDRESS"
+        echo "Public IP: $PUBLIC_IP"
         echo "MAC Address: $MAC_ADDRESS"
-        echo "Bridge: $BRIDGE_NAME"
-        echo "SSH Access: ssh $USERNAME@${HOSTNAME}"
+        echo "SSH Port: $SSH_PORT"
         echo "Memory: $MEMORY MB"
         echo "CPUs: $CPUS"
         echo "Disk: $DISK_SIZE"
+        echo "XRDP Enabled: $XRDP_ENABLED"
+        echo "DDoS Protection: $DDOS_PROTECTION"
         echo "Created: $CREATED"
-        echo "DDoS Protection: $DDoS_PROTECTION"
-        echo "CPU Pinning: $CPU_PINNING"
-        echo "Low Latency Tuning: $LOW_LATENCY_TUNING"
-        
-        if [[ "$XRDP_INSTALLED" == "true" ]]; then
-            echo "XRDP: Enabled (Port: $XRDP_PORT)"
-            echo "XRDP Connection: xfreerdp /v:\${VM_IP}:$XRDP_PORT"
-        fi
-        
-        echo "Open Ports: ${OPEN_PORTS:-None}"
-        
-        # Show status
-        if is_vm_running "$vm_name"; then
-            echo "Status: Running"
-            # Try to get actual IP
-            local vm_ip=$(sudo arp -n | grep -i "$MAC_ADDRESS" | awk '{print $1}')
-            if [ -n "$vm_ip" ]; then
-                echo "Current IP: $vm_ip"
-                if [[ "$XRDP_INSTALLED" == "true" ]]; then
-                    echo "Current XRDP: xfreerdp /v:$vm_ip:$XRDP_PORT"
-                fi
-            fi
-        else
-            echo "Status: Stopped"
-        fi
         echo "=========================================="
+        
+        # Show open ports
+        if command -v jq &> /dev/null && [ "$OPEN_PORTS" != "[]" ]; then
+            echo "Open Ports:"
+            echo "$OPEN_PORTS" | jq -r '.tcp[]' 2>/dev/null | while read port; do
+                [ -n "$port" ] && echo "  TCP: $port"
+            done
+            echo "$OPEN_PORTS" | jq -r '.udp[]' 2>/dev/null | while read port; do
+                [ -n "$port" ] && echo "  UDP: $port"
+            done
+        fi
+        
         echo
-        
-        # Show SSH key locations
-        if [ -d "$VM_DIR/$vm_name/ssh" ]; then
-            print_status "SECURITY" "SSH Keys available in: $VM_DIR/$vm_name/ssh/"
-        fi
-        
-        read -p "$(print_status "INPUT" "Press Enter to continue...")"
-    fi
-}
-
-# Function to show VM performance metrics
-show_vm_performance() {
-    local vm_name=$1
-    
-    if load_vm_config "$vm_name"; then
-        if is_vm_running "$vm_name"; then
-            print_status "PERFORMANCE" "Performance metrics for VM: $vm_name"
-            echo "=========================================="
-            
-            # Get QEMU process ID
-            local qemu_pid=$(pgrep -f "qemu-system-x86_64.*-name $vm_name")
-            if [[ -n "$qemu_pid" ]]; then
-                # Show process stats
-                echo "QEMU Process Stats:"
-                ps -p "$qemu_pid" -o pid,%cpu,%mem,sz,rss,vsz,cmd --no-headers
-                echo
-                
-                # Show memory usage using htop-style output
-                echo "Memory Usage:"
-                free -h
-                echo
-                
-                # Show disk usage
-                echo "Disk Usage:"
-                if command -v btop &> /dev/null; then
-                    df -h "$IMG_FILE" 2>/dev/null || du -h "$IMG_FILE"
-                else
-                    du -h "$IMG_FILE"
-                fi
-                echo
-                
-                # Show network statistics
-                echo "Network Interface: $TAP_INTERFACE"
-                if command -v nethogs &> /dev/null; then
-                    echo "Run 'sudo nethogs $TAP_INTERFACE' for network usage"
-                fi
-                
-                # Show CPU information
-                echo
-                echo "CPU Information:"
-                if command -v cpuid &> /dev/null; then
-                    cpuid | grep -E "(vendor|model name|cache size)" | head -5
-                else
-                    lscpu | grep -E "(Model name|CPU\(s\)|Thread)"
-                fi
-            else
-                print_status "ERROR" "Could not find QEMU process for VM $vm_name"
-            fi
-        else
-            print_status "INFO" "VM $vm_name is not running"
-            echo "Configuration:"
-            echo "  Memory: $MEMORY MB"
-            echo "  CPUs: $CPUS"
-            echo "  Disk: $DISK_SIZE"
-            echo "  CPU Pinning: $CPU_PINNING"
-            echo "  Low Latency Tuning: $LOW_LATENCY_TUNING"
-        fi
-        echo "=========================================="
         read -p "$(print_status "INPUT" "Press Enter to continue...")"
     fi
 }
@@ -1188,9 +1307,9 @@ edit_vm_config() {
             echo "  4) Memory (RAM)"
             echo "  5) CPU Count"
             echo "  6) Disk Size"
-            echo "  7) DDoS Protection"
-            echo "  8) CPU Pinning"
-            echo "  9) Open Ports"
+            echo "  7) Enable/Disable XRDP"
+            echo "  8) Enable/Disable DDoS Protection"
+            echo "  9) Add/Remove Open Ports"
             echo "  0) Back to main menu"
             
             read -p "$(print_status "INPUT" "Enter your choice: ")" edit_choice
@@ -1260,24 +1379,43 @@ edit_vm_config() {
                     done
                     ;;
                 7)
-                    read -p "$(print_status "INPUT" "Enable DDoS protection? (current: $DDoS_PROTECTION) (y/N): ")" ddos_choice
-                    if [[ "$ddos_choice" =~ ^[Yy]$ ]]; then
-                        DDoS_PROTECTION=true
+                    if [[ "$XRDP_ENABLED" == "true" ]]; then
+                        XRDP_ENABLED="false"
+                        print_status "INFO" "XRDP disabled"
                     else
-                        DDoS_PROTECTION=false
+                        XRDP_ENABLED="true"
+                        print_status "INFO" "XRDP enabled"
                     fi
                     ;;
                 8)
-                    read -p "$(print_status "INPUT" "Enable CPU pinning? (current: $CPU_PINNING) (y/N): ")" cpu_pin_choice
-                    if [[ "$cpu_pin_choice" =~ ^[Yy]$ ]]; then
-                        CPU_PINNING=true
+                    if [[ "$DDOS_PROTECTION" == "true" ]]; then
+                        DDOS_PROTECTION="false"
+                        print_status "INFO" "DDoS protection disabled"
                     else
-                        CPU_PINNING=false
+                        DDOS_PROTECTION="true"
+                        print_status "INFO" "DDoS protection enabled"
                     fi
                     ;;
                 9)
-                    read -p "$(print_status "INPUT" "Enter open ports (current: ${OPEN_PORTS:-None}): ")" new_ports
-                    OPEN_PORTS="${new_ports:-$OPEN_PORTS}"
+                    echo "Current open ports:"
+                    echo "$OPEN_PORTS" | jq -r '.tcp[]' 2>/dev/null | while read port; do
+                        [ -n "$port" ] && echo "  TCP: $port"
+                    done
+                    echo "$OPEN_PORTS" | jq -r '.udp[]' 2>/dev/null | while read port; do
+                        [ -n "$port" ] && echo "  UDP: $port"
+                    done
+                    
+                    read -p "$(print_status "INPUT" "Add TCP ports (comma-separated): ")" new_tcp
+                    read -p "$(print_status "INPUT" "Add UDP ports (comma-separated): ")" new_udp
+                    
+                    # Update ports JSON
+                    OPEN_PORTS=$(echo '[]' | jq --arg tcp "$new_tcp" --arg udp "$new_udp" '
+                        ($tcp | split(",") | map(select(. != ""))) as $tcp_ports |
+                        ($udp | split(",") | map(select(. != ""))) as $udp_ports |
+                        {
+                            "tcp": $tcp_ports,
+                            "udp": $udp_ports
+                        }')
                     ;;
                 0)
                     return 0
@@ -1288,11 +1426,7 @@ edit_vm_config() {
                     ;;
             esac
             
-            # Recreate seed image with new configuration
-            print_status "INFO" "Updating cloud-init configuration..."
-            setup_vm_image ""
-            
-            # Save configuration
+            # Save updated configuration
             save_vm_config
             
             read -p "$(print_status "INPUT" "Continue editing? (y/N): ")" continue_editing
@@ -1303,7 +1437,7 @@ edit_vm_config() {
     fi
 }
 
-# Main menu function
+# Main menu function (same structure as original)
 main_menu() {
     while true; do
         display_header
@@ -1314,9 +1448,13 @@ main_menu() {
         if [ $vm_count -gt 0 ]; then
             print_status "INFO" "Found $vm_count existing VM(s):"
             for i in "${!vms[@]}"; do
-                local status="Stopped"
-                if is_vm_running "${vms[$i]}"; then
-                    status="Running"
+                local status="unknown"
+                if sudo virsh list --all | grep -q " ${vms[$i]} "; then
+                    if sudo virsh domstate "${vms[$i]}" | grep -q "running"; then
+                        status="Running"
+                    else
+                        status="Stopped"
+                    fi
                 fi
                 printf "  %2d) %s (%s)\n" $((i+1)) "${vms[$i]}" "$status"
             done
@@ -1329,12 +1467,12 @@ main_menu() {
             echo "  2) Start a VM"
             echo "  3) Stop a VM"
             echo "  4) Show VM info"
-            echo "  5) Show VM performance"
-            echo "  6) Edit VM configuration"
-            echo "  7) Start tmate session for VM"
-            echo "  8) Delete a VM"
+            echo "  5) Edit VM configuration"
+            echo "  6) Delete a VM"
+            echo "  7) Enable XRDP (one-click)"
+            echo "  8) Show platform status"
         fi
-        echo "  9) System Information"
+        echo "  9) Initialize/Repair Platform"
         echo "  0) Exit"
         echo
         
@@ -1376,16 +1514,6 @@ main_menu() {
                 ;;
             5)
                 if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number to show performance: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
-                        show_vm_performance "${vms[$((vm_num-1))]}"
-                    else
-                        print_status "ERROR" "Invalid selection"
-                    fi
-                fi
-                ;;
-            6)
-                if [ $vm_count -gt 0 ]; then
                     read -p "$(print_status "INPUT" "Enter VM number to edit: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         edit_vm_config "${vms[$((vm_num-1))]}"
@@ -1394,17 +1522,7 @@ main_menu() {
                     fi
                 fi
                 ;;
-            7)
-                if [ $vm_count -gt 0 ]; then
-                    read -p "$(print_status "INPUT" "Enter VM number for tmate session: ")" vm_num
-                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
-                        start_tmate_session "${vms[$((vm_num-1))]}"
-                    else
-                        print_status "ERROR" "Invalid selection"
-                    fi
-                fi
-                ;;
-            8)
+            6)
                 if [ $vm_count -gt 0 ]; then
                     read -p "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
@@ -1414,23 +1532,21 @@ main_menu() {
                     fi
                 fi
                 ;;
-            9)
-                echo
-                print_status "INFO" "System Information:"
-                echo "=========================================="
-                if command -v neofetch &> /dev/null; then
-                    neofetch --stdout | head -20
-                else
-                    echo "Hostname: $(hostname)"
-                    echo "Kernel: $(uname -r)"
-                    echo "CPU: $(lscpu | grep "Model name" | cut -d: -f2 | xargs)"
-                    echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
-                    echo "Disk: $(df -h / | awk 'NR==2 {print $2}')"
+            7)
+                if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to enable XRDP: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        enable_xrdp "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
                 fi
-                echo "QEMU Version: $(qemu-system-x86_64 --version | head -1)"
-                echo "Running VMs: $(pgrep -c qemu-system-x86_64 || echo 0)"
-                echo "=========================================="
-                read -p "$(print_status "INPUT" "Press Enter to continue...")"
+                ;;
+            8)
+                show_platform_status
+                ;;
+            9)
+                initialize_platform
                 ;;
             0)
                 print_status "INFO" "Goodbye!"
@@ -1445,30 +1561,35 @@ main_menu() {
     done
 }
 
-# Set trap to cleanup on exit
-trap cleanup EXIT
+# Function to show platform status
+show_platform_status() {
+    echo
+    print_status "INFO" "Platform Status"
+    echo "=========================================="
+    echo "Hypervisor: $(sudo virsh version | grep -i running | head -1)"
+    echo "Total VMs: $(sudo virsh list --all | grep -c -E 'running|shut off')"
+    echo "Running VMs: $(sudo virsh list --state-running | grep -c running)"
+    echo "Bridge Interface: $(ip link show br0 2>/dev/null | grep -c UP || echo 'Not active')"
+    echo "Storage Pool: $(sudo virsh pool-list --all | grep -c default)"
+    echo "Log File: $LOG_FILE"
+    echo "=========================================="
+    echo
+    read -p "$(print_status "INPUT" "Press Enter to continue...")"
+}
 
-# Check dependencies
-check_dependencies
-
-# Check for root privileges for network operations
-if [ "$EUID" -ne 0 ]; then
-    print_status "WARN" "Some operations require root privileges (network bridge setup)"
-    print_status "INFO" "You may be prompted for sudo password during VM operations"
-fi
-
-# Initialize paths
-VM_DIR="${VM_DIR:-$HOME/vms}"
-mkdir -p "$VM_DIR"
-
-# Supported OS list
+# Supported OS list (same as original)
 declare -A OS_OPTIONS=(
-    ["Ubuntu 22.04 LTS"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
-    ["Ubuntu 24.04 LTS"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
+    ["Ubuntu 22.04"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ubuntu"
+    ["Ubuntu 24.04"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ubuntu"
+    ["Debian 11"]="debian|bullseye|https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2|debian11|debian|debian"
     ["Debian 12"]="debian|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|debian"
-    ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
+    ["Fedora 40"]="fedora|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|fedora"
+    ["CentOS Stream 9"]="centos|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|centos"
     ["AlmaLinux 9"]="almalinux|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|alma"
+    ["Rocky Linux 9"]="rockylinux|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|rocky"
 )
 
-# Start the main menu
+# Main execution
+check_dependencies
+initialize_platform
 main_menu
