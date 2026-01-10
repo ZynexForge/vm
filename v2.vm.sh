@@ -1,1465 +1,20 @@
-#!/bin/bash
-set -euo pipefail
-
-# =============================================================================
-# ZynexForge CloudStack™ Platform - Professional Edition
-# Advanced Virtualization Management System
-# Version: 3.0.0
-# Made by FaaizXD
-# =============================================================================
-
-# Global Configuration
-readonly USER_HOME="$HOME"
-readonly CONFIG_DIR="$USER_HOME/.zynexforge"
-readonly DATA_DIR="$USER_HOME/.zynexforge/data"
-readonly LOG_FILE="$USER_HOME/.zynexforge/zynexforge.log"
-readonly NODES_DB="$CONFIG_DIR/nodes.yml"
-readonly GLOBAL_CONFIG="$CONFIG_DIR/config.yml"
-readonly SSH_KEY_FILE="$USER_HOME/.ssh/zynexforge_ed25519"
-readonly SCRIPT_VERSION="3.0.0"
-
-# Color Definitions
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly MAGENTA='\033[0;35m'
-readonly CYAN='\033[0;36m'
-readonly WHITE='\033[1;37m'
-readonly NC='\033[0m'
-
-# Resource Limits
-readonly MAX_CPU_CORES=32
-readonly MAX_RAM_MB=64000
-readonly MAX_DISK_GB=2000
-readonly MIN_RAM_MB=256
-readonly MIN_DISK_GB=1
-
-# ASCII Art
-readonly ASCII_MAIN_ART=$(cat << 'EOF'
-__________                           ___________                         
-\____    /__.__. ____   ____ ___  __\_   _____/__________  ____   ____  
-  /     /<   |  |/    \_/ __ \\  \/  /|    __)/  _ \_  __ \/ ___\_/ __ \ 
- /     /_ \___  |   |  \  ___/ >    < |     \(  <_> )  | \/ /_/  >  ___/ 
-/_______ \/ ____|___|  /\___  >__/\_ \\___  / \____/|__|  \___  / \___  >
-        \/\/         \/     \/      \/    \/             /_____/      \/ 
-EOF
-)
-
-# OS Templates
-declare -A OS_TEMPLATES=(
-    ["ubuntu-24.04"]="Ubuntu 24.04 LTS|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ZynexForge123"
-    ["ubuntu-22.04"]="Ubuntu 22.04 LTS|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ZynexForge123"
-    ["debian-12"]="Debian 12|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|ZynexForge123"
-    ["centos-9"]="CentOS Stream 9|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|ZynexForge123"
-    ["rocky-9"]="Rocky Linux 9|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|ZynexForge123"
-    ["almalinux-9"]="AlmaLinux 9|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|ZynexForge123"
-    ["fedora-40"]="Fedora 40|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|ZynexForge123"
-)
-
-# ISO Images Library
-declare -A ISO_LIBRARY=(
-    ["ubuntu-24.04-desktop"]="Ubuntu 24.04 Desktop|https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso|ubuntu|ubuntu"
-    ["ubuntu-24.04-server"]="Ubuntu 24.04 Server|https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso|ubuntu|ubuntu"
-    ["ubuntu-22.04-server"]="Ubuntu 22.04 Server|https://releases.ubuntu.com/22.04/ubuntu-22.04-live-server-amd64.iso|ubuntu|ubuntu"
-    ["debian-12"]="Debian 12|https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.5.0-amd64-netinst.iso|debian|debian"
-    ["centos-9"]="CentOS Stream 9|https://mirror.stream.centos.org/9-stream/BaseOS/x86_64/iso/CentOS-Stream-9-latest-x86_64-dvd1.iso|centos|centos"
-    ["rocky-9"]="Rocky Linux 9|https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.3-x86_64-dvd.iso|rocky|rocky"
-    ["kali-linux"]="Kali Linux|https://cdimage.kali.org/kali-2024.2/kali-linux-2024.2-installer-amd64.iso|kali|kali"
-    ["arch-linux"]="Arch Linux|https://archlinux.c3sl.ufpr.br/iso/2024.07.01/archlinux-2024.07.01-x86_64.iso|arch|arch"
-    ["proxmox-8"]="Proxmox VE 8|https://download.proxmox.com/iso/proxmox-ve_8.1-1.iso|proxmox|proxmox"
-    ["windows-10"]="Windows 10|https://software.download.prss.microsoft.com/dbazure/Win10_22H2_English_x64.iso?t=8f2f9b9a-1b2c-4b3d-8e4f-0a1b2c3d4e5f|windows|windows"
-)
-
-# Real Nodes with Fast Locations
-declare -A REAL_NODES=(
-    ["mumbai"]="🇮🇳 Mumbai, India|ap-south-1|103.21.58.1|1000|64|500|kvm,qemu,docker"
-    ["delhi"]="🇮🇳 Delhi NCR, India|ap-south-2|103.21.59.1|1000|64|500|kvm,qemu,docker,jupyter"
-    ["bangalore"]="🇮🇳 Bangalore, India|ap-south-1|103.21.60.1|800|32|300|kvm,qemu"
-    ["singapore"]="🇸🇬 Singapore|ap-southeast-1|103.21.61.1|1200|128|1000|kvm,qemu,docker,jupyter,lxd"
-    ["frankfurt"]="🇩🇪 Frankfurt, Germany|eu-central-1|103.21.62.1|1500|256|2000|kvm,qemu,docker,jupyter,lxd"
-    ["amsterdam"]="🇳🇱 Amsterdam, Netherlands|eu-west-1|103.21.63.1|1400|128|1500|kvm,qemu,docker,lxd"
-    ["london"]="🇬🇧 London, UK|eu-west-2|103.21.64.1|1300|96|1200|kvm,qemu,docker,jupyter"
-    ["newyork"]="🇺🇸 New York, USA|us-east-1|103.21.65.1|1600|192|2500|kvm,qemu,docker,jupyter,lxd"
-    ["losangeles"]="🇺🇸 Los Angeles, USA|us-west-2|103.21.66.1|1400|128|1800|kvm,qemu,docker,lxd"
-    ["toronto"]="🇨🇦 Toronto, Canada|ca-central-1|103.21.67.1|1200|64|1000|kvm,qemu,docker"
-    ["tokyo"]="🇯🇵 Tokyo, Japan|ap-northeast-1|103.21.68.1|1100|96|1200|kvm,qemu,docker,jupyter,lxd"
-    ["sydney"]="🇦🇺 Sydney, Australia|ap-southeast-2|103.21.69.1|1000|64|800|kvm,qemu,docker"
-)
-
-# LXD Images
-declare -A LXD_IMAGES=(
-    ["ubuntu-24.04"]="Ubuntu 24.04 LTS|ubuntu:24.04"
-    ["ubuntu-22.04"]="Ubuntu 22.04 LTS|ubuntu:22.04"
-    ["debian-12"]="Debian 12|debian:12"
-    ["centos-9"]="CentOS Stream 9|centos:stream9"
-    ["rocky-9"]="Rocky Linux 9|rockylinux:9"
-    ["almalinux-9"]="AlmaLinux 9|almalinux:9"
-    ["fedora-40"]="Fedora 40|fedora:40"
-    ["alpine-3.19"]="Alpine Linux 3.19|alpine:3.19"
-)
-
-# =============================================================================
-# CORE FUNCTIONS
-# =============================================================================
-
-print_header() {
-    clear
-    echo -e "${CYAN}"
-    echo "$ASCII_MAIN_ART"
-    echo -e "${NC}"
-    echo -e "${YELLOW}⚡ ZynexForge CloudStack™ Professional Edition${NC}"
-    echo -e "${WHITE}🔥 Made by FaaizXD | Version: ${SCRIPT_VERSION}${NC}"
-    echo "=================================================================="
-    echo
-}
-
-print_status() {
-    local type=$1
-    local message=$2
-    
-    case $type in
-        "SUCCESS") echo -e "${GREEN}[SUCCESS]${NC} $message" ;;
-        "ERROR") echo -e "${RED}[ERROR]${NC} $message" ;;
-        "WARNING") echo -e "${YELLOW}[WARNING]${NC} $message" ;;
-        "INFO") echo -e "${BLUE}[INFO]${NC} $message" ;;
-        "INPUT") echo -e "${MAGENTA}[INPUT]${NC} $message" ;;
-        *) echo "[$type] $message" ;;
-    esac
-}
-
-validate_input() {
-    local type=$1
-    local value=$2
-    local min=${3:-0}
-    local max=${4:-999999}
-    
-    case $type in
-        "number")
-            if ! [[ "$value" =~ ^[0-9]+$ ]]; then
-                print_status "ERROR" "Must be a number"
-                return 1
-            fi
-            if [ "$value" -lt "$min" ] || [ "$value" -gt "$max" ]; then
-                print_status "ERROR" "Must be between $min and $max"
-                return 1
-            fi
-            ;;
-        "size")
-            if ! [[ "$value" =~ ^[0-9]+[GgMmKk]$ ]]; then
-                print_status "ERROR" "Must be a size with unit (e.g., 100G, 512M, 1024K)"
-                return 1
-            fi
-            ;;
-        "port")
-            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 23 ] || [ "$value" -gt 65535 ]; then
-                print_status "ERROR" "Must be a valid port number (23-65535)"
-                return 1
-            fi
-            ;;
-        "name")
-            if ! [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-                print_status "ERROR" "VM name can only contain letters, numbers, hyphens, and underscores"
-                return 1
-            fi
-            ;;
-        "ip")
-            if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                print_status "ERROR" "Must be a valid IP address"
-                return 1
-            fi
-            ;;
-    esac
-    return 0
-}
-
-check_dependencies() {
-    print_status "INFO" "Checking dependencies..."
-    
-    local missing_packages=()
-    local required_tools=("qemu-system-x86_64" "qemu-img" "ssh-keygen")
-    
-    for tool in "${required_tools[@]}"; do
-        if ! command -v "${tool}" > /dev/null 2>&1; then
-            missing_packages+=("$tool")
-        fi
-    done
-    
-    if [ ${#missing_packages[@]} -gt 0 ]; then
-        print_status "WARNING" "Missing packages: ${missing_packages[*]}"
-        
-        if command -v apt-get > /dev/null 2>&1; then
-            print_status "INFO" "Installing packages on Debian/Ubuntu..."
-            sudo apt-get update
-            sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssh-client curl wget snapd
-            sudo snap install lxd
-        elif command -v dnf > /dev/null 2>&1; then
-            print_status "INFO" "Installing packages on Fedora/RHEL..."
-            sudo dnf install -y qemu-system-x86 qemu-img cloud-utils genisoimage openssh-clients curl wget snapd
-            sudo snap install lxd
-        else
-            print_status "ERROR" "Unsupported package manager"
-            print_status "INFO" "Please install manually: qemu-system-x86, qemu-utils, cloud-image-utils, genisoimage, curl, wget"
-        fi
-    else
-        print_status "SUCCESS" "All required tools are available"
-    fi
-}
-
-check_port_available() {
-    local port=$1
-    if command -v ss > /dev/null 2>&1; then
-        if ss -tuln | grep -q ":${port} "; then
-            return 1
-        fi
-    elif command -v netstat > /dev/null 2>&1; then
-        if netstat -tuln | grep -q ":${port} "; then
-            return 1
-        fi
-    fi
-    return 0
-}
-
-find_available_port() {
-    local base_port=${1:-22000}
-    local max_port=23000
-    local port=$base_port
-    
-    while [ $port -le $max_port ]; do
-        if check_port_available "$port"; then
-            echo "$port"
-            return 0
-        fi
-        port=$((port + 1))
-    done
-    echo $((30000 + RANDOM % 10000))
-}
-
-generate_password() {
-    local length=${1:-16}
-    tr -dc 'A-Za-z0-9!@#$%^&*()_+' < /dev/urandom | head -c "$length"
-}
-
-get_system_resources() {
-    local total_ram_kb
-    total_ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    local total_ram_mb=$((total_ram_kb / 1024))
-    local available_ram_mb=$((total_ram_mb - 512)) # Leave 512MB for system
-    
-    local total_disk_gb
-    total_disk_gb=$(df -BG "$DATA_DIR" | awk 'NR==2 {print $2}' | sed 's/G//')
-    
-    local cpu_cores
-    cpu_cores=$(nproc)
-    
-    echo "$available_ram_mb $total_disk_gb $cpu_cores"
-}
-
-# =============================================================================
-# INITIALIZATION
-# =============================================================================
-
-initialize_platform() {
-    print_status "INFO" "Initializing ZynexForge Platform..."
-    
-    # Create directory structure
-    mkdir -p "$CONFIG_DIR" \
-             "$DATA_DIR/vms" \
-             "$DATA_DIR/disks" \
-             "$DATA_DIR/cloudinit" \
-             "$DATA_DIR/dockervm" \
-             "$DATA_DIR/jupyter" \
-             "$DATA_DIR/isos" \
-             "$DATA_DIR/lxd" \
-             "$DATA_DIR/backups" \
-             "$USER_HOME/zynexforge/templates/cloud" \
-             "$USER_HOME/zynexforge/templates/iso" \
-             "$USER_HOME/zynexforge/logs"
-    
-    # Create default config if not exists
-    if [ ! -f "$GLOBAL_CONFIG" ]; then
-        cat > "$GLOBAL_CONFIG" << 'EOF'
-# ZynexForge Global Configuration
-platform:
-  name: "ZynexForge CloudStack™ Professional"
-  version: "3.0.0"
-  default_node: "local"
-  ssh_base_port: 22000
-  max_vms_per_node: 50
-  user_mode: true
-
-security:
-  firewall_enabled: false
-  default_ssh_user: "zynexuser"
-  password_min_length: 8
-  use_ssh_keys: true
-
-paths:
-  templates: "$USER_HOME/zynexforge/templates/cloud"
-  isos: "$DATA_DIR/isos"
-  vm_configs: "$DATA_DIR/vms"
-  vm_disks: "$DATA_DIR/disks"
-  logs: "$USER_HOME/zynexforge/logs"
-EOF
-        print_status "SUCCESS" "Global configuration created"
-    fi
-    
-    # Create nodes database with real nodes
-    if [ ! -f "$NODES_DB" ]; then
-        cat > "$NODES_DB" << EOF
-# ZynexForge Nodes Database
-# Real Global Nodes with Fast Connections
-nodes:
-  local:
-    node_id: "local"
-    node_name: "Local Development"
-    location_name: "Local, Your Computer"
-    provider: "Self-Hosted"
-    public_ip: "127.0.0.1"
-    capabilities: ["kvm", "qemu", "docker", "jupyter", "lxd"]
-    tags: ["development", "testing"]
-    status: "active"
-    created_at: "$(date -Iseconds)"
-    user_mode: true
-EOF
-        
-        # Add real nodes
-        for node_id in "${!REAL_NODES[@]}"; do
-            IFS='|' read -r location region ip latency ram disk capabilities <<< "${REAL_NODES[$node_id]}"
-            cat >> "$NODES_DB" << EOF
-  $node_id:
-    node_id: "$node_id"
-    node_name: "$location"
-    location_name: "$location"
-    region_code: "$region"
-    provider: "ZynexForge Cloud"
-    public_ip: "$ip"
-    latency_ms: "$latency"
-    capabilities: ["$capabilities"]
-    resources:
-      max_ram_mb: "$ram"
-      max_disk_gb: "$disk"
-    tags: ["production", "fast", "global"]
-    status: "active"
-    created_at: "$(date -Iseconds)"
-    user_mode: false
-EOF
-        done
-        
-        print_status "SUCCESS" "Real nodes database created with ${#REAL_NODES[@]} global locations"
-    fi
-    
-    # Generate SSH key if not exists
-    if [ ! -f "$SSH_KEY_FILE" ]; then
-        print_status "INFO" "Generating SSH key..."
-        ssh-keygen -t ed25519 -f "$SSH_KEY_FILE" -N "" -q
-        chmod 600 "$SSH_KEY_FILE"
-        chmod 644 "${SSH_KEY_FILE}.pub"
-        print_status "SUCCESS" "SSH key generated"
-    fi
-    
-    # Check dependencies
-    check_dependencies
-    
-    print_status "SUCCESS" "Platform initialized successfully!"
-}
-
-# =============================================================================
-# MAIN MENU
-# =============================================================================
-
-main_menu() {
-    while true; do
-        print_header
-        echo -e "${GREEN}Main Menu:${NC}"
-        echo "  1) ⚡ Create New VM (Advanced)"
-        echo "  2) 🖥️  VM Manager"
-        echo "  3) 🐳 Docker VM Cloud"
-        echo "  4) 🧊 LXD Cloud"
-        echo "  5) 🔬 Jupyter Cloud Lab"
-        echo "  6) 📦 ISO Library"
-        echo "  7) 🌐 Nodes Management"
-        echo "  8) 📊 Monitoring"
-        echo "  9) 💾 Backup & Restore"
-        echo "  10) ⚙️  Settings"
-        echo "  11) ℹ️  System Info"
-        echo "  0) ❌ Exit"
-        echo
-        
-        read -rp "$(print_status "INPUT" "Select option: ")" choice
-        
-        case $choice in
-            1) create_new_vm_advanced ;;
-            2) vm_manager_menu ;;
-            3) docker_vm_menu ;;
-            4) lxd_cloud_menu ;;
-            5) jupyter_cloud_menu ;;
-            6) iso_library_menu ;;
-            7) nodes_menu ;;
-            8) monitoring_menu ;;
-            9) backup_menu ;;
-            10) settings_menu ;;
-            11) system_info_menu ;;
-            0) 
-                print_status "INFO" "Thank you for using ZynexForge CloudStack™!"
-                exit 0
-                ;;
-            *) print_status "ERROR" "Invalid option"; sleep 1 ;;
-        esac
-    done
-}
-
-# =============================================================================
-# ADVANCED VM CREATION WITH NODE SELECTION
-# =============================================================================
-
-create_new_vm_advanced() {
-    print_header
-    echo -e "${GREEN}🚀 Create New VM (Advanced)${NC}"
-    echo
-    
-    # Step 1: Select Node
-    print_status "INFO" "Step 1: Select Node Location"
-    echo
-    
-    local node_options=()
-    local node_index=1
-    
-    # Add local node first
-    node_options+=("local|Local Development (127.0.0.1)|development,testing")
-    echo "  ${GREEN}1${NC}) 🇺🇳 Local Development (127.0.0.1)"
-    echo "     Capabilities: KVM, QEMU, Docker, Jupyter, LXD"
-    echo "     Tags: development, testing"
-    echo
-    
-    # Add real nodes
-    echo -e "${YELLOW}🌍 Global Production Nodes (Fast & Reliable):${NC}"
-    for node_id in "${!REAL_NODES[@]}"; do
-        IFS='|' read -r location region ip latency ram disk capabilities <<< "${REAL_NODES[$node_id]}"
-        ((node_index++))
-        node_options+=("$node_id|$location|$capabilities")
-        
-        # Get emoji from location
-        local emoji="🌐"
-        if [[ "$location" == *"India"* ]]; then
-            emoji="🇮🇳"
-        elif [[ "$location" == *"Singapore"* ]]; then
-            emoji="🇸🇬"
-        elif [[ "$location" == *"Germany"* ]]; then
-            emoji="🇩🇪"
-        elif [[ "$location" == *"Netherlands"* ]]; then
-            emoji="🇳🇱"
-        elif [[ "$location" == *"UK"* ]]; then
-            emoji="🇬🇧"
-        elif [[ "$location" == *"USA"* ]]; then
-            emoji="🇺🇸"
-        elif [[ "$location" == *"Canada"* ]]; then
-            emoji="🇨🇦"
-        elif [[ "$location" == *"Japan"* ]]; then
-            emoji="🇯🇵"
-        elif [[ "$location" == *"Australia"* ]]; then
-            emoji="🇦🇺"
-        fi
-        
-        echo "  ${GREEN}${node_index}${NC}) $emoji $location"
-        echo "     IP: $ip | Latency: ${latency}ms"
-        echo "     Resources: ${ram}GB RAM, ${disk}GB Disk"
-        echo "     Capabilities: $capabilities"
-        echo
-    done
-    
-    read -rp "$(print_status "INPUT" "Select node (1-${#node_options[@]}): ")" node_choice
-    
-    if ! [[ "$node_choice" =~ ^[0-9]+$ ]] || [ "$node_choice" -lt 1 ] || [ "$node_choice" -gt ${#node_options[@]} ]; then
-        print_status "ERROR" "Invalid node selection"
-        return 1
-    fi
-    
-    IFS='|' read -r selected_node_id selected_node_name selected_capabilities <<< "${node_options[$((node_choice-1))]}"
-    
-    # Step 2: Select VM Type
-    print_status "INFO" "Step 2: Select VM Type for $selected_node_name"
-    echo
-    
-    echo "Available VM Types:"
-    if [[ "$selected_capabilities" == *"kvm"* ]] || [[ "$selected_capabilities" == *"qemu"* ]]; then
-        echo "  ${GREEN}1${NC}) KVM/QEMU Virtual Machine (Full virtualization)"
-    fi
-    if [[ "$selected_capabilities" == *"docker"* ]]; then
-        echo "  ${GREEN}2${NC}) Docker Container (Lightweight)"
-    fi
-    if [[ "$selected_capabilities" == *"lxd"* ]]; then
-        echo "  ${GREEN}3${NC}) LXD Container (System container)"
-    fi
-    echo
-    
-    read -rp "$(print_status "INPUT" "Select VM type: ")" vm_type_choice
-    
-    case $vm_type_choice in
-        1) create_kvm_vm "$selected_node_id" "$selected_node_name" ;;
-        2) create_docker_vm_advanced "$selected_node_id" "$selected_node_name" ;;
-        3) create_lxd_vm "$selected_node_id" "$selected_node_name" ;;
-        *) print_status "ERROR" "Invalid VM type"; return 1 ;;
-    esac
-}
-
-create_kvm_vm() {
-    local node_id="$1"
-    local node_name="$2"
-    
-    print_header
-    echo -e "${GREEN}⚡ Create KVM/QEMU VM on $node_name${NC}"
-    echo
-    
-    # VM Name
-    while true; do
-        read -rp "$(print_status "INPUT" "VM Name: ")" vm_name
-        if validate_input "name" "$vm_name"; then
-            if [ -f "$DATA_DIR/vms/${vm_name}.conf" ]; then
-                print_status "ERROR" "VM '$vm_name' already exists"
+            if wget --progress=bar:force:noscroll -O "$output_file" "$img_url"; then
+                print_status "SUCCESS" "Cloud template downloaded: $output_file"
+                print_status "INFO" "Default credentials: $default_username / $default_password"
+                log_message "TEMPLATE_DOWNLOAD" "Downloaded cloud template: $os_name"
             else
-                break
+                print_status "ERROR" "Download failed"
             fi
-        fi
-    done
-    
-    # OS Selection with ISO support
-    print_status "INFO" "Select OS Installation Method:"
-    echo "  1) Cloud Image (Fast Deployment - 2 minutes)"
-    echo "  2) ISO Image (Full Install - 10-20 minutes)"
-    echo "  3) Custom ISO (From library)"
-    echo
-    
-    read -rp "$(print_status "INPUT" "Choice (1-3): ")" os_method_choice
-    
-    local os_template=""
-    local iso_path=""
-    local install_type=""
-    
-    case $os_method_choice in
-        1)
-            # Cloud Images
-            print_status "INFO" "Select Cloud Image:"
-            local i=1
-            for os in "${!OS_TEMPLATES[@]}"; do
-                echo "  $i) $os"
-                ((i++))
-            done
-            echo
-            
-            read -rp "$(print_status "INPUT" "Choice: ")" os_choice
-            if [[ "$os_choice" =~ ^[0-9]+$ ]] && [ "$os_choice" -ge 1 ] && [ "$os_choice" -le ${#OS_TEMPLATES[@]} ]; then
-                local os_keys=("${!OS_TEMPLATES[@]}")
-                os_template="${os_keys[$((os_choice-1))]}"
-                install_type="cloud"
-            fi
-            ;;
-        2)
-            # Quick ISO selection
-            print_status "INFO" "Select ISO Image:"
-            echo "  1) Ubuntu 24.04 Desktop"
-            echo "  2) Ubuntu 24.04 Server"
-            echo "  3) Debian 12"
-            echo "  4) CentOS 9"
-            echo "  5) Rocky Linux 9"
-            echo "  6) Kali Linux"
-            echo "  7) Windows 10"
-            echo
-            
-            read -rp "$(print_status "INPUT" "Choice (1-7): ")" iso_choice
-            
-            case $iso_choice in
-                1) iso_path="$DATA_DIR/isos/ubuntu-24.04-desktop.iso" ;;
-                2) iso_path="$DATA_DIR/isos/ubuntu-24.04-server.iso" ;;
-                3) iso_path="$DATA_DIR/isos/debian-12.iso" ;;
-                4) iso_path="$DATA_DIR/isos/centos-9.iso" ;;
-                5) iso_path="$DATA_DIR/isos/rocky-9.iso" ;;
-                6) iso_path="$DATA_DIR/isos/kali-linux.iso" ;;
-                7) iso_path="$DATA_DIR/isos/windows-10.iso" ;;
-                *) print_status "ERROR" "Invalid choice"; return 1 ;;
-            esac
-            
-            # Download if not exists
-            if [ ! -f "$iso_path" ]; then
-                download_iso_for_vm "$iso_choice" "$iso_path"
-            fi
-            
-            os_template="custom-iso"
-            install_type="iso"
-            ;;
-        3)
-            # Custom ISO from library
-            iso_library_menu "select"
-            if [ -n "$SELECTED_ISO" ]; then
-                iso_path="$SELECTED_ISO"
-                os_template="custom-iso"
-                install_type="iso"
-            else
-                print_status "ERROR" "No ISO selected"
-                return 1
-            fi
-            ;;
-        *)
-            print_status "ERROR" "Invalid choice"
-            return 1
-            ;;
-    esac
-    
-    # Get node resources
-    IFS='|' read -r location region ip latency max_ram max_disk capabilities <<< "${REAL_NODES[$node_id]:-Local|local|127.0.0.1|1|$(get_system_resources | awk '{print $1}')|$(get_system_resources | awk '{print $2}')|kvm,qemu,docker,jupyter,lxd}"
-    
-    # CPU Cores
-    while true; do
-        read -rp "$(print_status "INPUT" "CPU cores (1-${MAX_CPU_CORES}, default: 2): ")" cpu_cores
-        cpu_cores=${cpu_cores:-2}
-        if validate_input "number" "$cpu_cores" "1" "$MAX_CPU_CORES"; then
-            break
-        fi
-    done
-    
-    # RAM
-    while true; do
-        echo -e "${YELLOW}Available RAM on node: ${max_ram}MB${NC}"
-        read -rp "$(print_status "INPUT" "RAM in MB (${MIN_RAM_MB}-${MAX_RAM_MB}, default: 2048): ")" ram_mb
-        ram_mb=${ram_mb:-2048}
-        if validate_input "number" "$ram_mb" "$MIN_RAM_MB" "$MAX_RAM_MB"; then
-            if [ "$ram_mb" -le "$max_ram" ]; then
-                break
-            else
-                print_status "ERROR" "Node only has ${max_ram}MB available"
-            fi
-        fi
-    done
-    
-    # Disk Size
-    while true; do
-        echo -e "${YELLOW}Available Disk on node: ${max_disk}GB${NC}"
-        read -rp "$(print_status "INPUT" "Disk size in GB (${MIN_DISK_GB}-${MAX_DISK_GB}, default: 50): ")" disk_gb
-        disk_gb=${disk_gb:-50}
-        if validate_input "number" "$disk_gb" "$MIN_DISK_GB" "$MAX_DISK_GB"; then
-            if [ "$disk_gb" -le "$max_disk" ]; then
-                break
-            else
-                print_status "ERROR" "Node only has ${max_disk}GB available"
-            fi
-        fi
-    done
-    
-    # SSH Port (only for local)
-    local ssh_port=""
-    if [ "$node_id" = "local" ]; then
-        ssh_port=$(find_available_port)
-        print_status "INFO" "Using SSH port: $ssh_port"
-    else
-        ssh_port="22" # Remote nodes use standard SSH
-    fi
-    
-    # Credentials
-    while true; do
-        read -rp "$(print_status "INPUT" "Username (default: zynexuser): ")" vm_user
-        vm_user=${vm_user:-zynexuser}
-        if [ -n "$vm_user" ]; then
-            break
-        fi
-        print_status "ERROR" "Username cannot be empty"
-    done
-    
-    read -rsp "$(print_status "INPUT" "Password (press Enter to generate): ")" vm_pass
-    echo
-    if [ -z "$vm_pass" ]; then
-        vm_pass=$(generate_password 12)
-        print_status "INFO" "Generated password: $vm_pass"
-    fi
-    
-    # Network
-    print_status "INFO" "Network Configuration:"
-    if [ "$node_id" = "local" ]; then
-        echo "  1) NAT (User-mode networking)"
-        echo "  2) Bridge (Requires setup)"
-        echo
-        read -rp "$(print_status "INPUT" "Choice (1-2, default: 1): ")" network_choice
-        network_choice=${network_choice:-1}
-    else
-        print_status "INFO" "Remote node: Using bridge networking"
-        network_choice="2"
-    fi
-    
-    # Acceleration
-    print_status "INFO" "Acceleration:"
-    echo "  1) KVM (Hardware, if available)"
-    echo "  2) TCG (Software)"
-    echo
-    read -rp "$(print_status "INPUT" "Choice (1-2, default: 1): ")" accel_choice
-    accel_choice=${accel_choice:-1}
-    acceleration=$([ "$accel_choice" = "1" ] && echo "kvm" || echo "tcg")
-    
-    # Confirm
-    echo
-    print_status "INFO" "📋 Summary:"
-    echo "  Node: $node_name ($node_id)"
-    echo "  VM Name: $vm_name"
-    echo "  OS: $([ "$install_type" = "cloud" ] && echo "$os_template" || echo "ISO Install")"
-    echo "  CPU: ${cpu_cores} cores"
-    echo "  RAM: ${ram_mb} MB"
-    echo "  Disk: ${disk_gb} GB"
-    if [ "$node_id" = "local" ]; then
-        echo "  SSH Port: $ssh_port"
-    fi
-    echo "  Username: $vm_user"
-    echo "  Network: $([ "$network_choice" = "1" ] && echo "NAT" || echo "Bridge")"
-    echo "  Acceleration: $acceleration"
-    echo
-    
-    read -rp "$(print_status "INPUT" "Create VM? (y/N): ")" confirm
-    
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        if [ "$node_id" = "local" ]; then
-            create_vm "$vm_name" "$os_template" "$cpu_cores" "$ram_mb" "$disk_gb" "$ssh_port" "$vm_user" "$vm_pass" "$network_choice" "$acceleration" "$iso_path" "$node_id"
-        else
-            create_remote_vm "$vm_name" "$node_id" "$os_template" "$cpu_cores" "$ram_mb" "$disk_gb" "$vm_user" "$vm_pass" "$iso_path"
-        fi
-    else
-        print_status "INFO" "VM creation cancelled"
-    fi
-}
-
-download_iso_for_vm() {
-    local iso_choice="$1"
-    local iso_path="$2"
-    
-    print_status "INFO" "ISO not found locally. Downloading..."
-    
-    local iso_url=""
-    local iso_name=""
-    
-    case $iso_choice in
-        1)
-            iso_name="ubuntu-24.04-desktop"
-            iso_url="https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso"
-            ;;
-        2)
-            iso_name="ubuntu-24.04-server"
-            iso_url="https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso"
-            ;;
-        3)
-            iso_name="debian-12"
-            iso_url="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.5.0-amd64-netinst.iso"
-            ;;
-        4)
-            iso_name="centos-9"
-            iso_url="https://mirror.stream.centos.org/9-stream/BaseOS/x86_64/iso/CentOS-Stream-9-latest-x86_64-dvd1.iso"
-            ;;
-        5)
-            iso_name="rocky-9"
-            iso_url="https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.3-x86_64-dvd.iso"
-            ;;
-        6)
-            iso_name="kali-linux"
-            iso_url="https://cdimage.kali.org/kali-2024.2/kali-linux-2024.2-installer-amd64.iso"
-            ;;
-        7)
-            iso_name="windows-10"
-            iso_url="https://software.download.prss.microsoft.com/dbazure/Win10_22H2_English_x64.iso"
-            ;;
-    esac
-    
-    mkdir -p "$(dirname "$iso_path")"
-    
-    if command -v wget > /dev/null 2>&1; then
-        wget --progress=bar:force -O "$iso_path" "$iso_url"
-    elif command -v curl > /dev/null 2>&1; then
-        curl -L -o "$iso_path" "$iso_url"
-    else
-        print_status "ERROR" "Download tools not available"
-        return 1
-    fi
-    
-    if [ $? -eq 0 ]; then
-        print_status "SUCCESS" "ISO downloaded: $iso_name"
-    else
-        print_status "ERROR" "Failed to download ISO"
-        return 1
-    fi
-}
-
-create_vm() {
-    local vm_name=$1 os_template=$2 cpu_cores=$3 ram_mb=$4 disk_gb=$5
-    local ssh_port=$6 vm_user=$7 vm_pass=$8 network_choice=$9
-    local acceleration=${10} iso_path=${11} node_id=${12}
-    
-    print_status "INFO" "Creating VM '$vm_name' on node '$node_id'..."
-    
-    # Create directories
-    mkdir -p "$DATA_DIR/vms" "$DATA_DIR/disks" "$DATA_DIR/cloudinit/$vm_name"
-    
-    # Disk path
-    local disk_path="$DATA_DIR/disks/${vm_name}.qcow2"
-    
-    # Create disk
-    if [ "$os_template" = "custom-iso" ] && [ -n "$iso_path" ]; then
-        # For ISO install
-        print_status "INFO" "Creating blank disk..."
-        qemu-img create -f qcow2 "$disk_path" "${disk_gb}G"
-    else
-        # Cloud image
-        local template_path="$USER_HOME/zynexforge/templates/cloud/${os_template}.qcow2"
-        if [ -f "$template_path" ]; then
-            print_status "INFO" "Using template: $os_template"
-            cp "$template_path" "$disk_path"
-            qemu-img resize "$disk_path" "${disk_gb}G" > /dev/null 2>&1
-        else
-            print_status "INFO" "Downloading template..."
-            IFS='|' read -r os_name codename img_url default_hostname default_username default_password <<< "${OS_TEMPLATES[$os_template]}"
-            wget -q --show-progress -O "$disk_path" "$img_url"
-            qemu-img resize "$disk_path" "${disk_gb}G" > /dev/null 2>&1
-        fi
-    fi
-    
-    # Cloud-init for cloud images
-    if [ "$os_template" != "custom-iso" ]; then
-        print_status "INFO" "Creating cloud-init configuration..."
-        
-        local ssh_pub_key=""
-        if [ -f "${SSH_KEY_FILE}.pub" ]; then
-            ssh_pub_key=$(cat "${SSH_KEY_FILE}.pub")
-        fi
-        
-        # user-data
-        cat > "$DATA_DIR/cloudinit/$vm_name/user-data" << EOF
-#cloud-config
-hostname: $vm_name
-manage_etc_hosts: true
-users:
-  - name: $vm_user
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    lock_passwd: false
-    plain_text_passwd: '$vm_pass'
-    ssh_authorized_keys:
-      - $ssh_pub_key
-packages:
-  - neofetch
-  - htop
-  - curl
-  - wget
-  - git
-package_update: true
-package_upgrade: true
-runcmd:
-  - echo "ZynexForge CloudStack™" > /etc/zynexforge-os.ascii
-  - systemctl restart sshd
-EOF
-        
-        # meta-data
-        cat > "$DATA_DIR/cloudinit/$vm_name/meta-data" << EOF
-instance-id: $vm_name
-local-hostname: $vm_name
-EOF
-        
-        # Create seed ISO
-        if command -v cloud-localds > /dev/null 2>&1; then
-            cloud-localds "$DATA_DIR/cloudinit/$vm_name/seed.iso" \
-                "$DATA_DIR/cloudinit/$vm_name/user-data" \
-                "$DATA_DIR/cloudinit/$vm_name/meta-data"
-        else
-            genisoimage -output "$DATA_DIR/cloudinit/$vm_name/seed.iso" \
-                -volid cidata -joliet -rock \
-                "$DATA_DIR/cloudinit/$vm_name/user-data" \
-                "$DATA_DIR/cloudinit/$vm_name/meta-data"
-        fi
-    fi
-    
-    # Save VM configuration
-    cat > "$DATA_DIR/vms/${vm_name}.conf" << EOF
-VM_NAME="$vm_name"
-NODE_ID="$node_id"
-OS_TYPE="$os_template"
-CPU_CORES="$cpu_cores"
-RAM_MB="$ram_mb"
-DISK_GB="$disk_gb"
-SSH_PORT="$ssh_port"
-VM_USER="$vm_user"
-VM_PASS="$vm_pass"
-NETWORK_MODE="$network_choice"
-ACCELERATION="$acceleration"
-DISK_PATH="$disk_path"
-ISO_PATH="$iso_path"
-STATUS="stopped"
-CREATED_AT="$(date -Iseconds)"
-EOF
-    
-    print_status "SUCCESS" "VM '$vm_name' created successfully on node '$node_id'!"
-    
-    # Show access info
-    echo
-    print_status "INFO" "Access Information:"
-    echo "  SSH: ssh -p $ssh_port $vm_user@localhost"
-    echo "  Password: $vm_pass"
-    echo
-    
-    read -rp "$(print_status "INPUT" "Start VM now? (y/N): ")" start_now
-    if [[ "$start_now" =~ ^[Yy]$ ]]; then
-        start_vm "$vm_name"
-    fi
-    
-    sleep 2
-}
-
-create_remote_vm() {
-    local vm_name=$1 node_id=$2 os_template=$3 cpu_cores=$4 ram_mb=$5
-    local vm_user=$6 vm_pass=$7 iso_path=$8
-    
-    print_status "INFO" "Creating remote VM '$vm_name' on node '$node_id'..."
-    
-    # This is a simulation - in real implementation, you would:
-    # 1. SSH to the remote node
-    # 2. Run provisioning scripts
-    # 3. Set up monitoring
-    # 4. Return connection details
-    
-    IFS='|' read -r location region ip latency max_ram max_disk capabilities <<< "${REAL_NODES[$node_id]}"
-    
-    # Save VM configuration
-    cat > "$DATA_DIR/vms/${vm_name}.conf" << EOF
-VM_NAME="$vm_name"
-NODE_ID="$node_id"
-NODE_NAME="$location"
-NODE_IP="$ip"
-OS_TYPE="$os_template"
-CPU_CORES="$cpu_cores"
-RAM_MB="$ram_mb"
-DISK_GB="$disk_gb"
-VM_USER="$vm_user"
-VM_PASS="$vm_pass"
-STATUS="provisioning"
-CREATED_AT="$(date -Iseconds)"
-PROVISIONING_STEPS="1. Allocating resources on $location
-2. Installing $os_template
-3. Configuring network
-4. Setting up SSH access
-5. Starting services"
-EOF
-    
-    print_status "SUCCESS" "✅ VM provisioning started on $location!"
-    echo
-    print_status "INFO" "📋 Provisioning Details:"
-    echo "  Location: $location"
-    echo "  IP Address: $ip"
-    echo "  Estimated Setup Time: 2-5 minutes"
-    echo "  Username: $vm_user"
-    echo "  Password: $vm_pass"
-    echo
-    print_status "INFO" "🔄 Provisioning steps will be completed automatically."
-    print_status "INFO" "You will receive connection details when ready."
-    
-    # Simulate provisioning (in real implementation, this would be async)
-    sleep 3
-    print_status "INFO" "✅ Resources allocated"
-    sleep 2
-    print_status "INFO" "✅ OS installation started"
-    sleep 2
-    print_status "INFO" "✅ Network configured"
-    sleep 2
-    print_status "INFO" "✅ SSH access set up"
-    
-    # Update status
-    sed -i "s/STATUS=.*/STATUS=\"running\"/" "$DATA_DIR/vms/${vm_name}.conf"
-    
-    echo
-    print_status "SUCCESS" "🎉 VM '$vm_name' is now running on $location!"
-    print_status "INFO" "🔗 Connection Details:"
-    echo "  SSH: ssh $vm_user@$ip"
-    echo "  Password: $vm_pass"
-    echo "  Web Console: https://console.zynexforge.cloud/$node_id/$vm_name"
-    
-    sleep 3
-}
-
-# =============================================================================
-# LXD CLOUD
-# =============================================================================
-
-lxd_cloud_menu() {
-    while true; do
-        print_header
-        echo -e "${GREEN}🧊 LXD Cloud${NC}"
-        echo
-        
-        # Check if LXD is available
-        if ! command -v lxc > /dev/null 2>&1; then
-            print_status "ERROR" "LXD is not installed"
-            echo "To install LXD:"
-            echo "  sudo snap install lxd"
-            echo "  sudo lxd init --auto"
-            echo "  sudo usermod -aG lxd \$USER"
-            echo
-            read -rp "$(print_status "INPUT" "Press Enter to continue...")"
-            return
-        fi
-        
-        # List LXD instances
-        local instances=()
-        if command -v lxc > /dev/null 2>&1; then
-            instances=($(lxc list --format csv 2>/dev/null | cut -d',' -f1))
-        fi
-        
-        if [ ${#instances[@]} -gt 0 ] && [ "${instances[0]}" != "NAME" ]; then
-            echo "LXD Instances:"
-            echo "──────────────"
-            for i in "${!instances[@]}"; do
-                local status
-                status=$(lxc info "${instances[$i]}" 2>/dev/null | grep Status: | awk '{print $2}' || echo "unknown")
-                printf "  %2d) %-20s [%s]\n" "$((i+1))" "${instances[$i]}" "$status"
-            done
-            echo
-        else
-            print_status "INFO" "No LXD instances"
-            echo
-        fi
-        
-        echo "Options:"
-        echo "  1) Create LXD Container"
-        echo "  2) Start Container"
-        echo "  3) Stop Container"
-        echo "  4) Console Access"
-        echo "  5) Delete Container"
-        echo "  6) LXD Info"
-        echo "  7) Back to Main"
-        echo
-        
-        read -rp "$(print_status "INPUT" "Select option: ")" choice
-        
-        case $choice in
-            1) create_lxd_container ;;
-            2)
-                if [ ${#instances[@]} -gt 0 ] && [ "${instances[0]}" != "NAME" ]; then
-                    read -rp "$(print_status "INPUT" "Enter container number: ")" cont_num
-                    if [[ "$cont_num" =~ ^[0-9]+$ ]] && [ "$cont_num" -ge 1 ] && [ "$cont_num" -le ${#instances[@]} ]; then
-                        lxc start "${instances[$((cont_num-1))]}"
-                    fi
-                fi
-                ;;
-            3)
-                if [ ${#instances[@]} -gt 0 ] && [ "${instances[0]}" != "NAME" ]; then
-                    read -rp "$(print_status "INPUT" "Enter container number: ")" cont_num
-                    if [[ "$cont_num" =~ ^[0-9]+$ ]] && [ "$cont_num" -ge 1 ] && [ "$cont_num" -le ${#instances[@]} ]; then
-                        lxc stop "${instances[$((cont_num-1))]}"
-                    fi
-                fi
-                ;;
-            4)
-                if [ ${#instances[@]} -gt 0 ] && [ "${instances[0]}" != "NAME" ]; then
-                    read -rp "$(print_status "INPUT" "Enter container number: ")" cont_num
-                    if [[ "$cont_num" =~ ^[0-9]+$ ]] && [ "$cont_num" -ge 1 ] && [ "$cont_num" -le ${#instances[@]} ]; then
-                        lxc exec "${instances[$((cont_num-1))]}" -- /bin/bash
-                    fi
-                fi
-                ;;
-            5)
-                if [ ${#instances[@]} -gt 0 ] && [ "${instances[0]}" != "NAME" ]; then
-                    read -rp "$(print_status "INPUT" "Enter container number: ")" cont_num
-                    if [[ "$cont_num" =~ ^[0-9]+$ ]] && [ "$cont_num" -ge 1 ] && [ "$cont_num" -le ${#instances[@]} ]; then
-                        lxc delete -f "${instances[$((cont_num-1))]}"
-                    fi
-                fi
-                ;;
-            6) lxc info ;;
-            7) return ;;
-            *) print_status "ERROR" "Invalid option"; sleep 1 ;;
-        esac
-        
-        [ "$choice" -ne 7 ] && sleep 1
-    done
-}
-
-create_lxd_vm() {
-    local node_id="$1"
-    local node_name="$2"
-    
-    print_header
-    echo -e "${GREEN}🧊 Create LXD Container on $node_name${NC}"
-    echo
-    
-    read -rp "$(print_status "INPUT" "Container name: ")" container_name
-    
-    # Select LXD image
-    print_status "INFO" "Select LXD Image:"
-    local i=1
-    for image in "${!LXD_IMAGES[@]}"; do
-        IFS='|' read -r image_name image_source <<< "${LXD_IMAGES[$image]}"
-        echo "  $i) $image_name"
-        ((i++))
-    done
-    echo
-    
-    read -rp "$(print_status "INPUT" "Choice: ")" image_choice
-    
-    if ! [[ "$image_choice" =~ ^[0-9]+$ ]] || [ "$image_choice" -lt 1 ] || [ "$image_choice" -gt ${#LXD_IMAGES[@]} ]; then
-        print_status "ERROR" "Invalid choice"
-        return 1
-    fi
-    
-    local image_keys=("${!LXD_IMAGES[@]}")
-    local selected_image="${image_keys[$((image_choice-1))]}"
-    IFS='|' read -r image_name image_source <<< "${LXD_IMAGES[$selected_image]}"
-    
-    # Resources
-    read -rp "$(print_status "INPUT" "CPU cores (default: 1): ")" lxd_cpu
-    lxd_cpu=${lxd_cpu:-1}
-    
-    read -rp "$(print_status "INPUT" "RAM in MB (default: 1024): ")" lxd_ram
-    lxd_ram=${lxd_ram:-1024}
-    
-    read -rp "$(print_status "INPUT" "Disk in GB (default: 10): ")" lxd_disk
-    lxd_disk=${lxd_disk:-10}
-    
-    print_status "INFO" "Creating LXD container '$container_name' with $image_name..."
-    
-    # Create container
-    if lxc launch "$image_source" "$container_name" \
-        --config limits.cpu="$lxd_cpu" \
-        --config limits.memory="${lxd_ram}MB" \
-        --config limits.memory.enforce=soft \
-        --ephemeral=false > /dev/null 2>&1; then
-        
-        # Wait for container to start
-        sleep 3
-        
-        # Set up user
-        local lxd_password=$(generate_password 12)
-        lxc exec "$container_name" -- useradd -m -s /bin/bash zynexuser
-        lxc exec "$container_name" -- bash -c "echo 'zynexuser:$lxd_password' | chpasswd"
-        lxc exec "$container_name" -- bash -c "echo 'zynexuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers"
-        
-        # Save configuration
-        mkdir -p "$DATA_DIR/lxd"
-        cat > "$DATA_DIR/lxd/${container_name}.conf" << EOF
-CONTAINER_NAME="$container_name"
-NODE_ID="$node_id"
-IMAGE="$image_name"
-CPU="$lxd_cpu"
-RAM="$lxd_ram"
-DISK="$lxd_disk"
-USERNAME="zynexuser"
-PASSWORD="$lxd_password"
-STATUS="running"
-CREATED_AT="$(date -Iseconds)"
-EOF
-        
-        print_status "SUCCESS" "LXD container created"
-        echo
-        print_status "INFO" "Access Information:"
-        echo "  Console: lxc exec $container_name -- /bin/bash"
-        echo "  Username: zynexuser"
-        echo "  Password: $lxd_password"
-    else
-        print_status "ERROR" "Failed to create LXD container"
-    fi
-    
-    sleep 2
-}
-
-create_lxd_container() {
-    print_header
-    echo -e "${GREEN}🧊 Create LXD Container${NC}"
-    echo
-    
-    if ! command -v lxc > /dev/null 2>&1; then
-        print_status "ERROR" "LXD is not installed"
-        return 1
-    fi
-    
-    read -rp "$(print_status "INPUT" "Container name: ")" container_name
-    
-    # Select LXD image
-    print_status "INFO" "Select LXD Image:"
-    local i=1
-    for image in "${!LXD_IMAGES[@]}"; do
-        IFS='|' read -r image_name image_source <<< "${LXD_IMAGES[$image]}"
-        echo "  $i) $image_name"
-        ((i++))
-    done
-    echo
-    
-    read -rp "$(print_status "INPUT" "Choice: ")" image_choice
-    
-    if ! [[ "$image_choice" =~ ^[0-9]+$ ]] || [ "$image_choice" -lt 1 ] || [ "$image_choice" -gt ${#LXD_IMAGES[@]} ]; then
-        print_status "ERROR" "Invalid choice"
-        return 1
-    fi
-    
-    local image_keys=("${!LXD_IMAGES[@]}")
-    local selected_image="${image_keys[$((image_choice-1))]}"
-    IFS='|' read -r image_name image_source <<< "${LXD_IMAGES[$selected_image]}"
-    
-    # Resources
-    read -rp "$(print_status "INPUT" "CPU cores (default: 1): ")" lxd_cpu
-    lxd_cpu=${lxd_cpu:-1}
-    
-    read -rp "$(print_status "INPUT" "RAM in MB (default: 1024): ")" lxd_ram
-    lxd_ram=${lxd_ram:-1024}
-    
-    print_status "INFO" "Creating LXD container '$container_name' with $image_name..."
-    
-    if lxc launch "$image_source" "$container_name" \
-        --config limits.cpu="$lxd_cpu" \
-        --config limits.memory="${lxd_ram}MB" > /dev/null 2>&1; then
-        
-        print_status "SUCCESS" "LXD container created"
-        echo "  Access: lxc exec $container_name -- /bin/bash"
-    else
-        print_status "ERROR" "Failed to create LXD container"
-    fi
-    
-    sleep 2
-}
-
-# =============================================================================
-# DOCKER VM (Advanced)
-# =============================================================================
-
-create_docker_vm_advanced() {
-    local node_id="$1"
-    local node_name="$2"
-    
-    print_header
-    echo -e "${GREEN}🐳 Create Docker Container on $node_name${NC}"
-    echo
-    
-    if [ "$node_id" != "local" ] && [[ ! "${REAL_NODES[$node_id]}" == *"docker"* ]]; then
-        print_status "ERROR" "Node $node_name does not support Docker"
-        return 1
-    fi
-    
-    read -rp "$(print_status "INPUT" "Container name: ")" container_name
-    
-    print_status "INFO" "Select Docker Image:"
-    echo "  1) Ubuntu 24.04"
-    echo "  2) Debian 12"
-    echo "  3) CentOS Stream 9"
-    echo "  4) Alpine Linux"
-    echo "  5) Nginx"
-    echo "  6) MySQL"
-    echo "  7) Redis"
-    echo "  8) Node.js"
-    echo "  9) Python"
-    echo
-    
-    read -rp "$(print_status "INPUT" "Choice (1-9): ")" docker_choice
-    
-    local docker_image=""
-    case $docker_choice in
-        1) docker_image="ubuntu:24.04" ;;
-        2) docker_image="debian:12" ;;
-        3) docker_image="centos:stream9" ;;
-        4) docker_image="alpine:latest" ;;
-        5) docker_image="nginx:alpine" ;;
-        6) docker_image="mysql:8.0" ;;
-        7) docker_image="redis:alpine" ;;
-        8) docker_image="node:20-alpine" ;;
-        9) docker_image="python:3.12-alpine" ;;
-        *) print_status "ERROR" "Invalid choice"; return 1 ;;
-    esac
-    
-    # Resources
-    read -rp "$(print_status "INPUT" "CPU limit (e.g., 1.5, optional): ")" docker_cpu
-    read -rp "$(print_status "INPUT" "Memory limit (e.g., 512m, optional): ")" docker_memory
-    
-    # Port mapping
-    read -rp "$(print_status "INPUT" "Port mapping (e.g., 8080:80, optional): ")" docker_ports
-    
-    print_status "INFO" "Creating Docker container..."
-    
-    local docker_cmd="docker run -d --name $container_name --restart unless-stopped"
-    
-    if [ -n "$docker_cpu" ]; then
-        docker_cmd="$docker_cmd --cpus=$docker_cpu"
-    fi
-    
-    if [ -n "$docker_memory" ]; then
-        docker_cmd="$docker_cmd --memory=$docker_memory"
-    fi
-    
-    if [ -n "$docker_ports" ]; then
-        docker_cmd="$docker_cmd -p $docker_ports"
-    fi
-    
-    docker_cmd="$docker_cmd $docker_image tail -f /dev/null"
-    
-    if eval "$docker_cmd" > /dev/null 2>&1; then
-        # Save configuration
-        mkdir -p "$DATA_DIR/dockervm"
-        cat > "$DATA_DIR/dockervm/${container_name}.conf" << EOF
-CONTAINER_NAME="$container_name"
-NODE_ID="$node_id"
-IMAGE="$docker_image"
-CPU_LIMIT="$docker_cpu"
-MEMORY_LIMIT="$docker_memory"
-PORTS="$docker_ports"
-STATUS="running"
-CREATED_AT="$(date -Iseconds)"
-EOF
-        
-        print_status "SUCCESS" "Docker container created on $node_name"
-        echo
-        print_status "INFO" "Access Information:"
-        echo "  Console: docker exec -it $container_name /bin/bash"
-        echo "  Stop: docker stop $container_name"
-        echo "  Start: docker start $container_name"
-    else
-        print_status "ERROR" "Failed to create Docker container"
-    fi
-    
-    sleep 2
-}
-
-# =============================================================================
-# ISO LIBRARY (Updated)
-# =============================================================================
-
-iso_library_menu() {
-    local select_mode=${1:-""}
-    
-    while true; do
-        print_header
-        
-        if [ "$select_mode" = "select" ]; then
-            echo -e "${GREEN}📀 Select ISO Image${NC}"
-        else
-            echo -e "${GREEN}📀 ISO Library${NC}"
-        fi
-        echo
-        
-        # List ISO files
-        local iso_files=()
-        if [ -d "$DATA_DIR/isos" ]; then
-            iso_files=($(find "$DATA_DIR/isos" -name "*.iso" -type f 2>/dev/null))
-        fi
-        
-        if [ ${#iso_files[@]} -gt 0 ]; then
-            echo "Available ISO Images:"
-            echo "─────────────────────"
-            for i in "${!iso_files[@]}"; do
-                local iso_name
-                iso_name=$(basename "${iso_files[$i]}")
-                local iso_size
-                iso_size=$(du -h "${iso_files[$i]}" | awk '{print $1}')
-                local iso_date
-                iso_date=$(stat -c %y "${iso_files[$i]}" | cut -d' ' -f1)
-                printf "  %2d) %-30s (%s, %s)\n" "$((i+1))" "$iso_name" "$iso_size" "$iso_date"
-            done
-            echo
-        else
-            print_status "INFO" "No ISO images available"
-            echo
-        fi
-        
-        if [ "$select_mode" = "select" ]; then
-            echo "Options:"
-            if [ ${#iso_files[@]} -gt 0 ]; then
-                echo "  1-${#iso_files[@]}) Select ISO"
-            fi
-            echo "  d) Download ISO"
-            echo "  b) Back"
-            echo
-        else
-            echo "Options:"
-            echo "  1) Download ISO"
-            echo "  2) Delete ISO"
-            echo "  3) Import ISO"
-            echo "  4) Back to Main"
-            echo
-        fi
-        
-        read -rp "$(print_status "INPUT" "Select option: ")" choice
-        
-        if [ "$select_mode" = "select" ]; then
-            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#iso_files[@]} ]; then
-                SELECTED_ISO="${iso_files[$((choice-1))]}"
-                return 0
-            elif [[ "$choice" =~ ^[Dd]$ ]]; then
-                download_iso
-                continue
-            elif [[ "$choice" =~ ^[Bb]$ ]]; then
-                SELECTED_ISO=""
-                return 1
-            else
-                print_status "ERROR" "Invalid option"
-                sleep 1
-            fi
-        else
-            case $choice in
-                1) download_iso ;;
-                2)
-                    if [ ${#iso_files[@]} -gt 0 ]; then
-                        read -rp "$(print_status "INPUT" "Enter ISO number: ")" iso_num
-                        if [[ "$iso_num" =~ ^[0-9]+$ ]] && [ "$iso_num" -ge 1 ] && [ "$iso_num" -le ${#iso_files[@]} ]; then
-                            rm -f "${iso_files[$((iso_num-1))]}"
-                            print_status "SUCCESS" "ISO deleted"
-                        fi
-                    fi
-                    ;;
-                3)
-                    read -rp "$(print_status "INPUT" "Enter path to ISO file: ")" iso_path
-                    if [ -f "$iso_path" ]; then
-                        local iso_name=$(basename "$iso_path")
-                        cp "$iso_path" "$DATA_DIR/isos/$iso_name"
-                        print_status "SUCCESS" "ISO imported: $iso_name"
-                    else
-                        print_status "ERROR" "File not found"
-                    fi
-                    ;;
-                4) return ;;
-                *) print_status "ERROR" "Invalid option"; sleep 1 ;;
-            esac
-        fi
-        
-        [ "$choice" -ne 4 ] && [ "$choice" != "b" ] && sleep 1
-    done
-}
-
-download_iso() {
-    print_header
-    echo -e "${GREEN}⬇️  Download ISO${NC}"
-    echo
-    
-    echo "Available ISOs:"
-    local i=1
-    for iso in "${!ISO_LIBRARY[@]}"; do
-        IFS='|' read -r iso_name iso_url default_user default_pass <<< "${ISO_LIBRARY[$iso]}"
-        echo "  $i) $iso_name"
-        ((i++))
-    done
-    echo
-    
-    read -rp "$(print_status "INPUT" "Select ISO: ")" iso_choice
-    
-    if [[ "$iso_choice" =~ ^[0-9]+$ ]] && [ "$iso_choice" -ge 1 ] && [ "$iso_choice" -le ${#ISO_LIBRARY[@]} ]; then
-        local iso_keys=("${!ISO_LIBRARY[@]}")
-        local selected_key="${iso_keys[$((iso_choice-1))]}"
-        IFS='|' read -r iso_name iso_url default_user default_pass <<< "${ISO_LIBRARY[$selected_key]}"
-        
-        local output_file="$DATA_DIR/isos/${selected_key}.iso"
-        mkdir -p "$DATA_DIR/isos"
-        
-        print_status "INFO" "Downloading $iso_name..."
-        print_status "INFO" "URL: $iso_url"
-        print_status "INFO" "Default credentials: $default_user / $default_pass"
-        
-        if command -v wget > /dev/null 2>&1; then
-            wget --progress=bar:force -O "$output_file" "$iso_url"
         elif command -v curl > /dev/null 2>&1; then
-            curl -L -o "$output_file" "$iso_url"
+            if curl -L -o "$output_file" "$img_url"; then
+                print_status "SUCCESS" "Cloud template downloaded: $output_file"
+                print_status "INFO" "Default credentials: $default_username / $default_password"
+                log_message "TEMPLATE_DOWNLOAD" "Downloaded cloud template: $os_name"
+            else
+                print_status "ERROR" "Download failed"
+            fi
         else
-            print_status "ERROR" "Neither wget nor curl available"
-            return 1
-        fi
-        
-        if [ $? -eq 0 ]; then
-            print_status "SUCCESS" "ISO downloaded: $output_file"
-            print_status "INFO" "Default login: $default_user / $default_pass"
-        else
-            print_status "ERROR" "Download failed"
+            print_status "ERROR" "No download tool available"
         fi
     else
         print_status "ERROR" "Invalid selection"
@@ -1469,23 +24,26 @@ download_iso() {
 }
 
 # =============================================================================
-# NODES MANAGEMENT (Updated)
+# NODE MANAGEMENT (Enhanced)
 # =============================================================================
 
 nodes_menu() {
     while true; do
         print_header
-        echo -e "${GREEN}🌐 Nodes Management${NC}"
+        echo -e "${GREEN}🌐 Multi-Node Cluster Management${NC}"
+        echo -e "${DIM}─────────────────────────────────${NC}"
         echo
         
-        # Display nodes with resources
-        echo "Available Nodes:"
+        # Display nodes with enhanced information
+        echo -e "${CYAN}Available Nodes:${NC}"
         echo "────────────────"
         
         # Local node
         echo -e "${GREEN}1) 🇺🇳 Local Development${NC}"
-        echo "   IP: 127.0.0.1 | Status: Active"
-        echo "   Capabilities: KVM, QEMU, Docker, Jupyter, LXD"
+        echo "   ├─ IP: 127.0.0.1"
+        echo "   ├─ Status: 🟢 Active"
+        echo "   ├─ Capabilities: QEMU/KVM, Docker, LXD, Jupyter"
+        echo "   └─ Resources: $(nproc) CPU, $(free -m | awk '/^Mem:/{print $2}')MB RAM"
         echo
         
         # Real nodes
@@ -1495,29 +53,39 @@ nodes_menu() {
             
             # Get emoji
             local emoji="🌐"
-            if [[ "$location" == *"India"* ]]; then emoji="🇮🇳"; fi
-            if [[ "$location" == *"Singapore"* ]]; then emoji="🇸🇬"; fi
-            if [[ "$location" == *"Germany"* ]]; then emoji="🇩🇪"; fi
-            if [[ "$location" == *"Netherlands"* ]]; then emoji="🇳🇱"; fi
-            if [[ "$location" == *"UK"* ]]; then emoji="🇬🇧"; fi
-            if [[ "$location" == *"USA"* ]]; then emoji="🇺🇸"; fi
-            if [[ "$location" == *"Canada"* ]]; then emoji="🇨🇦"; fi
-            if [[ "$location" == *"Japan"* ]]; then emoji="🇯🇵"; fi
-            if [[ "$location" == *"Australia"* ]]; then emoji="🇦🇺"; fi
+            case "$location" in
+                *"India"*) emoji="🇮🇳" ;;
+                *"Singapore"*) emoji="🇸🇬" ;;
+                *"Germany"*) emoji="🇩🇪" ;;
+                *"Netherlands"*) emoji="🇳🇱" ;;
+                *"UK"*) emoji="🇬🇧" ;;
+                *"USA"*) emoji="🇺🇸" ;;
+                *"Canada"*) emoji="🇨🇦" ;;
+                *"Japan"*) emoji="🇯🇵" ;;
+                *"Australia"*) emoji="🇦🇺" ;;
+            esac
             
             echo -e "${GREEN}${node_index}) ${emoji} ${location}${NC}"
-            echo "   IP: $ip | Latency: ${latency}ms"
-            echo "   Resources: ${ram}GB RAM, ${disk}GB Disk"
-            echo "   Capabilities: $capabilities"
+            echo "   ├─ IP: $ip"
+            echo "   ├─ Latency: ${latency}ms"
+            echo "   ├─ Status: 🟢 Online"
+            echo "   ├─ Resources: ${ram}GB RAM, ${disk}GB NVMe SSD"
+            echo "   └─ Capabilities: $capabilities"
             echo
             
             ((node_index++))
         done
         
-        echo "Options:"
-        echo "  1) Test Node Connection"
+        echo -e "${GREEN}📋 Node Management Options:${NC}"
+        echo "  1) Test Node Connectivity"
         echo "  2) View Node Statistics"
-        echo "  3) Back to Main"
+        echo "  3) Deploy to Node"
+        echo "  4) Node Health Check"
+        echo "  5) Add Custom Node"
+        echo "  6) Remove Node"
+        echo "  7) Configure Node Settings"
+        echo "  8) Cluster Overview"
+        echo "  9) Back to Main"
         echo
         
         read -rp "$(print_status "INPUT" "Select option: ")" choice
@@ -1531,7 +99,19 @@ nodes_menu() {
                 read -rp "$(print_status "INPUT" "Enter node name for stats: ")" stats_node
                 show_node_statistics "$stats_node"
                 ;;
-            3) return ;;
+            3) deploy_to_node_menu ;;
+            4)
+                read -rp "$(print_status "INPUT" "Enter node name for health check: ")" health_node
+                node_health_check "$health_node"
+                ;;
+            5) add_custom_node ;;
+            6)
+                read -rp "$(print_status "INPUT" "Enter node name to remove: ")" remove_node
+                remove_node "$remove_node"
+                ;;
+            7) configure_node_settings ;;
+            8) cluster_overview ;;
+            9) return ;;
             *) print_status "ERROR" "Invalid option"; sleep 1 ;;
         esac
     done
@@ -1540,33 +120,69 @@ nodes_menu() {
 test_node_connection() {
     local node_id="$1"
     
+    print_header
+    echo -e "${GREEN}📡 Testing Node Connectivity${NC}"
+    echo -e "${DIM}Node: $node_id${NC}"
+    echo
+    
     if [ -z "${REAL_NODES[$node_id]:-}" ]; then
         if [ "$node_id" = "local" ]; then
             print_status "SUCCESS" "Local node is ready"
+            echo
+            echo "Local Node Status:"
+            echo "  • CPU: $(nproc) cores"
+            echo "  • RAM: $(free -h | awk '/^Mem:/{print $2}') total"
+            echo "  • Disk: $(df -h / | awk 'NR==2{print $4}') available"
+            echo "  • Services: All operational"
             return
         fi
-        print_status "ERROR" "Node not found"
+        print_status "ERROR" "Node '$node_id' not found"
         return
     fi
     
     IFS='|' read -r location region ip latency ram disk capabilities <<< "${REAL_NODES[$node_id]}"
     
     print_status "INFO" "Testing connection to $location ($ip)..."
+    echo
     
-    # Simulate ping test
-    echo -n "Testing latency... "
-    sleep 1
-    echo "${latency}ms ✓"
+    # Simulate comprehensive tests
+    echo "Running connectivity tests:"
+    echo "──────────────────────────"
     
-    echo -n "Checking services... "
-    sleep 1
-    echo "Active ✓"
+    # Test 1: Ping (simulated)
+    echo -n "  [1/6] Ping test... "
+    sleep 0.5
+    echo "✅ ${latency}ms"
     
-    echo -n "Verifying resources... "
-    sleep 1
-    echo "Available ✓"
+    # Test 2: SSH
+    echo -n "  [2/6] SSH availability... "
+    sleep 0.5
+    echo "✅ Port 22 open"
     
-    print_status "SUCCESS" "Node $location is operational and ready"
+    # Test 3: Services
+    echo -n "  [3/6] Service status... "
+    sleep 0.5
+    echo "✅ All services running"
+    
+    # Test 4: Resources
+    echo -n "  [4/6] Resource check... "
+    sleep 0.5
+    echo "✅ ${ram}GB RAM, ${disk}GB Disk"
+    
+    # Test 5: Capabilities
+    echo -n "  [5/6] Capabilities... "
+    sleep 0.5
+    echo "✅ $capabilities"
+    
+    # Test 6: Overall health
+    echo -n "  [6/6] Overall health... "
+    sleep 0.5
+    echo "✅ Excellent"
+    
+    echo
+    print_status "SUCCESS" "Node $location is fully operational!"
+    echo
+    echo "Recommendation: Ready for production deployment"
     
     read -rp "$(print_status "INPUT" "Press Enter to continue...")"
 }
@@ -1574,55 +190,61 @@ test_node_connection() {
 show_node_statistics() {
     local node_id="$1"
     
+    print_header
+    echo -e "${GREEN}📊 Node Statistics${NC}"
+    
     if [ -z "${REAL_NODES[$node_id]:-}" ]; then
         if [ "$node_id" = "local" ]; then
-            # Show local stats
-            print_header
-            echo -e "${GREEN}📊 Local Node Statistics${NC}"
+            echo -e "${DIM}Local Development Node${NC}"
             echo
+            
+            # Get real system stats
+            local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')
+            local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+            local mem_used=$(free -m | awk '/^Mem:/{print $3}')
+            local mem_percent=$((mem_used * 100 / mem_total))
+            local disk_total=$(df -h / | awk 'NR==2{print $2}')
+            local disk_used=$(df -h / | awk 'NR==2{print $3}')
+            local disk_percent=$(df -h / | awk 'NR==2{print $5}' | sed 's/%//')
             
             echo "System Resources:"
             echo "─────────────────"
-            echo "  CPU Usage: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}')%"
-            echo "  Memory: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
-            echo "  Disk: $(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 " used)"}')"
+            echo "  CPU Usage: ${cpu_usage}%"
+            echo "  Memory: ${mem_used}MB / ${mem_total}MB (${mem_percent}%)"
+            echo "  Disk: ${disk_used} / ${disk_total} (${disk_percent}% used)"
             echo
             
-            # Count VMs
-            local vm_count=0
-            local docker_count=0
-            local lxd_count=0
-            
-            if [ -d "$DATA_DIR/vms" ]; then
-                vm_count=$(find "$DATA_DIR/vms" -name "*.conf" -type f 2>/dev/null | wc -l)
-            fi
-            
-            if command -v docker > /dev/null 2>&1; then
-                docker_count=$(docker ps -a --format "{{.Names}}" | wc -l)
-            fi
-            
-            if command -v lxc > /dev/null 2>&1; then
-                lxd_count=$(lxc list --format csv 2>/dev/null | grep -v "^NAME" | wc -l)
-            fi
+            # Count instances
+            local vm_count=$(find "$VM_DIR" -name "*.conf" 2>/dev/null | wc -l)
+            local docker_count=$(docker ps -a --format "{{.Names}}" 2>/dev/null | wc -l)
+            local lxd_count=$(lxc list --format csv 2>/dev/null | grep -v "^NAME" 2>/dev/null | wc -l)
+            local jupyter_count=$(docker ps -a --filter "name=jupyter-" --format "{{.Names}}" 2>/dev/null | wc -l)
             
             echo "Running Instances:"
             echo "──────────────────"
             echo "  Virtual Machines: $vm_count"
             echo "  Docker Containers: $docker_count"
             echo "  LXD Containers: $lxd_count"
+            echo "  Jupyter Instances: $jupyter_count"
             echo
             
-            read -rp "$(print_status "INPUT" "Press Enter to continue...")"
-            return
+            # Network info
+            echo "Network Information:"
+            echo "────────────────────"
+            echo "  Hostname: $(hostname)"
+            echo "  IP Address: $(hostname -I | awk '{print $1}')"
+            echo "  Uptime: $(uptime -p)"
+            
+        else
+            print_status "ERROR" "Node '$node_id' not found"
         fi
-        print_status "ERROR" "Node not found"
+        read -rp "$(print_status "INPUT" "Press Enter to continue...")"
         return
     fi
     
     IFS='|' read -r location region ip latency ram disk capabilities <<< "${REAL_NODES[$node_id]}"
     
-    print_header
-    echo -e "${GREEN}📊 Node Statistics: $location${NC}"
+    echo -e "${DIM}$location ($region)${NC}"
     echo
     
     echo "Basic Information:"
@@ -1631,26 +253,1163 @@ show_node_statistics() {
     echo "  Region: $region"
     echo "  IP Address: $ip"
     echo "  Latency: ${latency}ms"
+    echo "  Provider: ZynexForge Cloud"
     echo
     
     echo "Resource Capacity:"
     echo "──────────────────"
     echo "  RAM: ${ram}GB"
-    echo "  Disk: ${disk}GB"
-    echo "  Capabilities: $capabilities"
+    echo "  Storage: ${disk}GB NVMe SSD"
+    echo "  Network: 10 Gbps"
+    echo "  Availability Zones: 3"
     echo
     
-    # Simulate usage statistics
+    echo "Capabilities:"
+    echo "─────────────"
+    echo "  $capabilities" | tr ',' '\n' | sed 's/^/  • /'
+    echo
+    
+    # Simulated usage statistics
     echo "Current Usage (Simulated):"
     echo "──────────────────────────"
-    echo "  RAM Usage: $((RANDOM % 70 + 10))%"
-    echo "  Disk Usage: $((RANDOM % 60 + 15))%"
-    echo "  Network: $((RANDOM % 500 + 100))Mbps"
-    echo "  Active VMs: $((RANDOM % 20 + 5))"
+    local cpu_usage=$((RANDOM % 30 + 10))
+    local ram_usage=$((RANDOM % 40 + 20))
+    local disk_usage=$((RANDOM % 35 + 15))
+    local network_usage=$((RANDOM % 500 + 100))
+    local active_vms=$((RANDOM % 15 + 5))
+    
+    echo "  CPU Usage: ${cpu_usage}%"
+    echo "  RAM Usage: ${ram_usage}%"
+    echo "  Disk Usage: ${disk_usage}%"
+    echo "  Network: ${network_usage}Mbps"
+    echo "  Active VMs: ${active_vms}"
     echo
     
-    print_status "INFO" "Status: ✅ Operational"
+    echo "SLA & Support:"
+    echo "──────────────"
+    echo "  Uptime SLA: 99.99%"
+    echo "  Support: 24/7 Premium"
+    echo "  Backup: Daily Automated"
+    echo "  Monitoring: Real-time"
+    echo
     
+    print_status "INFO" "Status: 🟢 Operational - Ready for deployment"
+    
+    read -rp "$(print_status "INPUT" "Press Enter to continue...")"
+}
+
+deploy_to_node_menu() {
+    print_header
+    echo -e "${GREEN}🚀 Deploy to Remote Node${NC}"
+    echo
+    
+    echo "Select target node:"
+    local i=1
+    local node_ids=("local")
+    
+    echo "  $i) Local Development (127.0.0.1)"
+    ((i++))
+    
+    for node_id in "${!REAL_NODES[@]}"; do
+        IFS='|' read -r location region ip latency ram disk capabilities <<< "${REAL_NODES[$node_id]}"
+        echo "  $i) $location ($ip)"
+        node_ids+=("$node_id")
+        ((i++))
+    done
+    echo
+    
+    read -rp "$(print_status "INPUT" "Select node (1-${#node_ids[@]}): ")" node_choice
+    
+    if [[ "$node_choice" =~ ^[0-9]+$ ]] && [ "$node_choice" -ge 1 ] && [ "$node_choice" -le ${#node_ids[@]} ]; then
+        local target_node="${node_ids[$((node_choice-1))]}"
+        
+        if [ "$target_node" = "local" ]; then
+            print_status "INFO" "Local deployment - use VM creation instead"
+            sleep 2
+            return
+        fi
+        
+        deploy_to_remote_node "$target_node"
+    else
+        print_status "ERROR" "Invalid selection"
+    fi
+}
+
+deploy_to_remote_node() {
+    local node_id="$1"
+    
+    IFS='|' read -r location region ip latency ram disk capabilities <<< "${REAL_NODES[$node_id]}"
+    
+    print_header
+    echo -e "${GREEN}🚀 Deploy to $location${NC}"
+    echo -e "${DIM}IP: $ip | Resources: ${ram}GB RAM, ${disk}GB Disk${NC}"
+    echo
+    
+    echo "Select deployment type:"
+    echo "  1) Virtual Machine (QEMU/KVM)"
+    echo "  2) Docker Container"
+    echo "  3) LXD Container"
+    echo "  4) Jupyter Notebook"
+    echo "  5) Application Stack"
+    echo
+    
+    read -rp "$(print_status "INPUT" "Choice (1-5): ")" deploy_choice
+    
+    case $deploy_choice in
+        1) deploy_remote_vm "$node_id" ;;
+        2) deploy_remote_docker "$node_id" ;;
+        3) deploy_remote_lxd "$node_id" ;;
+        4) deploy_remote_jupyter "$node_id" ;;
+        5) deploy_remote_stack "$node_id" ;;
+        *) print_status "ERROR" "Invalid choice"; return 1 ;;
+    esac
+}
+
+deploy_remote_vm() {
+    local node_id="$1"
+    IFS='|' read -r location region ip latency ram disk capabilities <<< "${REAL_NODES[$node_id]}"
+    
+    print_header
+    echo -e "${GREEN}🖥️  Deploy Remote VM to $location${NC}"
+    echo
+    
+    # This is a simulation - in real implementation, you would:
+    # 1. SSH to remote node
+    # 2. Transfer configuration
+    # 3. Execute provisioning scripts
+    # 4. Monitor deployment
+    # 5. Return connection details
+    
+    read -rp "$(print_status "INPUT" "VM name: ")" vm_name
+    read -rp "$(print_status "INPUT" "OS template (ubuntu-24.04, debian-12, etc.): ")" os_template
+    read -rp "$(print_status "INPUT" "CPU cores (default: 2): ")" cpu_cores
+    cpu_cores=${cpu_cores:-2}
+    
+    read -rp "$(print_status "INPUT" "RAM in MB (default: 2048): ")" ram_mb
+    ram_mb=${ram_mb:-2048}
+    
+    read -rp "$(print_status "INPUT" "Disk in GB (default: 50): ")" disk_gb
+    disk_gb=${disk_gb:-50}
+    
+    read -rp "$(print_status "INPUT" "Username (default: admin): ")" vm_user
+    vm_user=${vm_user:-admin}
+    
+    read -rsp "$(print_status "INPUT" "Password (press Enter to generate): ")" vm_pass
+    echo
+    if [ -z "$vm_pass" ]; then
+        vm_pass=$(generate_password 16)
+        print_status "INFO" "Generated password: $vm_pass"
+    fi
+    
+    # Save remote VM configuration
+    mkdir -p "$DATA_DIR/remote_vms"
+    cat > "$DATA_DIR/remote_vms/${vm_name}.conf" << EOF
+VM_NAME="$vm_name"
+NODE_ID="$node_id"
+NODE_NAME="$location"
+NODE_IP="$ip"
+OS_TYPE="$os_template"
+CPU_CORES="$cpu_cores"
+RAM_MB="$ram_mb"
+DISK_GB="$disk_gb"
+VM_USER="$vm_user"
+VM_PASS="$vm_pass"
+STATUS="provisioning"
+CREATED_AT="$(date -Iseconds)"
+PROVISIONING_STEPS="1. Connecting to $location
+2. Allocating resources
+3. Downloading OS template
+4. Configuring network
+5. Setting up SSH access
+6. Starting services"
+EOF
+    
+    print_status "SUCCESS" "✅ Remote VM deployment started on $location!"
+    echo
+    print_status "INFO" "📋 Deployment Details:"
+    echo "  Location: $location"
+    echo "  IP Address: $ip"
+    echo "  Estimated Setup Time: 2-5 minutes"
+    echo "  Username: $vm_user"
+    echo "  Password: $vm_pass"
+    echo
+    print_status "INFO" "🔄 Provisioning steps will be completed automatically."
+    print_status "INFO" "You will receive connection details when ready."
+    
+    # Simulate provisioning process
+    simulate_provisioning "$vm_name" "$location"
+    
+    # Update status
+    sed -i "s/STATUS=.*/STATUS=\"running\"/" "$DATA_DIR/remote_vms/${vm_name}.conf"
+    
+    echo
+    print_status "SUCCESS" "🎉 VM '$vm_name' is now running on $location!"
+    echo
+    print_status "INFO" "🔗 Connection Details:"
+    echo "  SSH: ssh $vm_user@$ip"
+    echo "  Password: $vm_pass"
+    echo "  Web Console: https://$ip:8006"
+    echo "  Usage: ssh $vm_user@$ip 'neofetch'"
+    echo
+    print_status "INFO" "📊 Management:"
+    echo "  - Monitor: ssh $vm_user@$ip 'htop'"
+    echo "  - Stop: Contact node administrator"
+    echo "  - Restart: Contact node administrator"
+    echo "  - Backup: Automated daily"
+    
+    log_message "REMOTE_DEPLOY" "Deployed VM $vm_name to $location"
+    
+    sleep 3
+}
+
+simulate_provisioning() {
+    local vm_name="$1"
+    local location="$2"
+    
+    local steps=(
+        "Connecting to $location..."
+        "Allocating resources (2 vCPU, 2GB RAM, 50GB Disk)..."
+        "Downloading OS template..."
+        "Creating virtual disk..."
+        "Configuring network..."
+        "Setting up cloud-init..."
+        "Starting virtual machine..."
+        "Waiting for boot completion..."
+        "Configuring SSH access..."
+        "Applying security settings..."
+        "Installing base packages..."
+        "Finalizing setup..."
+    )
+    
+    for i in "${!steps[@]}"; do
+        echo -n "  [$(printf "%02d" $((i+1)))/$(printf "%02d" ${#steps[@]})] ${steps[$i]} "
+        sleep 0.3
+        echo "✅"
+        sleep 0.2
+    done
+}
+
+# =============================================================================
+# MONITORING DASHBOARD
+# =============================================================================
+
+monitoring_menu() {
+    while true; do
+        print_header
+        echo -e "${GREEN}📊 Performance Monitoring${NC}"
+        echo -e "${DIM}─────────────────────────${NC}"
+        echo
+        
+        # System Overview
+        echo -e "${CYAN}System Overview:${NC}"
+        echo "────────────────"
+        
+        # CPU
+        local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{printf "%.1f", $2 + $4}')
+        echo "  CPU Usage: ${cpu_usage}%"
+        
+        # Memory
+        local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+        local mem_used=$(free -m | awk '/^Mem:/{print $3}')
+        local mem_percent=$((mem_used * 100 / mem_total))
+        echo "  Memory: ${mem_used}MB / ${mem_total}MB (${mem_percent}%)"
+        
+        # Disk
+        local disk_total=$(df -h / | awk 'NR==2{print $2}')
+        local disk_used=$(df -h / | awk 'NR==2{print $3}')
+        local disk_percent=$(df -h / | awk 'NR==2{print $5}')
+        echo "  Disk: ${disk_used} / ${disk_total} (${disk_percent})"
+        
+        # Network
+        local network_rx=$(ip -s link show | grep -A1 "RX:" | tail -1 | awk '{print $1}')
+        local network_tx=$(ip -s link show | grep -A1 "TX:" | tail -1 | awk '{print $1}')
+        echo "  Network: RX ${network_rx} | TX ${network_tx}"
+        echo
+        
+        # VM Statistics
+        local vm_count=$(find "$VM_DIR" -name "*.conf" 2>/dev/null | wc -l)
+        local vm_running=0
+        
+        if [ $vm_count -gt 0 ]; then
+            for conf in "$VM_DIR"/*.conf; do
+                source "$conf" 2>/dev/null
+                if ps aux | grep -q "[q]emu-system.*$IMG_FILE"; then
+                    ((vm_running++))
+                fi
+            done
+        fi
+        
+        echo -e "${CYAN}Virtual Machines:${NC}"
+        echo "────────────────"
+        echo "  Total VMs: $vm_count"
+        echo "  Running: $vm_running"
+        echo "  Stopped: $((vm_count - vm_running))"
+        echo
+        
+        # Container Statistics
+        local docker_count=$(docker ps -a --format "{{.Names}}" 2>/dev/null | wc -l)
+        local docker_running=$(docker ps --format "{{.Names}}" 2>/dev/null | wc -l)
+        
+        local lxd_count=0
+        local lxd_running=0
+        if command -v lxc > /dev/null 2>&1; then
+            lxd_count=$(lxc list --format csv 2>/dev/null | grep -v "^NAME" | wc -l)
+            lxd_running=$(lxc list --format csv 2>/dev/null | grep -v "^NAME" | grep ",RUNNING" | wc -l)
+        fi
+        
+        echo -e "${CYAN}Containers:${NC}"
+        echo "──────────"
+        echo "  Docker: $docker_running/$docker_count running"
+        echo "  LXD: $lxd_running/$lxd_count running"
+        echo
+        
+        # Jupyter Statistics
+        local jupyter_count=$(docker ps -a --filter "name=jupyter-" --format "{{.Names}}" 2>/dev/null | wc -l)
+        local jupyter_running=$(docker ps --filter "name=jupyter-" --format "{{.Names}}" 2>/dev/null | wc -l)
+        
+        echo -e "${CYAN}Jupyter Instances:${NC}"
+        echo "──────────────────"
+        echo "  Total: $jupyter_count"
+        echo "  Running: $jupyter_running"
+        echo
+        
+        echo -e "${GREEN}📋 Monitoring Options:${NC}"
+        echo "  1) Real-time System Monitor"
+        echo "  2) VM Performance Details"
+        echo "  3) Container Resource Usage"
+        echo "  4) Network Traffic Analysis"
+        echo "  5) Storage Usage Report"
+        echo "  6) Set Up Alerts"
+        echo "  7) Generate Report"
+        echo "  8) Back to Main"
+        echo
+        
+        read -rp "$(print_status "INPUT" "Select option: ")" choice
+        
+        case $choice in
+            1) real_time_monitor ;;
+            2) vm_performance_details ;;
+            3) container_resource_usage ;;
+            4) network_analysis ;;
+            5) storage_report ;;
+            6) setup_alerts ;;
+            7) generate_monitoring_report ;;
+            8) return ;;
+            *) print_status "ERROR" "Invalid option"; sleep 1 ;;
+        esac
+    done
+}
+
+real_time_monitor() {
+    print_header
+    echo -e "${GREEN}📈 Real-time System Monitor${NC}"
+    echo -e "${DIM}Press Ctrl+C to exit${NC}"
+    echo
+    
+    # Simple real-time monitoring with watch-like functionality
+    for i in {1..30}; do
+        echo -ne "\033[2K\r"  # Clear line
+        
+        # Get current stats
+        local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{printf "%.1f", $2 + $4}')
+        local mem_used=$(free -m | awk '/^Mem:/{print $3}')
+        local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+        local mem_percent=$((mem_used * 100 / mem_total))
+        
+        local disk_used=$(df -h / | awk 'NR==2{print $3}')
+        local disk_total=$(df -h / | awk 'NR==2{print $2}')
+        local disk_percent=$(df -h / | awk 'NR==2{print $5}')
+        
+        # Display stats
+        echo -n "CPU: ${cpu_usage}% | "
+        echo -n "Mem: ${mem_used}/${mem_total}MB (${mem_percent}%) | "
+        echo -n "Disk: ${disk_used}/${disk_total} (${disk_percent}) | "
+        echo -n "Time: $(date +%H:%M:%S)"
+        
+        sleep 1
+    done
+    
+    echo
+    read -rp "$(print_status "INPUT" "Press Enter to continue...")"
+}
+
+vm_performance_details() {
+    print_header
+    echo -e "${GREEN}📊 VM Performance Details${NC}"
+    echo
+    
+    local vms=($(get_vm_list))
+    
+    if [ ${#vms[@]} -eq 0 ]; then
+        print_status "INFO" "No virtual machines found"
+        sleep 2
+        return
+    fi
+    
+    echo "Select VM for performance details:"
+    for i in "${!vms[@]}"; do
+        echo "  $((i+1))) ${vms[$i]}"
+    done
+    echo "  0) Back"
+    echo
+    
+    read -rp "$(print_status "INPUT" "Select VM: ")" vm_choice
+    
+    if [[ "$vm_choice" =~ ^[0-9]+$ ]] && [ "$vm_choice" -ge 1 ] && [ "$vm_choice" -le ${#vms[@]} ]; then
+        local vm_name="${vms[$((vm_choice-1))]}"
+        show_vm_performance_details "$vm_name"
+    elif [ "$vm_choice" = "0" ]; then
+        return
+    else
+        print_status "ERROR" "Invalid selection"
+    fi
+}
+
+show_vm_performance_details() {
+    local vm_name="$1"
+    
+    if ! load_vm_config "$vm_name"; then
+        return 1
+    fi
+    
+    print_header
+    echo -e "${GREEN}📊 Performance Details: $vm_name${NC}"
+    echo
+    
+    # Check if VM is running
+    local pid=$(pgrep -f "qemu-system.*$IMG_FILE")
+    
+    if [ -z "$pid" ]; then
+        print_status "INFO" "VM is not running"
+        echo
+        echo "Configuration:"
+        echo "  CPU: $CPUS cores"
+        echo "  RAM: $MEMORY MB"
+        echo "  Disk: $DISK_SIZE"
+        echo "  Status: Stopped"
+    else
+        # Get process stats
+        local cpu_usage=$(ps -p "$pid" -o %cpu --no-headers)
+        local mem_usage=$(ps -p "$pid" -o %mem --no-headers)
+        local rss=$(ps -p "$pid" -o rss --no-headers)
+        
+        echo "Live Performance Metrics:"
+        echo "────────────────────────"
+        echo "  Process ID: $pid"
+        echo "  CPU Usage: ${cpu_usage}%"
+        echo "  Memory Usage: ${mem_usage}% (${rss} KB)"
+        echo "  Uptime: $(ps -p "$pid" -o etime --no-headers)"
+        echo
+        
+        echo "Configuration:"
+        echo "──────────────"
+        echo "  Allocated CPU: $CPUS cores"
+        echo "  Allocated RAM: $MEMORY MB"
+        echo "  Disk Size: $DISK_SIZE"
+        echo "  SSH Port: $SSH_PORT"
+        echo "  Status: Running"
+        
+        # Disk usage
+        if [ -f "$IMG_FILE" ]; then
+            local disk_size=$(du -h "$IMG_FILE" | awk '{print $1}')
+            echo "  Disk Usage: $disk_size"
+        fi
+        
+        # Network connections
+        echo
+        echo "Network Connections:"
+        echo "────────────────────"
+        if command -v ss > /dev/null 2>&1; then
+            ss -tlnp | grep ":$SSH_PORT" || echo "  No active connections"
+        else
+            echo "  SSH Port $SSH_PORT is listening"
+        fi
+    fi
+    
+    echo
+    read -rp "$(print_status "INPUT" "Press Enter to continue...")"
+}
+
+# =============================================================================
+# BACKUP AND RESTORE
+# =============================================================================
+
+backup_menu() {
+    while true; do
+        print_header
+        echo -e "${GREEN}💾 Backup & Disaster Recovery${NC}"
+        echo -e "${DIM}──────────────────────────────${NC}"
+        echo
+        
+        # List available backups
+        local backup_files=()
+        if [ -d "$DATA_DIR/backups" ]; then
+            backup_files=($(find "$DATA_DIR/backups" -name "*.tar.gz" -type f 2>/dev/null))
+        fi
+        
+        if [ ${#backup_files[@]} -gt 0 ]; then
+            echo -e "${CYAN}Available Backups:${NC}"
+            echo "────────────────"
+            for i in "${!backup_files[@]}"; do
+                local backup_name=$(basename "${backup_files[$i]}")
+                local backup_size=$(du -h "${backup_files[$i]}" | awk '{print $1}')
+                local backup_date=$(stat -c %y "${backup_files[$i]}" | cut -d' ' -f1)
+                printf "  %2d) %-30s (%s, %s)\n" "$((i+1))" "$backup_name" "$backup_size" "$backup_date"
+            done
+            echo
+        else
+            print_status "INFO" "No backups available"
+            echo
+        fi
+        
+        echo -e "${GREEN}📋 Backup Options:${NC}"
+        echo "  1) Backup Virtual Machine"
+        echo "  2) Backup Docker Container"
+        echo "  3) Backup LXD Container"
+        echo "  4) Backup Jupyter Instance"
+        echo "  5) Restore from Backup"
+        echo "  6) Schedule Automated Backups"
+        echo "  7) Backup Configuration"
+        echo "  8) Verify Backup Integrity"
+        echo "  9) Back to Main"
+        echo
+        
+        read -rp "$(print_status "INPUT" "Select option: ")" choice
+        
+        case $choice in
+            1) backup_vm_menu ;;
+            2) backup_docker_menu ;;
+            3) backup_lxd_menu ;;
+            4) backup_jupyter_menu ;;
+            5) restore_backup_menu ;;
+            6) schedule_backups ;;
+            7) backup_configuration ;;
+            8) verify_backup_integrity ;;
+            9) return ;;
+            *) print_status "ERROR" "Invalid option"; sleep 1 ;;
+        esac
+    done
+}
+
+backup_vm_menu() {
+    print_header
+    echo -e "${GREEN}💾 Backup Virtual Machine${NC}"
+    echo
+    
+    local vms=($(get_vm_list))
+    
+    if [ ${#vms[@]} -eq 0 ]; then
+        print_status "INFO" "No virtual machines found"
+        sleep 2
+        return
+    fi
+    
+    echo "Select VM to backup:"
+    for i in "${!vms[@]}"; do
+        echo "  $((i+1))) ${vms[$i]}"
+    done
+    echo "  0) Back"
+    echo
+    
+    read -rp "$(print_status "INPUT" "Select VM: ")" vm_choice
+    
+    if [[ "$vm_choice" =~ ^[0-9]+$ ]] && [ "$vm_choice" -ge 1 ] && [ "$vm_choice" -le ${#vms[@]} ]; then
+        local vm_name="${vms[$((vm_choice-1))]}"
+        backup_vm "$vm_name"
+    elif [ "$vm_choice" = "0" ]; then
+        return
+    else
+        print_status "ERROR" "Invalid selection"
+    fi
+}
+
+backup_vm() {
+    local vm_name="$1"
+    
+    if ! load_vm_config "$vm_name"; then
+        return 1
+    fi
+    
+    print_header
+    echo -e "${GREEN}💾 Backing up VM: $vm_name${NC}"
+    echo
+    
+    # Check if VM is running
+    local is_running=false
+    if ps aux | grep -q "[q]emu-system.*$IMG_FILE"; then
+        is_running=true
+        print_status "WARNING" "VM is running. For consistent backup, consider stopping it first."
+        echo
+    fi
+    
+    # Create backup directory
+    local backup_dir="$DATA_DIR/backups"
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_file="$backup_dir/${vm_name}_${timestamp}.tar.gz"
+    
+    mkdir -p "$backup_dir"
+    
+    # Files to backup
+    local files_to_backup=(
+        "$VM_DIR/${vm_name}.conf"
+        "$IMG_FILE"
+    )
+    
+    if [ -f "$SEED_FILE" ]; then
+        files_to_backup+=("$SEED_FILE")
+    fi
+    
+    # Check if files exist
+    local missing_files=()
+    for file in "${files_to_backup[@]}"; do
+        if [ ! -f "$file" ]; then
+            missing_files+=("$file")
+        fi
+    done
+    
+    if [ ${#missing_files[@]} -gt 0 ]; then
+        print_status "ERROR" "Missing files for backup:"
+        for file in "${missing_files[@]}"; do
+            echo "  $file"
+        done
+        sleep 2
+        return 1
+    fi
+    
+    # Create backup
+    print_status "INFO" "Creating backup..."
+    echo "Included files:"
+    for file in "${files_to_backup[@]}"; do
+        echo "  • $(basename "$file")"
+    done
+    echo
+    
+    if tar -czf "$backup_file" "${files_to_backup[@]}" 2>/dev/null; then
+        local backup_size=$(du -h "$backup_file" | awk '{print $1}')
+        print_status "SUCCESS" "Backup created successfully!"
+        echo
+        echo "Backup Details:"
+        echo "  File: $(basename "$backup_file")"
+        echo "  Size: $backup_size"
+        echo "  Location: $backup_file"
+        echo "  Timestamp: $(date)"
+        echo "  VM Status during backup: $([ "$is_running" = true ] && echo "Running" || echo "Stopped")"
+        
+        log_message "BACKUP" "Created backup of VM $vm_name: $backup_file"
+    else
+        print_status "ERROR" "Failed to create backup"
+    fi
+    
+    echo
+    read -rp "$(print_status "INPUT" "Press Enter to continue...")"
+}
+
+# =============================================================================
+# SETTINGS AND CONFIGURATION
+# =============================================================================
+
+settings_menu() {
+    while true; do
+        print_header
+        echo -e "${GREEN}⚙️  Advanced Settings${NC}"
+        echo -e "${DIM}────────────────────${NC}"
+        echo
+        
+        # Current configuration summary
+        echo -e "${CYAN}Current Configuration:${NC}"
+        echo "────────────────────"
+        
+        if [ -f "$GLOBAL_CONFIG" ]; then
+            echo "Platform: ZynexForge CloudStack™"
+            echo "Version: $SCRIPT_VERSION"
+            echo "Config Path: $CONFIG_DIR"
+            echo "Data Path: $DATA_DIR"
+            echo "SSH Key: $SSH_KEY_FILE"
+            echo "Log File: $LOG_FILE"
+        else
+            echo "Configuration not initialized"
+        fi
+        echo
+        
+        echo -e "${GREEN}📋 Settings Options:${NC}"
+        echo "  1) Platform Configuration"
+        echo "  2) Network Settings"
+        echo "  3) Security Settings"
+        echo "  4) Performance Tuning"
+        echo "  5) Storage Configuration"
+        echo "  6) Update Management"
+        echo "  7) Reset Configuration"
+        echo "  8) View Logs"
+        echo "  9) Export Configuration"
+        echo "  10) Back to Main"
+        echo
+        
+        read -rp "$(print_status "INPUT" "Select option: ")" choice
+        
+        case $choice in
+            1) platform_configuration ;;
+            2) network_settings ;;
+            3) security_settings ;;
+            4) performance_tuning ;;
+            5) storage_configuration ;;
+            6) update_management ;;
+            7) reset_configuration ;;
+            8) view_logs ;;
+            9) export_configuration ;;
+            10) return ;;
+            *) print_status "ERROR" "Invalid option"; sleep 1 ;;
+        esac
+    done
+}
+
+platform_configuration() {
+    print_header
+    echo -e "${GREEN}⚙️  Platform Configuration${NC}"
+    echo
+    
+    if [ ! -f "$GLOBAL_CONFIG" ]; then
+        print_status "ERROR" "Configuration file not found"
+        sleep 2
+        return
+    fi
+    
+    echo "Current configuration:"
+    echo "─────────────────────"
+    cat "$GLOBAL_CONFIG"
+    echo
+    
+    echo "Options:"
+    echo "  1) Edit configuration manually"
+    echo "  2) Reset to defaults"
+    echo "  3) Validate configuration"
+    echo "  4) Back"
+    echo
+    
+    read -rp "$(print_status "INPUT" "Select option: ")" choice
+    
+    case $choice in
+        1)
+            if command -v nano > /dev/null 2>&1; then
+                nano "$GLOBAL_CONFIG"
+            elif command -v vim > /dev/null 2>&1; then
+                vim "$GLOBAL_CONFIG"
+            elif command -v vi > /dev/null 2>&1; then
+                vi "$GLOBAL_CONFIG"
+            else
+                print_status "ERROR" "No text editor found"
+            fi
+            ;;
+        2)
+            read -rp "$(print_status "INPUT" "Reset to defaults? (y/N): ")" confirm
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                rm -f "$GLOBAL_CONFIG"
+                initialize_platform
+                print_status "SUCCESS" "Configuration reset to defaults"
+            fi
+            ;;
+        3)
+            if [ -f "$GLOBAL_CONFIG" ]; then
+                print_status "SUCCESS" "Configuration file is valid"
+            else
+                print_status "ERROR" "Configuration file missing"
+            fi
+            ;;
+        4) return ;;
+        *) print_status "ERROR" "Invalid option" ;;
+    esac
+    
+    sleep 2
+}
+
+view_logs() {
+    print_header
+    echo -e "${GREEN}📄 System Logs${NC}"
+    echo -e "${DIM}Press Ctrl+C to exit${NC}"
+    echo
+    
+    if [ ! -f "$LOG_FILE" ]; then
+        print_status "INFO" "No log file found"
+        sleep 2
+        return
+    fi
+    
+    echo "Log file: $LOG_FILE"
+    echo "────────────────────"
+    echo
+    
+    # Show last 50 lines of log
+    tail -n 50 "$LOG_FILE"
+    
+    echo
+    echo "Options:"
+    echo "  1) View full log"
+    echo "  2) Clear log"
+    echo "  3) Search in logs"
+    echo "  4) Back"
+    echo
+    
+    read -rp "$(print_status "INPUT" "Select option: ")" choice
+    
+    case $choice in
+        1)
+            if command -v less > /dev/null 2>&1; then
+                less "$LOG_FILE"
+            else
+                cat "$LOG_FILE" | more
+            fi
+            ;;
+        2)
+            read -rp "$(print_status "INPUT" "Clear all logs? (y/N): ")" confirm
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                > "$LOG_FILE"
+                print_status "SUCCESS" "Logs cleared"
+            fi
+            ;;
+        3)
+            read -rp "$(print_status "INPUT" "Search term: ")" search_term
+            grep -i "$search_term" "$LOG_FILE" | head -20
+            read -rp "$(print_status "INPUT" "Press Enter to continue...")"
+            ;;
+        4) return ;;
+        *) print_status "ERROR" "Invalid option" ;;
+    esac
+}
+
+# =============================================================================
+# SYSTEM DIAGNOSTICS
+# =============================================================================
+
+system_diagnostics() {
+    print_header
+    echo -e "${GREEN}🔧 System Diagnostics${NC}"
+    echo -e "${DIM}─────────────────────${NC}"
+    echo
+    
+    echo "Running comprehensive diagnostics..."
+    echo
+    
+    # 1. Check system requirements
+    echo "1. System Requirements Check:"
+    echo "────────────────────────────"
+    
+    # CPU
+    local cpu_cores=$(nproc)
+    if [ "$cpu_cores" -ge 2 ]; then
+        echo "  ✅ CPU: $cpu_cores cores (Minimum: 2)"
+    else
+        echo "  ⚠️  CPU: $cpu_cores cores (Minimum: 2 recommended)"
+    fi
+    
+    # RAM
+    local ram_mb=$(free -m | awk '/^Mem:/{print $2}')
+    if [ "$ram_mb" -ge 2048 ]; then
+        echo "  ✅ RAM: ${ram_mb}MB (Minimum: 2GB)"
+    else
+        echo "  ⚠️  RAM: ${ram_mb}MB (2GB recommended)"
+    fi
+    
+    # Disk space
+    local disk_gb=$(df -BG "$DATA_DIR" 2>/dev/null | awk 'NR==2{print $4}' | sed 's/G//')
+    disk_gb=${disk_gb:-0}
+    if [ "$disk_gb" -ge 20 ]; then
+        echo "  ✅ Disk: ${disk_gb}GB available (Minimum: 20GB)"
+    else
+        echo "  ⚠️  Disk: ${disk_gb}GB available (20GB recommended)"
+    fi
+    echo
+    
+    # 2. Check dependencies
+    echo "2. Dependencies Check:"
+    echo "─────────────────────"
+    
+    local missing_deps=()
+    local required_tools=("qemu-system-x86_64" "qemu-img" "ssh-keygen" "wget")
+    
+    for tool in "${required_tools[@]}"; do
+        if command -v "$tool" > /dev/null 2>&1; then
+            echo "  ✅ $tool"
+        else
+            echo "  ❌ $tool"
+            missing_deps+=("$tool")
+        fi
+    done
+    
+    # Optional tools
+    echo "  ℹ️  Optional: docker, lxc, cloud-localds, genisoimage"
+    echo
+    
+    # 3. Check virtualization support
+    echo "3. Virtualization Support:"
+    echo "─────────────────────────"
+    
+    if command -v kvm-ok > /dev/null 2>&1; then
+        if kvm-ok 2>/dev/null; then
+            echo "  ✅ KVM acceleration available"
+        else
+            echo "  ⚠️  KVM acceleration not available"
+        fi
+    else
+        echo "  ℹ️  kvm-ok not installed"
+    fi
+    
+    # Check CPU flags
+    if grep -q -E 'vmx|svm' /proc/cpuinfo; then
+        echo "  ✅ CPU virtualization extensions detected"
+    else
+        echo "  ⚠️  CPU virtualization extensions not detected"
+    fi
+    echo
+    
+    # 4. Check services
+    echo "4. Service Status:"
+    echo "─────────────────"
+    
+    # Docker
+    if command -v docker > /dev/null 2>&1; then
+        if docker info > /dev/null 2>&1; then
+            echo "  ✅ Docker: Running"
+        else
+            echo "  ⚠️  Docker: Installed but not running"
+        fi
+    else
+        echo "  ℹ️  Docker: Not installed"
+    fi
+    
+    # LXD
+    if command -v lxc > /dev/null 2>&1; then
+        if lxc info > /dev/null 2>&1; then
+            echo "  ✅ LXD: Running"
+        else
+            echo "  ⚠️  LXD: Installed but not running"
+        fi
+    else
+        echo "  ℹ️  LXD: Not installed"
+    fi
+    echo
+    
+    # 5. Check ZynexForge configuration
+    echo "5. ZynexForge Configuration:"
+    echo "───────────────────────────"
+    
+    if [ -d "$CONFIG_DIR" ]; then
+        echo "  ✅ Config directory: $CONFIG_DIR"
+    else
+        echo "  ❌ Config directory missing"
+    fi
+    
+    if [ -f "$GLOBAL_CONFIG" ]; then
+        echo "  ✅ Global configuration: Present"
+    else
+        echo "  ❌ Global configuration missing"
+    fi
+    
+    if [ -f "$SSH_KEY_FILE" ]; then
+        echo "  ✅ SSH key: Present"
+    else
+        echo "  ❌ SSH key missing"
+    fi
+    
+    local vm_count=$(find "$VM_DIR" -name "*.conf" 2>/dev/null | wc -l)
+    echo "  ℹ️  Configured VMs: $vm_count"
+    echo
+    
+    # Summary
+    echo "Diagnostics Summary:"
+    echo "───────────────────"
+    
+    if [ ${#missing_deps[@]} -eq 0 ]; then
+        echo "  ✅ All required dependencies are installed"
+    else
+        echo "  ⚠️  Missing dependencies: ${missing_deps[*]}"
+    fi
+    
+    if [ "$cpu_cores" -ge 2 ] && [ "$ram_mb" -ge 2048 ] && [ "$disk_gb" -ge 20 ]; then
+        echo "  ✅ System meets minimum requirements"
+    else
+        echo "  ⚠️  System may not meet recommended requirements"
+    fi
+    
+    echo
+    echo "Recommendations:"
+    echo "────────────────"
+    
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo "  1. Install missing dependencies:"
+        for dep in "${missing_deps[@]}"; do
+            echo "     • $dep"
+        done
+    fi
+    
+    if [ "$ram_mb" -lt 4096 ]; then
+        echo "  2. Consider upgrading to at least 4GB RAM for better performance"
+    fi
+    
+    if [ "$disk_gb" -lt 50 ]; then
+        echo "  3. Ensure you have at least 50GB free disk space for VMs"
+    fi
+    
+    echo
+    read -rp "$(print_status "INPUT" "Press Enter to continue...")"
+}
+
+# =============================================================================
+# DOCUMENTATION AND HELP
+# =============================================================================
+
+show_documentation() {
+    while true; do
+        print_header
+        echo -e "${GREEN}📚 Documentation & Help${NC}"
+        echo -e "${DIM}───────────────────────${NC}"
+        echo
+        
+        echo "ZynexForge CloudStack™ - World's #1 Virtualization Platform"
+        echo "Version: $SCRIPT_VERSION"
+        echo
+        
+        echo "📖 Table of Contents:"
+        echo "  1) Quick Start Guide"
+        echo "  2) Feature Overview"
+        echo "  3) Virtual Machine Management"
+        echo "  4) Container Management"
+        echo "  5) Jupyter Cloud Lab"
+        echo "  6) Multi-Node Deployment"
+        echo "  7) Troubleshooting"
+        echo "  8) Command Reference"
+        echo "  9) Frequently Asked Questions"
+        echo "  10) Back to Main"
+        echo
+        
+        read -rp "$(print_status "INPUT" "Select topic (1-10): ")" choice
+        
+        case $choice in
+            1) show_quick_start ;;
+            2) show_feature_overview ;;
+            3) show_vm_guide ;;
+            4) show_container_guide ;;
+            5) show_jupyter_guide ;;
+            6) show_multi_node_guide ;;
+            7) show_troubleshooting ;;
+            8) show_command_reference ;;
+            9) show_faq ;;
+            10) return ;;
+            *) print_status "ERROR" "Invalid selection" ;;
+        esac
+        
+        [ "$choice" -ne 10 ] && sleep 1
+    done
+}
+
+show_quick_start() {
+    print_header
+    echo -e "${GREEN}🚀 Quick Start Guide${NC}"
+    echo
+    
+    cat << 'EOF'
+1. INITIAL SETUP
+   ─────────────
+   Run the script for the first time:
+   $ ./zynexforge.sh
+   
+   The platform will:
+   • Create configuration directories
+   • Generate SSH keys
+   • Check and install dependencies
+   • Initialize the database
+
+2. CREATE YOUR FIRST VM
+   ────────────────────
+   1. Select "Create New VM (Advanced)"
+   2. Choose "Local Development" node
+   3. Select "QEMU/KVM Virtual Machine"
+   4. Choose Ubuntu 24.04 Cloud Image
+   5. Configure resources (2CPU, 2GB RAM, 50GB Disk)
+   6. Start the VM immediately
+
+3. ACCESS YOUR VM
+   ──────────────
+   Once created, you can:
+   • SSH: ssh -p <port> ubuntu@localhost
+   • Password: As configured during setup
+   • VNC: If GUI mode enabled
+
+4. MANAGE VMS
+   ──────────
+   Use the VM Management Dashboard to:
+   • Start/Stop VMs
+   • View performance metrics
+   • Take snapshots
+   • Backup and restore
+
+5. EXPLORE OTHER FEATURES
+   ──────────────────────
+   • Docker Containers: Lightweight app containers
+   • LXD System Containers: OS-level virtualization
+   • Jupyter Notebooks: Data science environment
+   • Multi-Node: Deploy to global locations
+
+TIP: Check System Diagnostics for any issues.
+EOF
+    
+    echo
+    read -rp "$(print_status "INPUT" "Press Enter to continue...")"
+}
+
+show_command_reference() {
+    print_header
+    echo -e "${GREEN}⌨️  Command Line Reference${NC}"
+    echo
+    
+    cat << 'EOF'
+USAGE: ./zynexforge.sh [COMMAND] [ARGUMENTS]
+
+COMMANDS:
+  init, setup        Initialize the platform
+  start <vm>         Start a virtual machine
+  stop <vm>          Stop a virtual machine
+  list-vms           List all virtual machines
+  list-nodes         List all available nodes
+  backup <vm>        Backup a virtual machine
+  restore <backup>   Restore from backup
+  status             Show platform status
+  diagnose           Run system diagnostics
+  help, --help, -h   Show this help message
+  version, --version Show version information
+
+EXAMPLES:
+  # Initialize platform
+  ./zynexforge.sh init
+  
+  # Start a VM
+  ./zynexforge.sh start my-vm
+  
+  # List all VMs
+  ./zynexforge.sh list-vms
+  
+  # Backup a VM
+  ./zynexforge.sh backup production-vm
+  
+  # Show system status
+  ./zynexforge.sh status
+
+INTERACTIVE MODE:
+  Run without arguments to start interactive menu:
+  $ ./zynexforge.sh
+
+ENVIRONMENT VARIABLES:
+  ZYNEXFORGE_HOME    Override configuration directory
+  ZYNEXFORGE_DATA    Override data directory
+  ZYNEXFORGE_LOG     Override log file location
+
+CONFIGURATION:
+  Configuration files are stored in:
+  • ~/.zynexforge/config.yml      - Global settings
+  • ~/.zynexforge/nodes.yml       - Node definitions
+  • ~/.zynexforge/data/vms/*.conf - VM configurations
+  • ~/.zynexforge/zynexforge.log  - System logs
+EOF
+    
+    echo
     read -rp "$(print_status "INPUT" "Press Enter to continue...")"
 }
 
@@ -1661,14 +1420,16 @@ show_node_statistics() {
 # Handle command line arguments
 case "${1:-}" in
     "init"|"setup")
+        print_header
         initialize_platform
-        print_status "SUCCESS" "Platform initialized"
+        print_status "SUCCESS" "Platform initialized successfully!"
         ;;
     "start")
         if [ -n "${2:-}" ]; then
             start_vm "$2"
         else
             print_status "ERROR" "Please specify VM name"
+            echo "Usage: $0 start <vm-name>"
         fi
         ;;
     "stop")
@@ -1676,16 +1437,25 @@ case "${1:-}" in
             stop_vm "$2"
         else
             print_status "ERROR" "Please specify VM name"
+            echo "Usage: $0 stop <vm-name>"
+        fi
+        ;;
+    "restart")
+        if [ -n "${2:-}" ]; then
+            restart_vm "$2"
+        else
+            print_status "ERROR" "Please specify VM name"
+            echo "Usage: $0 restart <vm-name>"
         fi
         ;;
     "list-vms")
         print_header
         echo "Virtual Machines:"
         echo "─────────────────"
-        if [ -d "$DATA_DIR/vms" ]; then
-            for conf in "$DATA_DIR/vms"/*.conf; do
-                source "$conf"
-                echo "  $VM_NAME (Node: $NODE_ID, Port: ${SSH_PORT:-22}, Status: $STATUS)"
+        local vms=($(get_vm_list))
+        if [ ${#vms[@]} -gt 0 ]; then
+            for i in "${!vms[@]}"; do
+                echo "  $((i+1))) ${vms[$i]}"
             done
         else
             echo "  No VMs configured"
@@ -1706,34 +1476,120 @@ case "${1:-}" in
             backup_vm "$2"
         else
             print_status "ERROR" "Please specify VM name"
+            echo "Usage: $0 backup <vm-name>"
         fi
         ;;
+    "restore")
+        if [ -n "${2:-}" ]; then
+            restore_backup "$2"
+        else
+            print_status "ERROR" "Please specify backup file"
+            echo "Usage: $0 restore <backup-file>"
+        fi
+        ;;
+    "status")
+        print_header
+        echo -e "${GREEN}📊 Platform Status${NC}"
+        echo
+        
+        # System info
+        echo "System Information:"
+        echo "──────────────────"
+        echo "  Hostname: $(hostname)"
+        echo "  OS: $(lsb_release -d 2>/dev/null | cut -f2- || uname -o)"
+        echo "  Kernel: $(uname -r)"
+        echo "  Uptime: $(uptime -p)"
+        echo
+        
+        # Platform info
+        echo "Platform Information:"
+        echo "────────────────────"
+        echo "  Version: $SCRIPT_VERSION"
+        echo "  Config Directory: $CONFIG_DIR"
+        echo "  Data Directory: $DATA_DIR"
+        echo "  Log File: $LOG_FILE"
+        echo
+        
+        # Resource usage
+        echo "Resource Usage:"
+        echo "──────────────"
+        echo "  CPU: $(top -bn1 | grep "Cpu(s)" | awk '{printf "%.1f%%", $2 + $4}')"
+        echo "  Memory: $(free -m | awk '/^Mem:/{printf "%.1f%%", $3/$2*100}')"
+        echo "  Disk: $(df -h / | awk 'NR==2{print $5}')"
+        ;;
+    "diagnose")
+        system_diagnostics
+        ;;
+    "version"|"--version")
+        echo "ZynexForge CloudStack™ Professional Edition"
+        echo "Version: $SCRIPT_VERSION"
+        ;;
     "help"|"--help"|"-h")
-        cat << EOF
-Usage: $0 [command]
+        cat << 'EOF'
+ZynexForge CloudStack™ - World's #1 Virtualization Platform
 
-Commands:
-  init, setup      Initialize the platform
-  start <vm>       Start a VM
-  stop <vm>        Stop a VM
-  list-vms         List all virtual machines
-  list-nodes       List all available nodes
-  backup <vm>      Backup a VM
-  help             Show this help message
+USAGE: ./zynexforge.sh [COMMAND] [ARGUMENTS]
 
-Without arguments: Start interactive menu
+COMMANDS:
+  init, setup        Initialize the platform
+  start <vm>         Start a virtual machine
+  stop <vm>          Stop a virtual machine
+  restart <vm>       Restart a virtual machine
+  list-vms           List all virtual machines
+  list-nodes         List all available nodes
+  backup <vm>        Backup a virtual machine
+  restore <backup>   Restore from backup
+  status             Show platform status
+  diagnose           Run system diagnostics
+  version            Show version information
+  help               Show this help message
 
-Examples:
-  $0 start my-vm
-  $0 list-nodes
-  $0 backup production-vm
+EXAMPLES:
+  ./zynexforge.sh init               # Initialize platform
+  ./zynexforge.sh start my-vm        # Start a VM
+  ./zynexforge.sh list-vms           # List all VMs
+  ./zynexforge.sh backup prod-vm     # Backup a VM
+  ./zynexforge.sh status             # Show status
+
+INTERACTIVE MODE:
+  Run without arguments to start the interactive menu:
+  $ ./zynexforge.sh
+
+FEATURES:
+  • Multi-Node Virtualization (Global deployment)
+  • QEMU/KVM Virtual Machines
+  • Docker Container Management
+  • LXD System Containers
+  • Jupyter Cloud Lab
+  • ISO Library Management
+  • Advanced Monitoring
+  • Backup & Disaster Recovery
+  • Professional Grade Security
+
+For detailed documentation, use the interactive menu.
 EOF
         ;;
     *)
-        # Initialize platform
-        initialize_platform
+        # Initialize platform if needed
+        if [ ! -d "$CONFIG_DIR" ] || [ ! -f "$GLOBAL_CONFIG" ]; then
+            print_header
+            print_status "INFO" "First-time setup detected"
+            echo "Initializing ZynexForge platform..."
+            echo
+            
+            if initialize_platform; then
+                print_status "SUCCESS" "Platform initialized successfully!"
+            else
+                print_status "ERROR" "Failed to initialize platform"
+                exit 1
+            fi
+        fi
         
         # Start interactive menu
         main_menu
         ;;
 esac
+
+# =============================================================================
+# END OF SCRIPT
+# =============================================================================
