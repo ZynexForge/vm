@@ -150,7 +150,7 @@ initialize_platform() {
     
     # Create default config if not exists
     if [ ! -f "$GLOBAL_CONFIG" ]; then
-        cat > "$GLOBAL_CONFIG" << EOF
+        cat > "$GLOBAL_CONFIG" << 'EOF'
 # ZynexForge Global Configuration
 platform:
   name: "ZynexForge CloudStack™"
@@ -178,7 +178,7 @@ EOF
     
     # Create nodes database if not exists
     if [ ! -f "$NODES_DB" ]; then
-        cat > "$NODES_DB" << EOF
+        cat > "$NODES_DB" << 'EOF'
 nodes:
   local:
     node_id: "local"
@@ -303,7 +303,7 @@ main_menu() {
         echo "  0) ❌ Exit"
         echo ""
         
-        read -p "Select option: " choice
+        read -rp "Select option: " choice
         
         case $choice in
             1) kvm_qemu_menu ;;
@@ -337,7 +337,7 @@ nodes_menu() {
         echo "  0) Back"
         echo ""
         
-        read -p "Select option: " choice
+        read -rp "Select option: " choice
         
         case $choice in
             1) add_node ;;
@@ -381,10 +381,10 @@ add_node() {
     echo "  0) Custom location"
     echo ""
     
-    read -p "Enter choice: " region_choice
+    read -rp "Enter choice: " region_choice
     
     if [ "$region_choice" = "0" ]; then
-        read -p "Enter custom location (City, Country): " custom_location
+        read -rp "Enter custom location (City, Country): " custom_location
         location_name="$custom_location"
     elif [ -n "${REGIONS[$region_choice]}" ]; then
         location_name="${REGIONS[$region_choice]}"
@@ -395,22 +395,22 @@ add_node() {
     fi
     
     # Node details
-    read -p "Node ID (unique identifier): " node_id
-    read -p "Node name: " node_name
-    read -p "Provider (optional): " provider
-    read -p "Public IP address: " public_ip
+    read -rp "Node ID (unique identifier): " node_id
+    read -rp "Node name: " node_name
+    read -rp "Provider (optional): " provider
+    read -rp "Public IP address: " public_ip
     
     # Capabilities
     echo ""
     echo "Select capabilities (comma-separated):"
     echo "  kvm, qemu, lxd, docker"
-    read -p "Capabilities: " capabilities
+    read -rp "Capabilities: " capabilities
     
     # Tags
     echo ""
     echo "Tags (comma-separated):"
     echo "  production, testing, development, edge"
-    read -p "Tags: " tags_input
+    read -rp "Tags: " tags_input
     
     # Validate node ID
     if [ -z "$node_id" ]; then
@@ -420,33 +420,22 @@ add_node() {
     fi
     
     # Create node entry
-    node_entry="  $node_id:
-    node_id: \"$node_id\"
-    node_name: \"$node_name\"
-    location_name: \"$location_name\"
-    provider: \"$provider\"
-    public_ip: \"$public_ip\"
+    cat >> "$NODES_DB" << EOF
+  $node_id:
+    node_id: "$node_id"
+    node_name: "$node_name"
+    location_name: "$location_name"
+    provider: "$provider"
+    public_ip: "$public_ip"
     capabilities: [${capabilities// /}]
     tags: [${tags_input// /}]
-    status: \"active\"
-    created_at: \"$(date -Iseconds)\"
-    user_mode: true"
+    status: "active"
+    created_at: "$(date -Iseconds)"
+    user_mode: true
+EOF
     
-    # Add to nodes database
-    if [ -f "$NODES_DB" ]; then
-        # Simple append to file
-        if ! grep -q "^  $node_id:" "$NODES_DB"; then
-            # Remove the last line (closing brace)
-            head -n -1 "$NODES_DB" > "$NODES_DB.tmp"
-            echo "$node_entry" >> "$NODES_DB.tmp"
-            echo "}" >> "$NODES_DB.tmp"
-            mv "$NODES_DB.tmp" "$NODES_DB"
-            print_success "Node '$node_name' added successfully!"
-            log "Added new node: $node_id ($node_name)"
-        else
-            print_error "Node ID '$node_id' already exists"
-        fi
-    fi
+    print_success "Node '$node_name' added successfully!"
+    log "Added new node: $node_id ($node_name)"
     
     sleep 2
 }
@@ -477,7 +466,7 @@ list_nodes() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 show_node_details() {
@@ -485,7 +474,7 @@ show_node_details() {
     echo -e "${GREEN}🔍 Node Details${NC}"
     echo ""
     
-    read -p "Enter Node ID: " node_id
+    read -rp "Enter Node ID: " node_id
     
     if [ -z "$node_id" ]; then
         print_error "Node ID cannot be empty"
@@ -518,7 +507,7 @@ show_node_details() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 remove_node() {
@@ -526,7 +515,7 @@ remove_node() {
     echo -e "${RED}🗑️ Remove Node${NC}"
     echo ""
     
-    read -p "Enter Node ID to remove: " node_id
+    read -rp "Enter Node ID to remove: " node_id
     
     if [ -z "$node_id" ]; then
         print_error "Node ID cannot be empty"
@@ -543,7 +532,7 @@ remove_node() {
     if [ -f "$NODES_DB" ]; then
         if grep -q "^  $node_id:" "$NODES_DB"; then
             echo "⚠️ Warning: This will remove node '$node_id' from the database."
-            read -p "Are you sure? (y/n): " confirm
+            read -rp "Are you sure? (y/n): " confirm
             
             if [ "$confirm" = "y" ]; then
                 # Simple removal using sed
@@ -591,7 +580,7 @@ vm_create_wizard() {
     echo "Select Node:"
     list_nodes_simple
     echo ""
-    read -p "Enter Node ID (default: local): " node_id
+    read -rp "Enter Node ID (default: local): " node_id
     node_id=${node_id:-local}
     
     # Runtime selection
@@ -599,7 +588,7 @@ vm_create_wizard() {
     echo "Select runtime:"
     echo "  [1] KVM+QEMU fast (requires /dev/kvm access)"
     echo "  [2] QEMU universal (software emulation)"
-    read -p "Choice (1/2): " runtime_choice
+    read -rp "Choice (1/2): " runtime_choice
     
     if [ "$runtime_choice" = "1" ]; then
         if [ ! -r "/dev/kvm" ]; then
@@ -630,7 +619,7 @@ vm_create_wizard() {
     echo "  9) arch-linux"
     echo "  10) kali-linux"
     echo ""
-    read -p "Choice (1-10): " os_choice
+    read -rp "Choice (1-10): " os_choice
     
     case $os_choice in
         1) os_template="ubuntu-24.04" ;;
@@ -648,7 +637,7 @@ vm_create_wizard() {
     
     # VM details
     echo ""
-    read -p "VM Name: " vm_name
+    read -rp "VM Name: " vm_name
     
     if [ -z "$vm_name" ]; then
         print_error "VM Name cannot be empty"
@@ -665,7 +654,7 @@ vm_create_wizard() {
     
     # Resource allocation
     echo ""
-    read -p "CPU cores (1-8, default: 1): " cpu_cores
+    read -rp "CPU cores (1-8, default: 1): " cpu_cores
     cpu_cores=${cpu_cores:-1}
     
     if ! [[ "$cpu_cores" =~ ^[0-9]+$ ]] || [ "$cpu_cores" -lt 1 ] || [ "$cpu_cores" -gt 8 ]; then
@@ -673,7 +662,7 @@ vm_create_wizard() {
         cpu_cores=1
     fi
     
-    read -p "RAM in MB (512-8192, default: 1024): " ram_mb
+    read -rp "RAM in MB (512-8192, default: 1024): " ram_mb
     ram_mb=${ram_mb:-1024}
     
     if ! [[ "$ram_mb" =~ ^[0-9]+$ ]] || [ "$ram_mb" -lt 512 ] || [ "$ram_mb" -gt 8192 ]; then
@@ -681,7 +670,7 @@ vm_create_wizard() {
         ram_mb=1024
     fi
     
-    read -p "Disk size in GB (10-100, default: 20): " disk_gb
+    read -rp "Disk size in GB (10-100, default: 20): " disk_gb
     disk_gb=${disk_gb:-20}
     
     if ! [[ "$disk_gb" =~ ^[0-9]+$ ]] || [ "$disk_gb" -lt 10 ] || [ "$disk_gb" -gt 100 ]; then
@@ -697,10 +686,10 @@ vm_create_wizard() {
     
     # Credentials
     echo ""
-    read -p "Username (default: zynexuser): " vm_user
+    read -rp "Username (default: zynexuser): " vm_user
     vm_user=${vm_user:-zynexuser}
     
-    read -sp "Password (default: ZynexForge123): " vm_pass
+    read -rsp "Password (default: ZynexForge123): " vm_pass
     vm_pass=${vm_pass:-ZynexForge123}
     echo ""
     
@@ -716,7 +705,7 @@ vm_create_wizard() {
     echo "  Username: $vm_user"
     echo ""
     
-    read -p "Create VM? (y/n): " confirm
+    read -rp "Create VM? (y/n): " confirm
     
     if [ "$confirm" = "y" ]; then
         create_vm "$vm_name" "$node_id" "$acceleration" "$os_template" "$cpu_cores" "$ram_mb" "$disk_gb" "$ssh_port" "$vm_user" "$vm_pass"
@@ -820,7 +809,7 @@ packages:
 package_update: true
 package_upgrade: true
 runcmd:
-  - echo "$OS_ASCII_ART" > /etc/zynexforge-os.ascii
+  - echo "ZynexForge CloudStack™" > /etc/zynexforge-os.ascii
   - echo -e '#!/bin/bash\nclear\nneofetch\ncat /etc/zynexforge-os.ascii\necho -e "\\\\033[1;36m⚡ ZynexForge CloudStack™\\\\033[0m"\necho -e "\\\\033[1;33m🔥 Made by FaaizXD\\\\033[0m"\necho -e "\\\\033[1;32mStatus: Premium VPS Active\\\\033[0m"\necho -e "\\\\033[1;35mStats: \$(free -h | awk '\''/Mem:/ {print "RAM: " \$2 "/" \$3}'\''), Cores: \$(nproc), Disk: \$(df -h / | tail -1 | awk '\''{print \$4}'\''), Load: \$(uptime | awk -F"load average:" '\''{print \$2}'\''), Uptime: \$(uptime -p)"\\\\033[0m"\necho' > /etc/profile.d/zynexforge-login.sh
   - chmod +x /etc/profile.d/zynexforge-login.sh
   - sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/g' /etc/ssh/sshd_config
@@ -876,7 +865,7 @@ EOF
     echo "  VM Name: $vm_name"
     echo "  SSH Port: $ssh_port"
     echo "  Username: $vm_user"
-    echo "  Password: $vm_pass"
+    echo "  Password: [hidden]"
     echo ""
     echo "🔗 SSH Commands:"
     echo "  ssh -p $ssh_port $vm_user@localhost"
@@ -884,7 +873,7 @@ EOF
     echo "  ssh -i $SSH_KEY_FILE -p $ssh_port $vm_user@localhost"
     echo ""
     
-    read -p "Start VM now? (y/n): " start_now
+    read -rp "Start VM now? (y/n): " start_now
     if [ "$start_now" = "y" ]; then
         start_vm "$vm_name"
     fi
@@ -928,7 +917,7 @@ start_vm() {
     # Check if port is available
     if ! check_port_available "$ssh_port"; then
         print_error "Port $ssh_port is already in use!"
-        read -p "Find new port? (y/n): " find_new
+        read -rp "Find new port? (y/n): " find_new
         if [ "$find_new" = "y" ]; then
             ssh_port=$(find_available_port)
             print_info "Using new port: $ssh_port"
@@ -1047,14 +1036,12 @@ show_vm_access() {
     ssh_port=$(grep "ssh_port:" "$vm_config" | awk '{print $2}' | tr -d '"')
     local vm_user
     vm_user=$(grep "vm_user:" "$vm_config" | awk '{print $2}' | tr -d '"')
-    local vm_pass
-    vm_pass=$(grep "vm_pass:" "$vm_config" | awk '{print $2}' | tr -d '"')
     
     echo ""
     echo "📋 Access Information for '$vm_name':"
     echo "  SSH Port: $ssh_port"
     echo "  Username: $vm_user"
-    echo "  Password: $vm_pass"
+    echo "  Password: [hidden for security]"
     echo ""
     echo "🔗 SSH Commands:"
     echo "  ssh -p $ssh_port $vm_user@localhost"
@@ -1062,7 +1049,7 @@ show_vm_access() {
     echo "  ssh -i $SSH_KEY_FILE -p $ssh_port $vm_user@localhost"
     echo ""
     
-    read -p "Auto-connect now? (y/n): " connect_now
+    read -rp "Auto-connect now? (y/n): " connect_now
     if [ "$connect_now" = "y" ]; then
         ssh -o StrictHostKeyChecking=no -p "$ssh_port" "$vm_user@localhost"
     fi
@@ -1082,7 +1069,7 @@ docker_vm_menu() {
         echo "  0) Back"
         echo ""
         
-        read -p "Select option: " choice
+        read -rp "Select option: " choice
         
         case $choice in
             1) create_docker_vm ;;
@@ -1114,11 +1101,11 @@ create_docker_vm() {
     echo "Select Node:"
     list_nodes_simple
     echo ""
-    read -p "Enter Node ID (default: local): " node_id
+    read -rp "Enter Node ID (default: local): " node_id
     node_id=${node_id:-local}
     
     # Docker VM details
-    read -p "Docker VM Name: " dv_name
+    read -rp "Docker VM Name: " dv_name
     
     if [ -z "$dv_name" ]; then
         print_error "Docker VM Name cannot be empty"
@@ -1134,7 +1121,7 @@ create_docker_vm() {
     echo "  3) alpine:latest"
     echo "  4) centos:stream9"
     echo "  5) fedora:latest"
-    read -p "Choice (1-5): " image_choice
+    read -rp "Choice (1-5): " image_choice
     
     case $image_choice in
         1) base_image="ubuntu:24.04" ;;
@@ -1147,18 +1134,18 @@ create_docker_vm() {
     
     # Resource limits
     echo ""
-    read -p "CPU limit (e.g., 1.5 or 2, press Enter for unlimited): " cpu_limit
-    read -p "Memory limit (e.g., 512m or 2g, press Enter for unlimited): " memory_limit
+    read -rp "CPU limit (e.g., 1.5 or 2, press Enter for unlimited): " cpu_limit
+    read -rp "Memory limit (e.g., 512m or 2g, press Enter for unlimited): " memory_limit
     
     # SSH support
     echo ""
-    read -p "Enable SSH access? (y/n): " enable_ssh
+    read -rp "Enable SSH access? (y/n): " enable_ssh
     if [ "$enable_ssh" = "y" ]; then
         ssh_port=$(find_available_port 22022)
         echo "Using SSH port: $ssh_port"
-        read -p "SSH Username (default: dockeruser): " ssh_user
+        read -rp "SSH Username (default: dockeruser): " ssh_user
         ssh_user=${ssh_user:-dockeruser}
-        read -sp "SSH Password (default: DockerVM123): " ssh_pass
+        read -rsp "SSH Password (default: DockerVM123): " ssh_pass
         ssh_pass=${ssh_pass:-DockerVM123}
         echo ""
     else
@@ -1172,7 +1159,7 @@ create_docker_vm() {
     echo "Port mappings (format: host_port:container_port)"
     echo "Example: 8080:80 8443:443"
     echo "Press Enter for no port mappings"
-    read -p "Enter port mappings (space-separated): " port_mappings
+    read -rp "Enter port mappings (space-separated): " port_mappings
     
     # Create Docker VM
     echo ""
@@ -1305,7 +1292,7 @@ start_docker_vm() {
     echo -e "${GREEN}🚀 Start Docker VM${NC}"
     echo ""
     
-    read -p "Docker VM Name: " dv_name
+    read -rp "Docker VM Name: " dv_name
     
     if [ -z "$dv_name" ]; then
         print_error "Docker VM Name cannot be empty"
@@ -1333,7 +1320,7 @@ stop_docker_vm() {
     echo -e "${RED}🛑 Stop Docker VM${NC}"
     echo ""
     
-    read -p "Docker VM Name: " dv_name
+    read -rp "Docker VM Name: " dv_name
     
     if [ -z "$dv_name" ]; then
         print_error "Docker VM Name cannot be empty"
@@ -1361,7 +1348,7 @@ show_docker_vm_info() {
     echo -e "${GREEN}🔍 Docker VM Info${NC}"
     echo ""
     
-    read -p "Docker VM Name: " dv_name
+    read -rp "Docker VM Name: " dv_name
     
     if [ -z "$dv_name" ]; then
         print_error "Docker VM Name cannot be empty"
@@ -1384,7 +1371,7 @@ show_docker_vm_info() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 docker_vm_console() {
@@ -1392,7 +1379,7 @@ docker_vm_console() {
     echo -e "${GREEN}💻 Docker VM Console${NC}"
     echo ""
     
-    read -p "Docker VM Name: " dv_name
+    read -rp "Docker VM Name: " dv_name
     
     if [ -z "$dv_name" ]; then
         print_error "Docker VM Name cannot be empty"
@@ -1416,7 +1403,7 @@ delete_docker_vm() {
     echo -e "${RED}🗑️ Delete Docker VM${NC}"
     echo ""
     
-    read -p "Docker VM Name: " dv_name
+    read -rp "Docker VM Name: " dv_name
     
     if [ -z "$dv_name" ]; then
         print_error "Docker VM Name cannot be empty"
@@ -1431,7 +1418,7 @@ delete_docker_vm() {
     fi
     
     echo "⚠️ Warning: This will permanently delete '$dv_name' and all its data"
-    read -p "Are you sure? (y/n): " confirm
+    read -rp "Are you sure? (y/n): " confirm
     
     if [ "$confirm" = "y" ]; then
         docker stop "$dv_name" 2>/dev/null
@@ -1463,7 +1450,7 @@ jupyter_cloud_menu() {
         echo "  0) Back"
         echo ""
         
-        read -p "Select option: " choice
+        read -rp "Select option: " choice
         
         case $choice in
             1) create_jupyter_vm ;;
@@ -1490,7 +1477,7 @@ create_jupyter_vm() {
         return
     fi
     
-    read -p "Jupyter VM Name: " jv_name
+    read -rp "Jupyter VM Name: " jv_name
     
     if [ -z "$jv_name" ]; then
         print_error "Jupyter VM Name cannot be empty"
@@ -1504,7 +1491,7 @@ create_jupyter_vm() {
     
     # Generate token
     local jv_token
-    jv_token=$(openssl rand -hex 24)
+    jv_token=$(openssl rand -hex 24 2>/dev/null || echo "$RANDOM$RANDOM$RANDOM")
     
     echo ""
     print_info "Creating Jupyter VM '$jv_name'..."
@@ -1519,7 +1506,7 @@ create_jupyter_vm() {
         -v "${jv_name}_data:/home/jovyan/work" \
         -e JUPYTER_TOKEN="$jv_token" \
         jupyter/datascience-notebook \
-        start-notebook.sh --NotebookApp.token="$jv_token"; then
+        start-notebook.sh --NotebookApp.token="$jv_token" 2>/dev/null; then
         
         print_success "Jupyter VM '$jv_name' created"
         
@@ -1577,7 +1564,7 @@ list_jupyter_vms() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 stop_jupyter_vm() {
@@ -1585,7 +1572,7 @@ stop_jupyter_vm() {
     echo -e "${RED}🛑 Stop Jupyter VM${NC}"
     echo ""
     
-    read -p "Jupyter VM Name: " jv_name
+    read -rp "Jupyter VM Name: " jv_name
     
     if [ -z "$jv_name" ]; then
         print_error "Jupyter VM Name cannot be empty"
@@ -1613,7 +1600,7 @@ delete_jupyter_vm() {
     echo -e "${RED}🗑️ Delete Jupyter VM${NC}"
     echo ""
     
-    read -p "Jupyter VM Name: " jv_name
+    read -rp "Jupyter VM Name: " jv_name
     
     if [ -z "$jv_name" ]; then
         print_error "Jupyter VM Name cannot be empty"
@@ -1628,7 +1615,7 @@ delete_jupyter_vm() {
     fi
     
     echo "⚠️ Warning: This will permanently delete '$jv_name' and all its data"
-    read -p "Are you sure? (y/n): " confirm
+    read -rp "Are you sure? (y/n): " confirm
     
     if [ "$confirm" = "y" ]; then
         docker stop "$jv_name" 2>/dev/null
@@ -1653,7 +1640,7 @@ show_jupyter_url() {
     echo -e "${GREEN}🔗 Jupyter URL${NC}"
     echo ""
     
-    read -p "Jupyter VM Name: " jv_name
+    read -rp "Jupyter VM Name: " jv_name
     
     if [ -z "$jv_name" ]; then
         print_error "Jupyter VM Name cannot be empty"
@@ -1680,7 +1667,7 @@ show_jupyter_url() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 # VM Manager (Lifecycle Menu)
@@ -1700,7 +1687,7 @@ vm_manager_menu() {
         echo "  0) Back"
         echo ""
         
-        read -p "Select option: " choice
+        read -rp "Select option: " choice
         
         case $choice in
             1) vm_create_wizard ;;
@@ -1708,7 +1695,7 @@ vm_manager_menu() {
                 print_header
                 echo -e "${GREEN}🚀 Start VM${NC}"
                 echo ""
-                read -p "VM Name: " vm_name
+                read -rp "VM Name: " vm_name
                 if [ -n "$vm_name" ]; then
                     start_vm "$vm_name"
                 else
@@ -1720,7 +1707,7 @@ vm_manager_menu() {
                 print_header
                 echo -e "${RED}🛑 Stop VM${NC}"
                 echo ""
-                read -p "VM Name: " vm_name
+                read -rp "VM Name: " vm_name
                 if [ -n "$vm_name" ]; then
                     stop_vm "$vm_name"
                 else
@@ -1732,7 +1719,7 @@ vm_manager_menu() {
                 print_header
                 echo -e "${GREEN}🔍 Show VM Info${NC}"
                 echo ""
-                read -p "VM Name: " vm_name
+                read -rp "VM Name: " vm_name
                 if [ -n "$vm_name" ]; then
                     show_vm_info "$vm_name"
                 else
@@ -1744,7 +1731,7 @@ vm_manager_menu() {
                 print_header
                 echo -e "${GREEN}✏️ Edit VM Configuration${NC}"
                 echo ""
-                read -p "VM Name: " vm_name
+                read -rp "VM Name: " vm_name
                 if [ -n "$vm_name" ]; then
                     edit_vm_config "$vm_name"
                 else
@@ -1756,7 +1743,7 @@ vm_manager_menu() {
                 print_header
                 echo -e "${RED}🗑️ Delete VM${NC}"
                 echo ""
-                read -p "VM Name: " vm_name
+                read -rp "VM Name: " vm_name
                 if [ -n "$vm_name" ]; then
                     delete_vm "$vm_name"
                 else
@@ -1768,7 +1755,7 @@ vm_manager_menu() {
                 print_header
                 echo -e "${GREEN}💾 Resize VM Disk${NC}"
                 echo ""
-                read -p "VM Name: " vm_name
+                read -rp "VM Name: " vm_name
                 if [ -n "$vm_name" ]; then
                     resize_vm_disk "$vm_name"
                 else
@@ -1780,7 +1767,7 @@ vm_manager_menu() {
                 print_header
                 echo -e "${GREEN}📊 Show VM Performance${NC}"
                 echo ""
-                read -p "VM Name: " vm_name
+                read -rp "VM Name: " vm_name
                 if [ -n "$vm_name" ]; then
                     show_vm_performance "$vm_name"
                 else
@@ -1792,7 +1779,7 @@ vm_manager_menu() {
                 print_header
                 echo -e "${GREEN}🔗 Access VM (SSH)${NC}"
                 echo ""
-                read -p "VM Name: " vm_name
+                read -rp "VM Name: " vm_name
                 if [ -n "$vm_name" ]; then
                     show_vm_access "$vm_name"
                 else
@@ -1812,7 +1799,7 @@ show_vm_info() {
     
     if [ ! -f "$vm_config" ]; then
         print_error "VM '$vm_name' not found"
-        read -p "Press Enter to continue..."
+        read -rp "Press Enter to continue..."
         return 1
     fi
     
@@ -1852,7 +1839,7 @@ show_vm_info() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 edit_vm_config() {
@@ -1878,11 +1865,11 @@ edit_vm_config() {
     echo "  0) Cancel"
     echo ""
     
-    read -p "Choice: " edit_choice
+    read -rp "Choice: " edit_choice
     
     case $edit_choice in
         1)
-            read -p "New SSH Port: " new_port
+            read -rp "New SSH Port: " new_port
             if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1024 ] || [ "$new_port" -gt 65535 ]; then
                 print_error "Invalid port number (1024-65535)"
             else
@@ -1891,7 +1878,7 @@ edit_vm_config() {
             fi
             ;;
         2)
-            read -p "New RAM in MB: " new_ram
+            read -rp "New RAM in MB: " new_ram
             if ! [[ "$new_ram" =~ ^[0-9]+$ ]] || [ "$new_ram" -lt 256 ] || [ "$new_ram" -gt 16384 ]; then
                 print_error "Invalid RAM size (256-16384 MB)"
             else
@@ -1900,7 +1887,7 @@ edit_vm_config() {
             fi
             ;;
         3)
-            read -p "New CPU Cores: " new_cpu
+            read -rp "New CPU Cores: " new_cpu
             if ! [[ "$new_cpu" =~ ^[0-9]+$ ]] || [ "$new_cpu" -lt 1 ] || [ "$new_cpu" -gt 16 ]; then
                 print_error "Invalid CPU cores (1-16)"
             else
@@ -1909,7 +1896,7 @@ edit_vm_config() {
             fi
             ;;
         4)
-            read -p "New Username: " new_user
+            read -rp "New Username: " new_user
             if [ -z "$new_user" ]; then
                 print_error "Username cannot be empty"
             else
@@ -1918,7 +1905,7 @@ edit_vm_config() {
             fi
             ;;
         5)
-            read -sp "New Password: " new_pass
+            read -rsp "New Password: " new_pass
             echo ""
             if [ -z "$new_pass" ]; then
                 print_error "Password cannot be empty"
@@ -1960,7 +1947,7 @@ delete_vm() {
     echo "  • PID file"
     echo ""
     
-    read -p "Are you sure? (y/n): " confirm
+    read -rp "Are you sure? (y/n): " confirm
     
     if [ "$confirm" != "y" ]; then
         print_info "Deletion cancelled"
@@ -2009,7 +1996,7 @@ resize_vm_disk() {
     current_gb=$(grep "disk_gb:" "$vm_config" | awk '{print $2}' | tr -d '"')
     
     echo "Current disk size: ${current_gb}GB"
-    read -p "New size in GB (e.g., 50): " new_size
+    read -rp "New size in GB (e.g., 50): " new_size
     
     if ! [[ "$new_size" =~ ^[0-9]+$ ]] || [ "$new_size" -lt 1 ] || [ "$new_size" -gt 500 ]; then
         print_error "Invalid size (1-500 GB)"
@@ -2025,7 +2012,7 @@ resize_vm_disk() {
     fi
     
     echo "⚠️ Warning: Disk resize cannot be undone"
-    read -p "Continue? (y/n): " confirm
+    read -rp "Continue? (y/n): " confirm
     
     if [ "$confirm" = "y" ]; then
         # Ensure VM is stopped
@@ -2072,21 +2059,21 @@ show_vm_performance() {
             
             # Show process info
             echo "📈 CPU and Memory:"
-            ps -p "$pid" -o pid,ppid,pcpu,pmem,etime,cmd --no-headers
+            ps -p "$pid" -o pid,ppid,pcpu,pmem,etime,cmd --no-headers 2>/dev/null || echo "Cannot get process info"
             
             # Show CPU percentage
             local cpu_percent
-            cpu_percent=$(ps -p "$pid" -o pcpu --no-headers | tr -d ' ' || echo "0")
+            cpu_percent=$(ps -p "$pid" -o pcpu --no-headers 2>/dev/null | tr -d ' ' || echo "0")
             echo "  CPU Usage: ${cpu_percent}%"
             
             # Show memory usage
             local mem_kb
-            mem_kb=$(ps -p "$pid" -o rss --no-headers | tr -d ' ' || echo "0")
+            mem_kb=$(ps -p "$pid" -o rss --no-headers 2>/dev/null | tr -d ' ' || echo "0")
             echo "  Memory Usage: ${mem_kb} KB"
             
             # Show elapsed time
             local elapsed
-            elapsed=$(ps -p "$pid" -o etime --no-headers | tr -d ' ' || echo "00:00")
+            elapsed=$(ps -p "$pid" -o etime --no-headers 2>/dev/null | tr -d ' ' || echo "00:00")
             echo "  Running Time: $elapsed"
             
             # Show disk usage of the VM
@@ -2096,7 +2083,7 @@ show_vm_performance() {
             disk_path=$(grep "disk_path:" "$vm_config" | awk '{print $2}' | tr -d '"')
             if [ -f "$disk_path" ]; then
                 local disk_size
-                disk_size=$(du -h "$disk_path" | awk '{print $1}')
+                disk_size=$(du -h "$disk_path" 2>/dev/null | awk '{print $1}' || echo "unknown")
                 echo "  Disk File: $disk_size"
             fi
             
@@ -2110,7 +2097,7 @@ show_vm_performance() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 # Security Menu
@@ -2123,7 +2110,7 @@ security_menu() {
         echo "  0) Back"
         echo ""
         
-        read -p "Select option: " choice
+        read -rp "Select option: " choice
         
         case $choice in
             1) show_security_status ;;
@@ -2198,7 +2185,7 @@ show_security_status() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 manage_ssh_keys() {
@@ -2213,12 +2200,12 @@ manage_ssh_keys() {
     echo "  0) Back"
     echo ""
     
-    read -p "Select option: " choice
+    read -rp "Select option: " choice
     
     case $choice in
         1)
             echo ""
-            read -p "Key name (default: zynexforge_new): " key_name
+            read -rp "Key name (default: zynexforge_new): " key_name
             key_name=${key_name:-zynexforge_new}
             
             ssh-keygen -t ed25519 -f "$USER_HOME/.ssh/${key_name}" -N "" -q
@@ -2238,7 +2225,7 @@ manage_ssh_keys() {
                 cat "$SSH_KEY_FILE.pub"
             else
                 print_error "SSH key not found"
-                read -p "Generate one now? (y/n): " generate_now
+                read -rp "Generate one now? (y/n): " generate_now
                 if [ "$generate_now" = "y" ]; then
                     ssh-keygen -t ed25519 -f "$SSH_KEY_FILE" -N "" -q
                     chmod 600 "$SSH_KEY_FILE"
@@ -2269,7 +2256,7 @@ manage_ssh_keys() {
     esac
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 # Monitoring Menu
@@ -2284,7 +2271,7 @@ monitoring_menu() {
         echo "  0) Back"
         echo ""
         
-        read -p "Select option: " choice
+        read -rp "Select option: " choice
         
         case $choice in
             1) system_overview ;;
@@ -2304,33 +2291,33 @@ system_overview() {
     
     # CPU
     echo "🖥️ CPU:"
-    echo "  Cores: $(nproc)"
-    echo "  Load: $(uptime | awk -F'load average:' '{print $2}')"
+    echo "  Cores: $(nproc 2>/dev/null || echo "unknown")"
+    echo "  Load: $(uptime | awk -F'load average:' '{print $2}' 2>/dev/null || echo "unknown")"
     
     # Memory
     echo ""
     echo "🧠 Memory:"
-    free -h | awk '/^Mem:/ {
+    free -h 2>/dev/null | awk '/^Mem:/ {
         total=$2
         used=$3
         free=$4
         printf "  Total: %s | Used: %s | Free: %s\n", total, used, free
-    }'
+    }' || echo "  Cannot get memory info"
     
     # Disk
     echo ""
     echo "💾 Disk:"
-    df -h / | tail -1 | awk '{
+    df -h / 2>/dev/null | tail -1 | awk '{
         total=$2
         used=$3
         free=$4
         used_percent=$5
         printf "  Total: %s | Used: %s (%s) | Free: %s\n", total, used, used_percent, free
-    }'
+    }' || echo "  Cannot get disk info"
     
     # Uptime
     echo ""
-    echo "⏰ Uptime: $(uptime -p | sed 's/up //')"
+    echo "⏰ Uptime: $(uptime -p 2>/dev/null | sed 's/up //' || echo "unknown")"
     
     # User
     echo ""
@@ -2338,7 +2325,7 @@ system_overview() {
     echo "  Home: $USER_HOME"
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 vm_resources() {
@@ -2401,7 +2388,7 @@ vm_resources() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 docker_resources() {
@@ -2417,7 +2404,7 @@ docker_resources() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 disk_usage() {
@@ -2454,10 +2441,10 @@ disk_usage() {
     
     echo ""
     echo "📊 Overall Disk Usage:"
-    df -h 2>/dev/null | head -10
+    df -h 2>/dev/null | head -10 || echo "Cannot get disk usage"
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 # Templates + ISO Library
@@ -2473,7 +2460,7 @@ templates_menu() {
         echo "  0) Back"
         echo ""
         
-        read -p "Select option: " choice
+        read -rp "Select option: " choice
         
         case $choice in
             1) list_cloud_templates ;;
@@ -2511,7 +2498,7 @@ list_cloud_templates() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 download_cloud_template() {
@@ -2527,7 +2514,7 @@ download_cloud_template() {
     echo "  0) Cancel"
     echo ""
     
-    read -p "Select template: " template_choice
+    read -rp "Select template: " template_choice
     
     declare -A template_urls=(
         [1]="https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
@@ -2607,7 +2594,7 @@ list_iso_images() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 download_iso_image() {
@@ -2621,7 +2608,7 @@ download_iso_image() {
     echo "  0) Cancel"
     echo ""
     
-    read -p "Select ISO: " iso_choice
+    read -rp "Select ISO: " iso_choice
     
     declare -A iso_urls=(
         [1]="https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso"
@@ -2699,8 +2686,8 @@ create_custom_template() {
     fi
     
     echo ""
-    read -p "Source VM name: " source_vm
-    read -p "Template name: " template_name
+    read -rp "Source VM name: " source_vm
+    read -rp "Template name: " template_name
     
     if [ -z "$source_vm" ] || [ -z "$template_name" ]; then
         print_error "Source VM and Template name cannot be empty"
@@ -2731,7 +2718,7 @@ create_custom_template() {
     echo "Template: $template_path"
     echo ""
     
-    read -p "Continue? (y/n): " confirm
+    read -rp "Continue? (y/n): " confirm
     
     if [ "$confirm" = "y" ]; then
         # Stop VM if running
@@ -2770,7 +2757,7 @@ kvm_qemu_menu() {
     echo "  3) Return to Main Menu"
     echo ""
     
-    read -p "Select option: " choice
+    read -rp "Select option: " choice
     
     case $choice in
         1) vm_create_wizard ;;
@@ -2794,7 +2781,7 @@ qemu_universal_menu() {
     echo "  3) Return to Main Menu"
     echo ""
     
-    read -p "Select option: " choice
+    read -rp "Select option: " choice
     
     case $choice in
         1) vm_create_wizard ;;
@@ -2819,7 +2806,7 @@ lxd_cloud_menu() {
     echo "  3) Return to Main Menu"
     echo ""
     
-    read -p "Select option: " choice
+    read -rp "Select option: " choice
     
     case $choice in
         1)
@@ -2866,7 +2853,7 @@ list_lxd_instances() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 list_vms() {
@@ -2910,7 +2897,7 @@ list_vms() {
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 # Main function
