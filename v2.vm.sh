@@ -3,8 +3,8 @@ set -euo pipefail
 
 # =============================================================================
 # ZynexForge CloudStack™ Platform - World's #1 Virtualization System
-# Advanced Multi-Node Virtualization Management (User Mode)
-# Version: 4.0.0 Ultra
+# Advanced Multi-Node Virtualization Management
+# Version: 4.0.0 Ultra Pro
 # =============================================================================
 
 # Global Configuration
@@ -15,7 +15,7 @@ readonly LOG_FILE="$USER_HOME/.zynexforge/zynexforge.log"
 readonly NODES_DB="$CONFIG_DIR/nodes.yml"
 readonly GLOBAL_CONFIG="$CONFIG_DIR/config.yml"
 readonly SSH_KEY_FILE="$USER_HOME/.ssh/zynexforge_ed25519"
-readonly SCRIPT_VERSION="4.0.0 Ultra"
+readonly SCRIPT_VERSION="4.0.0 Ultra Pro"
 
 # Color Definitions
 readonly RED='\033[0;31m'
@@ -27,12 +27,12 @@ readonly CYAN='\033[0;36m'
 readonly WHITE='\033[1;37m'
 readonly NC='\033[0m'
 
-# Resource Limits (User mode safe)
-readonly MAX_CPU_CORES=$(nproc)
-readonly MAX_RAM_MB=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 * 80 / 100)) # 80% of total
-readonly MAX_DISK_GB=100
-readonly MIN_RAM_MB=256
-readonly MIN_DISK_GB=1
+# Dynamic Resource Limits (Auto-detected)
+MAX_CPU_CORES=$(nproc)
+MAX_RAM_MB=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 ))
+MAX_DISK_GB=$(($(df -k "$HOME" | awk 'NR==2{print $4}') / 1048576))
+MIN_RAM_MB=256
+MIN_DISK_GB=1
 
 # ASCII Art - Your Original Banner
 readonly ASCII_MAIN_ART=$(cat << 'EOF'
@@ -45,19 +45,21 @@ __________                           ___________
 EOF
 )
 
-# Enhanced OS Templates with multiple mirrors
+# Enhanced OS Templates with Custom Mirrors
 declare -A OS_TEMPLATES=(
-    ["ubuntu-24.04"]="Ubuntu 24.04 LTS|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ZynexForge123"
-    ["ubuntu-22.04"]="Ubuntu 22.04 LTS|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ZynexForge123"
-    ["debian-12"]="Debian 12|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|ZynexForge123"
-    ["centos-9"]="CentOS Stream 9|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|ZynexForge123"
-    ["rocky-9"]="Rocky Linux 9|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|ZynexForge123"
-    ["almalinux-9"]="AlmaLinux 9|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|ZynexForge123"
-    ["fedora-40"]="Fedora 40|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|ZynexForge123"
+    ["ubuntu-24.04"]="Ubuntu 24.04 LTS|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|ubuntu24|ubuntu|ZynexForgePro123!"
+    ["ubuntu-22.04"]="Ubuntu 22.04 LTS|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|ubuntu22|ubuntu|ZynexForgePro123!"
+    ["debian-12"]="Debian 12|bookworm|https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2|debian12|debian|ZynexForgePro123!"
+    ["centos-9"]="CentOS Stream 9|stream9|https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2|centos9|centos|ZynexForgePro123!"
+    ["rocky-9"]="Rocky Linux 9|9|https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2|rocky9|rocky|ZynexForgePro123!"
+    ["almalinux-9"]="AlmaLinux 9|9|https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2|almalinux9|alma|ZynexForgePro123!"
+    ["fedora-40"]="Fedora 40|40|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2|fedora40|fedora|ZynexForgePro123!"
     ["alpine-3.19"]="Alpine Linux 3.19|3.19|https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-virt-3.19.0-x86_64.iso|alpine|root|alpine"
+    ["arch-linux"]="Arch Linux|arch|https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2|arch|arch|arch"
+    ["opensuse-tumbleweed"]="OpenSUSE Tumbleweed|tumbleweed|https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-Cloud.x86_64-Cloud.qcow2|opensuse|opensuse|ZynexForgePro123!"
 )
 
-# Enhanced ISO Library with CDN mirrors
+# Enhanced ISO Library with Premium Mirrors
 declare -A ISO_LIBRARY=(
     ["ubuntu-24.04-desktop"]="Ubuntu 24.04 Desktop|https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso|ubuntu|ubuntu"
     ["ubuntu-24.04-server"]="Ubuntu 24.04 Server|https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso|ubuntu|ubuntu"
@@ -67,22 +69,26 @@ declare -A ISO_LIBRARY=(
     ["rocky-9"]="Rocky Linux 9|https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.3-x86_64-dvd.iso|rocky|rocky"
     ["kali-linux"]="Kali Linux|https://cdimage.kali.org/kali-2024.2/kali-linux-2024.2-installer-amd64.iso|kali|kali"
     ["arch-linux"]="Arch Linux|https://archlinux.c3sl.ufpr.br/iso/2024.07.01/archlinux-2024.07.01-x86_64.iso|arch|arch"
+    ["windows-11"]="Windows 11|https://software.download.prss.microsoft.com/dbazure/Win11_23H2_English_x64.iso?t=8e06379b-8f4d-4fca-8631-50c07e8b1c02&e=1708312186&h=aa6e0a5f5c7f7c8b7c8d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9|Administrator|ZynexForgeWin123!"
+    ["proxmox-8"]="Proxmox VE 8|https://download.proxmox.com/iso/proxmox-ve_8.1-1.iso|root|ZynexForgePro123!"
 )
 
-# Real Nodes for reference (cloud deployment targets)
+# Premium Real Nodes with Custom Specs
 declare -A REAL_NODES=(
-    ["mumbai"]="🇮🇳 Mumbai, India|ap-south-1|103.21.58.1|45|64|500|kvm,qemu,docker,lxd,jupyter"
-    ["singapore"]="🇸🇬 Singapore|ap-southeast-1|103.21.61.1|60|256|2000|kvm,qemu,docker,jupyter,lxd,kubernetes"
-    ["frankfurt"]="🇩🇪 Frankfurt, Germany|eu-central-1|103.21.62.1|70|512|5000|kvm,qemu,docker,jupyter,lxd,kubernetes,openstack"
-    ["newyork"]="🇺🇸 New York, USA|us-east-1|103.21.65.1|80|1024|10000|kvm,qemu,docker,jupyter,lxd,kubernetes,openstack"
-    ["tokyo"]="🇯🇵 Tokyo, Japan|ap-northeast-1|103.21.68.1|85|256|4000|kvm,qemu,docker,jupyter,lxd,kubernetes"
+    ["mumbai-premium"]="🇮🇳 Mumbai Premium|ap-south-1|103.21.58.1|15|128|1000|AMD EPYC 32c/64t, 128GB DDR5, 1TB NVMe, 10Gbps|kvm,qemu,docker,lxd,jupyter,kubernetes,gpu"
+    ["delhi-enterprise"]="🇮🇳 Delhi Enterprise|ap-south-2|103.21.59.1|20|256|2000|Intel Xeon 48c/96t, 256GB DDR5, 2TB NVMe RAID, 25Gbps|kvm,qemu,docker,jupyter,lxd,kubernetes,gpu"
+    ["singapore-pro"]="🇸🇬 Singapore Pro|ap-southeast-1|103.21.61.1|35|512|5000|AMD EPYC 64c/128t, 512GB DDR5, 5TB NVMe RAID, 40Gbps|kvm,qemu,docker,jupyter,lxd,kubernetes,gpu,nvidia"
+    ["frankfurt-elite"]="🇩🇪 Frankfurt Elite|eu-central-1|103.21.62.1|45|1024|10000|Intel Xeon 96c/192t, 1TB DDR5, 10TB NVMe RAID, 100Gbps|kvm,qemu,docker,jupyter,lxd,kubernetes,gpu,nvidia,openstack"
+    ["newyork-ultra"]="🇺🇸 New York Ultra|us-east-1|103.21.65.1|55|2048|20000|AMD EPYC 128c/256t, 2TB DDR5, 20TB NVMe RAID, 100Gbps|kvm,qemu,docker,jupyter,lxd,kubernetes,gpu,nvidia,openstack"
+    ["tokyo-extreme"]="🇯🇵 Tokyo Extreme|ap-northeast-1|103.21.68.1|65|1024|15000|Intel Xeon 112c/224t, 1TB DDR5, 15TB NVMe RAID, 100Gbps|kvm,qemu,docker,jupyter,lxd,kubernetes,gpu,nvidia,openstack"
 )
 
-# Enhanced Docker Images (user mode)
+# Premium Docker Images
 declare -A DOCKER_IMAGES=(
     ["ubuntu-24.04"]="Ubuntu 24.04|ubuntu:24.04"
     ["debian-12"]="Debian 12|debian:12"
     ["alpine"]="Alpine Linux|alpine:latest"
+    ["centos-stream9"]="CentOS Stream 9|centos:stream9"
     ["nginx"]="Nginx Web Server|nginx:alpine"
     ["mysql"]="MySQL Database|mysql:8.0"
     ["postgres"]="PostgreSQL|postgres:16"
@@ -91,18 +97,27 @@ declare -A DOCKER_IMAGES=(
     ["python"]="Python 3.12|python:3.12-alpine"
     ["jupyter"]="Jupyter Notebook|jupyter/base-notebook"
     ["code-server"]="VS Code Server|codercom/code-server:latest"
+    ["portainer"]="Portainer CE|portainer/portainer-ce:latest"
+    ["grafana"]="Grafana|grafana/grafana:latest"
+    ["prometheus"]="Prometheus|prom/prometheus:latest"
+    ["traefik"]="Traefik Proxy|traefik:latest"
+    ["mongo"]="MongoDB|mongo:latest"
+    ["elasticsearch"]="ElasticSearch|elasticsearch:8.12"
 )
 
-# Enhanced Jupyter Templates
+# Premium Jupyter Templates
 declare -A JUPYTER_TEMPLATES=(
-    ["data-science"]="Data Science|jupyter/datascience-notebook|8888|python,R,julia,scipy"
-    ["tensorflow"]="TensorFlow ML|jupyter/tensorflow-notebook|8889|python,tensorflow,keras"
-    ["minimal"]="Minimal Python|jupyter/minimal-notebook|8890|python,pandas,numpy"
-    ["pyspark"]="PySpark|jupyter/pyspark-notebook|8891|python,spark,hadoop"
+    ["data-science"]="Data Science Pro|jupyter/datascience-notebook|8888|python,R,julia,scipy,pandas"
+    ["tensorflow"]="TensorFlow ML Pro|jupyter/tensorflow-notebook|8889|python,tensorflow,keras,pytorch"
+    ["minimal"]="Minimal Python Pro|jupyter/minimal-notebook|8890|python,pandas,numpy,matplotlib"
+    ["pyspark"]="PySpark Enterprise|jupyter/pyspark-notebook|8891|python,spark,hadoop,pyspark"
+    ["rstudio"]="R Studio Pro|jupyter/r-notebook|8892|R,tidyverse,ggplot2,shiny"
+    ["scipy"]="Scientific Python|jupyter/scipy-notebook|8893|python,scipy,matplotlib,sympy"
+    ["all-spark"]="All-Spark Notebook|jupyter/all-spark-notebook|8894|python,R,scala,spark"
 )
 
 # =============================================================================
-# CORE FUNCTIONS
+# CORE FUNCTIONS - OPTIMIZED
 # =============================================================================
 
 print_header() {
@@ -111,7 +126,8 @@ print_header() {
     echo "$ASCII_MAIN_ART"
     echo -e "${NC}"
     echo -e "${YELLOW}⚡ ZynexForge CloudStack™ - World's #1 Virtualization Platform${NC}"
-    echo -e "${WHITE}🔥 Professional Edition | Version: ${SCRIPT_VERSION}${NC}"
+    echo -e "${WHITE}🔥 Ultra Pro Edition | Version: ${SCRIPT_VERSION}${NC}"
+    echo -e "${GREEN}📊 System: ${MAX_CPU_CORES} Cores | ${MAX_RAM_MB}MB RAM | ${MAX_DISK_GB}GB Disk${NC}"
     echo "=================================================================="
     echo
 }
@@ -127,6 +143,7 @@ print_status() {
         "INFO") echo -e "${BLUE}ℹ [INFO]${NC} $message" ;;
         "INPUT") echo -e "${MAGENTA}? [INPUT]${NC} $message" ;;
         "PROGRESS") echo -e "${CYAN}⟳ [PROGRESS]${NC} $message" ;;
+        "DEBUG") echo -e "${WHITE}🐛 [DEBUG]${NC} $message" ;;
         *) echo "[$type] $message" ;;
     esac
 }
@@ -155,8 +172,8 @@ validate_input() {
             fi
             ;;
         "size")
-            if ! [[ "$value" =~ ^[0-9]+[GgMm]$ ]]; then
-                print_status "ERROR" "Must be a size with unit (e.g., 100G, 512M)"
+            if ! [[ "$value" =~ ^[0-9]+[GgMmKk]$ ]]; then
+                print_status "ERROR" "Must be a size with unit (e.g., 100G, 512M, 1024K)"
                 return 1
             fi
             ;;
@@ -212,12 +229,12 @@ check_dependencies() {
         if command -v apt-get > /dev/null 2>&1; then
             print_status "INFO" "Installing packages on Debian/Ubuntu..."
             sudo apt-get update
-            sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssh-client curl wget jq
+            sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssh-client curl wget jq net-tools bridge-utils dnsmasq libvirt-clients
             log_message "INSTALL" "Installed packages on Debian/Ubuntu"
             
         elif command -v dnf > /dev/null 2>&1; then
             print_status "INFO" "Installing packages on Fedora/RHEL..."
-            sudo dnf install -y qemu-system-x86 qemu-img cloud-utils genisoimage openssh-clients curl wget jq
+            sudo dnf install -y qemu-system-x86 qemu-img cloud-utils genisoimage openssh-clients curl wget jq net-tools bridge-utils dnsmasq libvirt-client
             log_message "INSTALL" "Installed packages on Fedora/RHEL"
         else
             print_status "ERROR" "Unsupported package manager"
@@ -230,19 +247,22 @@ check_dependencies() {
         print_status "SUCCESS" "All required tools are available"
     fi
     
-    # Check if user can use KVM (non-root)
-    if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+    # Check KVM support with fallback to QEMU-only
+    if kvm-ok 2>/dev/null && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+        KVM_AVAILABLE=true
         print_status "SUCCESS" "KVM acceleration is available"
     else
-        print_status "WARNING" "KVM acceleration may not be available (check /dev/kvm permissions)"
+        KVM_AVAILABLE=false
+        print_status "WARNING" "KVM acceleration not available - Using QEMU-only mode (slower)"
+        print_status "INFO" "For better performance, enable KVM: sudo chmod 666 /dev/kvm"
     fi
     
-    # Check Docker (user mode)
+    # Check Docker
     if command -v docker > /dev/null 2>&1; then
         if docker info > /dev/null 2>&1; then
             print_status "SUCCESS" "Docker is available"
         else
-            print_status "WARNING" "Docker daemon is not running or permission issues"
+            print_status "WARNING" "Docker installed but daemon not running"
         fi
     fi
     
@@ -287,11 +307,11 @@ get_system_resources() {
     local total_ram_kb
     total_ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
     local total_ram_mb=$((total_ram_kb / 1024))
-    local available_ram_mb=$((total_ram_mb * 70 / 100)) # Use 70% of total RAM for user mode
+    local available_ram_mb=$((total_ram_mb * 85 / 100)) # Use 85% of total RAM
     
     local total_disk_gb
     total_disk_gb=$(df -BG "$DATA_DIR" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//')
-    total_disk_gb=${total_disk_gb:-50}
+    total_disk_gb=${total_disk_gb:-100}
     
     local cpu_cores
     cpu_cores=$(nproc)
@@ -301,20 +321,13 @@ get_system_resources() {
 }
 
 # =============================================================================
-# INITIALIZATION (User Mode)
+# INITIALIZATION - OPTIMIZED
 # =============================================================================
 
 initialize_platform() {
-    print_status "INFO" "Initializing ZynexForge Platform (User Mode)..."
+    print_status "INFO" "Initializing ZynexForge Platform..."
     
-    # Check if running as root
-    if [ "$EUID" -eq 0 ]; then
-        print_status "WARNING" "Running as root is not recommended for this script"
-        print_status "INFO" "Please run as regular user for better security"
-        exit 1
-    fi
-    
-    # Create directory structure in user home
+    # Create directory structure
     mkdir -p "$CONFIG_DIR" \
              "$DATA_DIR/vms" \
              "$DATA_DIR/disks" \
@@ -322,78 +335,85 @@ initialize_platform() {
              "$DATA_DIR/dockervm" \
              "$DATA_DIR/jupyter" \
              "$DATA_DIR/isos" \
+             "$DATA_DIR/lxd" \
              "$DATA_DIR/backups" \
              "$DATA_DIR/snapshots" \
-             "$USER_HOME/zynexforge/templates" \
-             "$USER_HOME/zynexforge/logs"
+             "$DATA_DIR/networks" \
+             "$DATA_DIR/templates" \
+             "$USER_HOME/zynexforge/templates/cloud" \
+             "$USER_HOME/zynexforge/templates/iso" \
+             "$USER_HOME/zynexforge/logs" \
+             "$USER_HOME/zynexforge/certs"
     
-    # Create default config for user mode
+    # Create default config if not exists
     if [ ! -f "$GLOBAL_CONFIG" ]; then
         cat > "$GLOBAL_CONFIG" << EOF
-# ZynexForge Global Configuration (User Mode)
+# ZynexForge Global Configuration
 platform:
   name: "ZynexForge CloudStack™ Professional"
   version: "${SCRIPT_VERSION}"
   default_node: "local"
   ssh_base_port: 22000
-  max_vms_per_node: 10
+  max_vms_per_node: 100
   user_mode: true
   enable_monitoring: true
   auto_backup: false
-  backup_retention_days: 7
+  backup_retention_days: 30
   enable_telemetry: false
   auto_update: true
+  kvm_enabled: $KVM_AVAILABLE
 
 security:
-  firewall_enabled: false
-  default_ssh_user: "$USER"
-  password_min_length: 8
+  firewall_enabled: true
+  default_ssh_user: "zynexuser"
+  password_min_length: 12
   use_ssh_keys: true
   enable_2fa: false
   ssh_timeout: 300
   enable_audit_log: true
-  encrypt_backups: false
+  encrypt_backups: true
 
 network:
-  bridge_interface: ""
+  bridge_interface: "br0"
   default_subnet: "192.168.100.0/24"
   dns_servers: "8.8.8.8,1.1.1.1"
-  enable_ipv6: false
+  enable_ipv6: true
   mtu: 1500
 
 performance:
   enable_hugepages: false
   cpu_pinning: false
-  io_threads: 2
+  io_threads: 4
   disk_cache: "writeback"
   net_model: "virtio"
 
 paths:
-  templates: "$USER_HOME/zynexforge/templates"
-  isos: "$DATA_DIR/isos"
-  vm_configs: "$DATA_DIR/vms"
-  vm_disks: "$DATA_DIR/disks"
-  logs: "$USER_HOME/zynexforge/logs"
-  backups: "$DATA_DIR/backups"
-  snapshots: "$DATA_DIR/snapshots"
+  templates: "\$USER_HOME/zynexforge/templates"
+  isos: "\$DATA_DIR/isos"
+  vm_configs: "\$DATA_DIR/vms"
+  vm_disks: "\$DATA_DIR/disks"
+  logs: "\$USER_HOME/zynexforge/logs"
+  backups: "\$DATA_DIR/backups"
+  snapshots: "\$DATA_DIR/snapshots"
 EOF
-        print_status "SUCCESS" "User mode configuration created"
-        log_message "CONFIG" "Created user mode configuration"
+        print_status "SUCCESS" "Global configuration created"
+        log_message "CONFIG" "Created global configuration"
     fi
     
-    # Create nodes database with local node only
+    # Create nodes database with enhanced real nodes
     if [ ! -f "$NODES_DB" ]; then
         cat > "$NODES_DB" << EOF
-# ZynexForge Nodes Database (User Mode)
+# ZynexForge Nodes Database
+# Global Production Nodes with Enhanced Specifications
 nodes:
   local:
     node_id: "local"
-    node_name: "Local User Mode"
+    node_name: "Local Development"
     location_name: "Local, Your Computer"
-    provider: "Self-Hosted (User Mode)"
+    provider: "Self-Hosted"
     public_ip: "127.0.0.1"
-    capabilities: ["kvm", "qemu", "docker", "jupyter"]
-    tags: ["development", "testing", "user-mode"]
+    capabilities: ["kvm", "qemu", "docker", "jupyter", "lxd"]
+    tags: ["development", "testing", "high-performance"]
     status: "active"
     created_at: "$(date -Iseconds)"
     user_mode: true
@@ -404,32 +424,66 @@ nodes:
       total_disk_gb: "$(df -BG $HOME | awk 'NR==2{print $2}' | sed 's/G//')"
       available_disk_gb: "$(df -BG $HOME | awk 'NR==2{print $4}' | sed 's/G//')"
 EOF
-        print_status "SUCCESS" "User mode nodes database created"
-        log_message "NODES" "Created nodes database for user mode"
+        
+        # Add real nodes with enhanced specifications
+        for node_id in "${!REAL_NODES[@]}"; do
+            IFS='|' read -r location region ip latency ram disk specs capabilities <<< "${REAL_NODES[$node_id]}"
+            cat >> "$NODES_DB" << EOF
+  $node_id:
+    node_id: "$node_id"
+    node_name: "$location"
+    location_name: "$location"
+    region_code: "$region"
+    provider: "ZynexForge Cloud"
+    public_ip: "$ip"
+    latency_ms: "$latency"
+    capabilities: ["$(echo "$capabilities" | sed "s/,/\", \"/g")"]
+    specifications: "$specs"
+    resources:
+      max_ram_gb: "$ram"
+      max_disk_gb: "$disk"
+      max_vcpus: "128"
+      storage_type: "NVMe SSD RAID"
+      network_speed: "10-100 Gbps"
+    sla:
+      uptime: "99.99%"
+      support: "24/7 Premium"
+      backup: "Daily Automated"
+    tags: ["production", "enterprise", "high-availability", "global", "gpu"]
+    status: "active"
+    created_at: "$(date -Iseconds)"
+    user_mode: false
+EOF
+        done
+        
+        print_status "SUCCESS" "Enhanced nodes database created with ${#REAL_NODES[@]} global locations"
+        log_message "NODES" "Created nodes database with ${#REAL_NODES[@]} nodes"
     fi
     
     # Generate SSH key if not exists
     if [ ! -f "$SSH_KEY_FILE" ]; then
-        print_status "INFO" "Generating SSH key pair for user mode..."
-        ssh-keygen -t ed25519 -f "$SSH_KEY_FILE" -N "" -q -C "zynexforge-user@$(hostname)"
+        print_status "INFO" "Generating SSH key pair..."
+        ssh-keygen -t ed25519 -f "$SSH_KEY_FILE" -N "" -q -C "zynexforge@$(hostname)"
         chmod 600 "$SSH_KEY_FILE"
         chmod 644 "${SSH_KEY_FILE}.pub"
         print_status "SUCCESS" "SSH key generated: $SSH_KEY_FILE"
-        log_message "SECURITY" "Generated SSH key pair for user mode"
+        log_message "SECURITY" "Generated SSH key pair"
     fi
     
     # Check and install dependencies
     if check_dependencies; then
-        print_status "SUCCESS" "Platform initialized successfully in user mode!"
-        log_message "INIT" "Platform initialization completed in user mode"
+        print_status "SUCCESS" "Platform initialized successfully!"
+        log_message "INIT" "Platform initialization completed"
     else
         print_status "ERROR" "Platform initialization failed"
         return 1
     fi
+    
+    return 0
 }
 
 # =============================================================================
-# VM MANAGEMENT FUNCTIONS (User Mode)
+# VM MANAGEMENT FUNCTIONS - OPTIMIZED
 # =============================================================================
 
 get_vm_list() {
@@ -482,7 +536,7 @@ EOF
 }
 
 # =============================================================================
-# ENHANCED KVM VM CREATION (User Mode)
+# ENHANCED KVM VM CREATION WITH QEMU FALLBACK
 # =============================================================================
 
 create_kvm_vm() {
@@ -491,9 +545,49 @@ create_kvm_vm() {
     local node_ip="$3"
     
     print_header
-    echo -e "${GREEN}🖥️ Create QEMU/KVM Virtual Machine (User Mode)${NC}"
+    echo -e "${GREEN}🖥️ Create QEMU/KVM Virtual Machine${NC}"
     echo -e "${YELLOW}Location: ${node_name} ($node_ip)${NC}"
     echo
+    
+    # Check KVM availability
+    if [ "$KVM_AVAILABLE" = false ]; then
+        print_status "WARNING" "KVM acceleration not available!"
+        echo "Options:"
+        echo "  1) Continue with QEMU-only (Slower but works)"
+        echo "  2) Try to enable KVM (Requires sudo)"
+        echo "  3) Cancel and go back"
+        echo
+        
+        read -rp "$(print_status "INPUT" "Select option (1-3): ")" kvm_choice
+        
+        case $kvm_choice in
+            1)
+                print_status "INFO" "Using QEMU-only mode (software virtualization)"
+                USE_KVM=false
+                ;;
+            2)
+                print_status "INFO" "Attempting to enable KVM..."
+                sudo chmod 666 /dev/kvm 2>/dev/null
+                if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+                    KVM_AVAILABLE=true
+                    USE_KVM=true
+                    print_status "SUCCESS" "KVM enabled successfully!"
+                else
+                    print_status "ERROR" "Failed to enable KVM"
+                    USE_KVM=false
+                fi
+                ;;
+            3)
+                return 1
+                ;;
+            *)
+                print_status "ERROR" "Invalid choice, using QEMU-only"
+                USE_KVM=false
+                ;;
+        esac
+    else
+        USE_KVM=true
+    fi
     
     # VM Name with validation
     while true; do
@@ -511,13 +605,16 @@ create_kvm_vm() {
     done
     
     # OS Selection Method
-    print_status "INFO" "Select OS Installation Method:"
-    echo "  1) 📦 Cloud Image (Fast Deployment - 1-2 minutes)"
-    echo "  2) 💿 ISO Image (Full Install - 10-30 minutes)"
+    print_header
+    echo -e "${GREEN}📦 Select Installation Method${NC}"
+    echo "─────────────────────────────────────"
+    echo "  1) 📦 Cloud Image (Fast Deployment)"
+    echo "  2) 💿 ISO Image (Full Install)"
     echo "  3) 🎯 Custom Image URL"
+    echo "  4) 🔧 Custom QCOW2 File"
     echo
     
-    read -rp "$(print_status "INPUT" "Choice (1-3): ")" os_method_choice
+    read -rp "$(print_status "INPUT" "Choice (1-4): ")" os_method_choice
     
     local os_template=""
     local iso_path=""
@@ -592,13 +689,25 @@ create_kvm_vm() {
             done
             ;;
             
+        4)
+            # Custom QCOW2 File
+            read -rp "$(print_status "INPUT" "Enter path to QCOW2 file: ")" custom_file
+            if [ -f "$custom_file" ]; then
+                OS_TYPE="custom-file"
+                img_url="file://$custom_file"
+            else
+                print_status "ERROR" "File not found: $custom_file"
+                return 1
+            fi
+            ;;
+            
         *)
             print_status "ERROR" "Invalid choice"
             return 1
             ;;
     esac
     
-    # Resource Allocation (User mode limits)
+    # Resource Allocation
     print_header
     echo -e "${GREEN}📊 Resource Allocation${NC}"
     echo "─────────────────────────────────────"
@@ -608,7 +717,7 @@ create_kvm_vm() {
     
     # CPU Cores
     while true; do
-        read -rp "$(print_status "INPUT" "CPU Cores (1-$available_cores, recommended: 2): ")" cpus
+        read -rp "$(print_status "INPUT" "CPU Cores (1-$available_cores, recommended: $((available_cores > 2 ? 2 : 1))): ")" cpus
         if validate_input "number" "$cpus" 1 "$available_cores"; then
             CPUS="$cpus"
             break
@@ -617,21 +726,33 @@ create_kvm_vm() {
     
     # RAM Allocation
     while true; do
-        read -rp "$(print_status "INPUT" "RAM in MB (256-$available_ram, recommended: 1024): ")" memory
+        read -rp "$(print_status "INPUT" "RAM in MB ($MIN_RAM_MB-$available_ram, recommended: $((available_ram > 2048 ? 2048 : available_ram/2))): ")" memory
         if validate_input "number" "$memory" "$MIN_RAM_MB" "$available_ram"; then
             MEMORY="$memory"
             break
         fi
     done
     
-    # Disk Size (limited for user mode)
+    # Disk Size
     while true; do
-        read -rp "$(print_status "INPUT" "Disk Size (e.g., 20G, min ${MIN_DISK_GB}G, max 50G): ")" disk_size
+        read -rp "$(print_status "INPUT" "Disk Size (e.g., 20G, min ${MIN_DISK_GB}G, max ${MAX_DISK_GB}G): ")" disk_size
         if validate_input "size" "$disk_size"; then
-            local size_num=${disk_size%[GgMm]}
+            local size_num=${disk_size%[GgMmKk]}
             local size_unit=${disk_size: -1}
-            if [[ "$size_unit" =~ [Gg] ]] && [ "$size_num" -gt 50 ]; then
-                print_status "ERROR" "Maximum disk size for user mode is 50G"
+            
+            # Convert to MB for comparison
+            local size_mb=$size_num
+            if [[ "$size_unit" =~ [Gg] ]]; then
+                size_mb=$((size_num * 1024))
+            elif [[ "$size_unit" =~ [Kk] ]]; then
+                size_mb=$((size_num / 1024))
+            fi
+            
+            local max_mb=$((MAX_DISK_GB * 1024))
+            if [ "$size_mb" -lt $((MIN_DISK_GB * 1024)) ]; then
+                print_status "ERROR" "Minimum disk size is ${MIN_DISK_GB}G"
+            elif [ "$size_mb" -gt "$max_mb" ]; then
+                print_status "ERROR" "Maximum disk size is ${MAX_DISK_GB}G"
             else
                 DISK_SIZE="$disk_size"
                 break
@@ -676,12 +797,12 @@ create_kvm_vm() {
     read -rp "$(print_status "INPUT" "Hostname (default: $VM_NAME): ")" hostname_input
     HOSTNAME="${hostname_input:-$VM_NAME}"
     
-    read -rp "$(print_status "INPUT" "Username (default: $USER): ")" username_input
-    USERNAME="${username_input:-$USER}"
+    read -rp "$(print_status "INPUT" "Username (default: zynexuser): ")" username_input
+    USERNAME="${username_input:-zynexuser}"
     
     read -rp "$(print_status "INPUT" "Password (leave empty to generate): ")" password_input
     if [ -z "$password_input" ]; then
-        PASSWORD=$(generate_password 12 true)
+        PASSWORD=$(generate_password 16 true)
         print_status "INFO" "Generated password: $PASSWORD"
     else
         PASSWORD="$password_input"
@@ -701,29 +822,36 @@ create_kvm_vm() {
     
     # Download image if needed
     if [ -n "$img_url" ]; then
-        print_status "PROGRESS" "Downloading image from $img_url"
+        print_status "PROGRESS" "Downloading image..."
         IMG_FILE="$DATA_DIR/disks/${VM_NAME}.qcow2"
         
-        if [[ "$img_url" == *.iso ]]; then
+        if [[ "$img_url" == *.iso ]] || [[ "$os_method_choice" == "2" ]]; then
             # ISO download
             iso_path="$DATA_DIR/isos/$(basename "$img_url")"
             mkdir -p "$DATA_DIR/isos"
             
             if [ ! -f "$iso_path" ]; then
-                curl -L -o "$iso_path" "$img_url"
+                if [[ "$img_url" == http* ]]; then
+                    curl -L -o "$iso_path" "$img_url"
+                else
+                    cp "$img_url" "$iso_path"
+                fi
                 print_status "SUCCESS" "ISO downloaded: $iso_path"
             else
                 print_status "INFO" "ISO already exists: $iso_path"
             fi
             
-            # Create disk from ISO (user mode)
+            # Create disk for ISO installation
             qemu-img create -f qcow2 "$IMG_FILE" "$DISK_SIZE"
         else
-            # QCOW2 image (user mode - direct download)
+            # QCOW2 image
             if [[ "$img_url" == http* ]]; then
-                curl -L -o "/tmp/${VM_NAME}.img" "$img_url"
-                qemu-img convert -f qcow2 -O qcow2 "/tmp/${VM_NAME}.img" "$IMG_FILE"
-                rm -f "/tmp/${VM_NAME}.img"
+                curl -L -o "/tmp/${VM_NAME}.qcow2" "$img_url"
+                qemu-img convert -f qcow2 -O qcow2 "/tmp/${VM_NAME}.qcow2" "$IMG_FILE"
+                rm -f "/tmp/${VM_NAME}.qcow2"
+            elif [[ "$img_url" == file://* ]]; then
+                local file_path="${img_url#file://}"
+                cp "$file_path" "$IMG_FILE"
             fi
             # Resize disk if needed
             qemu-img resize "$IMG_FILE" "$DISK_SIZE"
@@ -749,14 +877,17 @@ create_kvm_vm() {
     
     print_status "SUCCESS" "Virtual Machine '$VM_NAME' created successfully!"
     echo
-    echo -e "${GREEN}📋 VM Details:${NC}"
+    echo -e "${GREEN}📋 VM Specifications:${NC}"
     echo "─────────────────────────────────────"
     echo "Name: $VM_NAME"
     echo "Hostname: $HOSTNAME"
     echo "Username: $USERNAME"
     echo "Password: $PASSWORD"
     echo "SSH: ssh -p $SSH_PORT $USERNAME@localhost"
-    echo "Resources: ${CPUS}vCPU, ${MEMORY}MB RAM, ${DISK_SIZE} disk"
+    echo "CPU: ${CPUS} vCPUs"
+    echo "RAM: ${MEMORY}MB"
+    echo "Disk: ${DISK_SIZE}"
+    echo "Acceleration: $([ "$USE_KVM" = true ] && echo "KVM" || echo "QEMU-only")"
     echo "Status: $STATUS"
     echo
 }
@@ -768,7 +899,7 @@ create_cloud_init_seed() {
     local password=$4
     local ssh_key=$5
     
-    local cloud_dir="/tmp/cloud-init-$vm_name"
+    local cloud_dir="/tmp/cloud-init-$vm_name-$(date +%s)"
     mkdir -p "$cloud_dir"
     
     # Create user-data
@@ -784,7 +915,7 @@ users:
     passwd: $(echo "$password" | openssl passwd -6 -stdin)
     ssh_authorized_keys:
       - $ssh_key
-    groups: users, sudo
+    groups: users, admin, sudo
     home: /home/$username
     system: false
     primary_group: $username
@@ -796,15 +927,19 @@ disable_root: false
 # Update packages on first boot
 package_update: true
 package_upgrade: true
+package_reboot_if_required: true
 
-# Install useful packages
+# Install essential packages
 packages:
   - qemu-guest-agent
+  - cloud-initramfs-growroot
   - curl
   - wget
   - nano
   - htop
   - net-tools
+  - openssh-server
+  - unattended-upgrades
 
 # Run commands on first boot
 runcmd:
@@ -812,6 +947,14 @@ runcmd:
   - systemctl start qemu-guest-agent
   - sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
   - systemctl restart sshd
+  - cloud-init clean
+
+# Power state
+power_state:
+  mode: reboot
+  message: First boot completed
+  timeout: 120
+  condition: true
 EOF
     
     # Create meta-data
@@ -852,33 +995,39 @@ start_vm() {
             return 1
         fi
         
-        # Build QEMU command (user mode)
+        # Build QEMU command
         local qemu_cmd="qemu-system-x86_64"
         
         # Basic parameters
         qemu_cmd+=" -name $vm_name"
         qemu_cmd+=" -machine q35"
-        qemu_cmd+=" -cpu host"
+        
+        # Use KVM if available, otherwise QEMU-only
+        if [ "$KVM_AVAILABLE" = true ]; then
+            qemu_cmd+=" -enable-kvm -cpu host"
+            print_status "INFO" "Using KVM acceleration"
+        else
+            qemu_cmd+=" -cpu qemu64"
+            print_status "INFO" "Using QEMU-only mode (no KVM)"
+        fi
+        
         qemu_cmd+=" -smp $CPUS"
         qemu_cmd+=" -m ${MEMORY}M"
-        
-        # Try to use KVM if available
-        if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-            qemu_cmd+=" -enable-kvm"
-        fi
         
         # Display
         if [ "$GUI_MODE" = "yes" ]; then
             qemu_cmd+=" -vnc :$((VNC_PORT - 5900))"
+            qemu_cmd+=" -vga virtio"
         else
             qemu_cmd+=" -nographic"
+            qemu_cmd+=" -serial mon:stdio"
         fi
         
-        # Disk and CD-ROM
-        qemu_cmd+=" -drive file=$IMG_FILE,if=virtio,format=qcow2"
-        qemu_cmd+=" -drive file=$SEED_FILE,if=virtio,format=raw"
+        # Disk and CD-ROM (optimized for performance)
+        qemu_cmd+=" -drive file=$IMG_FILE,if=virtio,format=qcow2,cache=writeback,discard=on"
+        qemu_cmd+=" -drive file=$SEED_FILE,if=virtio,format=raw,readonly=on"
         
-        # Network (user mode networking)
+        # Network (optimized)
         qemu_cmd+=" -netdev user,id=net0,hostfwd=tcp::$SSH_PORT-:22"
         
         # Add additional port forwards
@@ -892,9 +1041,17 @@ start_vm() {
         
         qemu_cmd+=" -device virtio-net-pci,netdev=net0"
         
-        # Additional optimizations for user mode
+        # Performance optimizations
+        qemu_cmd+=" -device virtio-balloon-pci"
+        qemu_cmd+=" -object rng-random,filename=/dev/urandom,id=rng0"
+        qemu_cmd+=" -device virtio-rng-pci,rng=rng0"
+        qemu_cmd+=" -audiodev none,id=audio0"
+        
+        # Daemonize for background operation
         qemu_cmd+=" -daemonize"
         qemu_cmd+=" -pidfile /tmp/qemu-$vm_name.pid"
+        
+        print_status "DEBUG" "QEMU Command: $qemu_cmd"
         
         # Start VM
         eval "$qemu_cmd"
@@ -907,7 +1064,7 @@ start_vm() {
             if [ "$GUI_MODE" = "yes" ]; then
                 print_status "INFO" "VNC: vncviewer localhost:$VNC_PORT"
             fi
-            log_message "VM" "Started VM: $vm_name"
+            log_message "VM" "Started VM: $vm_name (KVM: $KVM_AVAILABLE)"
         else
             print_status "ERROR" "Failed to start VM '$vm_name'"
             log_message "ERROR" "Failed to start VM: $vm_name"
@@ -916,7 +1073,7 @@ start_vm() {
 }
 
 # =============================================================================
-# DOCKER VM FUNCTIONS (User Mode)
+# PREMIUM DOCKER VM FUNCTIONS
 # =============================================================================
 
 create_docker_vm_advanced() {
@@ -924,25 +1081,9 @@ create_docker_vm_advanced() {
     local node_name="$2"
     
     print_header
-    echo -e "${GREEN}🐳 Create Docker Container (User Mode)${NC}"
+    echo -e "${GREEN}🐳 Create Premium Docker Container${NC}"
     echo -e "${YELLOW}Location: ${node_name}${NC}"
     echo
-    
-    # Check Docker availability
-    if ! command -v docker > /dev/null 2>&1; then
-        print_status "ERROR" "Docker is not installed"
-        print_status "INFO" "Install Docker with: curl -fsSL https://get.docker.com | sh"
-        print_status "INFO" "Then add user to docker group: sudo usermod -aG docker $USER"
-        return 1
-    fi
-    
-    # Check if user can run docker
-    if ! docker info > /dev/null 2>&1; then
-        print_status "ERROR" "Cannot connect to Docker daemon"
-        print_status "INFO" "Make sure Docker is running and user has permissions"
-        print_status "INFO" "You may need to log out and log back in after adding to docker group"
-        return 1
-    fi
     
     # Container Name
     while true; do
@@ -984,6 +1125,11 @@ create_docker_vm_advanced() {
         return 1
     fi
     
+    # Advanced Configuration
+    print_header
+    echo -e "${GREEN}⚙️ Advanced Configuration${NC}"
+    echo "─────────────────────────────────────"
+    
     # Port Mapping
     local port_mapping=""
     read -rp "$(print_status "INPUT" "Add port mapping? (e.g., 80:8080 or leave empty): ")" ports_input
@@ -991,12 +1137,10 @@ create_docker_vm_advanced() {
         port_mapping="-p $ports_input"
     fi
     
-    # Volume Mapping (user home directory)
+    # Volume Mapping
     local volume_mapping=""
-    read -rp "$(print_status "INPUT" "Mount host directory? (e.g., ~/data:/data or leave empty): ")" volume_input
+    read -rp "$(print_status "INPUT" "Add volume mapping? (e.g., /host:/container or leave empty): ")" volume_input
     if [ -n "$volume_input" ]; then
-        # Expand ~ to home directory
-        volume_input="${volume_input/#\~/$HOME}"
         volume_mapping="-v $volume_input"
     fi
     
@@ -1005,6 +1149,25 @@ create_docker_vm_advanced() {
     read -rp "$(print_status "INPUT" "Add environment variables? (e.g., KEY=value or leave empty): ")" env_input
     if [ -n "$env_input" ]; then
         env_vars="-e $env_input"
+    fi
+    
+    # Resource Limits
+    local resource_limits=""
+    read -rp "$(print_status "INPUT" "Set memory limit? (e.g., 512m or leave empty): ")" memory_limit
+    if [ -n "$memory_limit" ]; then
+        resource_limits+=" --memory=$memory_limit"
+    fi
+    
+    read -rp "$(print_status "INPUT" "Set CPU limit? (e.g., 1.5 or leave empty): ")" cpu_limit
+    if [ -n "$cpu_limit" ]; then
+        resource_limits+=" --cpus=$cpu_limit"
+    fi
+    
+    # Network Mode
+    local network_mode="bridge"
+    read -rp "$(print_status "INPUT" "Network mode (bridge/host/none, default: bridge): ")" network_input
+    if [ -n "$network_input" ]; then
+        network_mode="$network_input"
     fi
     
     # Create container
@@ -1017,9 +1180,11 @@ create_docker_vm_advanced() {
     [ -n "$port_mapping" ] && docker_cmd+=" $port_mapping"
     [ -n "$volume_mapping" ] && docker_cmd+=" $volume_mapping"
     [ -n "$env_vars" ] && docker_cmd+=" $env_vars"
+    [ -n "$resource_limits" ] && docker_cmd+=" $resource_limits"
+    docker_cmd+=" --network $network_mode"
     docker_cmd+=" $docker_image"
     
-    print_status "PROGRESS" "Creating container: $container_name"
+    print_status "PROGRESS" "Creating premium container: $container_name"
     if eval "$docker_cmd"; then
         print_status "SUCCESS" "Docker container '$container_name' created successfully!"
         
@@ -1031,36 +1196,33 @@ DOCKER_IMAGE="$docker_image"
 PORTS="$ports_input"
 VOLUMES="$volume_input"
 ENV_VARS="$env_input"
+RESOURCES="$resource_limits"
+NETWORK="$network_mode"
 CREATED="$(date -Iseconds)"
 STATUS="running"
 EOF
         
-        log_message "DOCKER" "Created container: $container_name"
+        log_message "DOCKER" "Created premium container: $container_name"
         
         # Show container info
         echo
-        echo -e "${GREEN}📋 Container Details:${NC}"
+        echo -e "${GREEN}📋 Container Specifications:${NC}"
         echo "─────────────────────────────────────"
         echo "Name: $container_name"
         echo "Image: $docker_image"
         echo "Status: running"
+        echo "Network: $network_mode"
         [ -n "$ports_input" ] && echo "Ports: $ports_input"
+        [ -n "$memory_limit" ] && echo "Memory Limit: $memory_limit"
+        [ -n "$cpu_limit" ] && echo "CPU Limit: $cpu_limit"
         docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_name" | xargs -I {} echo "IP Address: {}"
-        
-        # Show useful commands
-        echo
-        echo -e "${YELLOW}Useful Commands:${NC}"
-        echo "  Stop: docker stop $container_name"
-        echo "  Start: docker start $container_name"
-        echo "  Logs: docker logs $container_name"
-        echo "  Shell: docker exec -it $container_name /bin/bash"
     else
         print_status "ERROR" "Failed to create container"
     fi
 }
 
 # =============================================================================
-# JUPYTER NOTEBOOK FUNCTIONS (User Mode)
+# PREMIUM JUPYTER NOTEBOOK FUNCTIONS
 # =============================================================================
 
 create_jupyter_vm() {
@@ -1068,15 +1230,9 @@ create_jupyter_vm() {
     local node_name="$2"
     
     print_header
-    echo -e "${GREEN}🔬 Create Jupyter Notebook Server (User Mode)${NC}"
+    echo -e "${GREEN}🔬 Create Premium Jupyter Notebook Server${NC}"
     echo -e "${YELLOW}Location: ${node_name}${NC}"
     echo
-    
-    # Check Docker availability
-    if ! command -v docker > /dev/null 2>&1; then
-        print_status "ERROR" "Docker is required for Jupyter notebooks"
-        return 1
-    fi
     
     # Notebook Name
     while true; do
@@ -1119,26 +1275,43 @@ create_jupyter_vm() {
     local available_port=$(find_available_port "$notebook_port")
     print_status "INFO" "Jupyter port: $available_port"
     
-    # Volume for persistent data (in user home)
-    local volume_path="$HOME/jupyter/${notebook_name}"
+    # Volume for persistent data
+    local volume_path="$DATA_DIR/jupyter/${notebook_name}"
     mkdir -p "$volume_path"
+    
+    # Advanced Configuration
+    print_header
+    echo -e "${GREEN}⚙️ Advanced Configuration${NC}"
+    echo "─────────────────────────────────────"
     
     # Token generation
     local jupyter_token=$(generate_password 32 false)
     
+    # Resource limits
+    local memory_limit=""
+    read -rp "$(print_status "INPUT" "Memory limit (e.g., 4g, default: 2g): ")" mem_input
+    memory_limit="${mem_input:-2g}"
+    
+    local cpu_limit=""
+    read -rp "$(print_status "INPUT" "CPU limit (e.g., 1.5, default: 1): ")" cpu_input
+    cpu_limit="${cpu_input:-1}"
+    
     # Create Jupyter container
-    print_status "PROGRESS" "Creating Jupyter notebook server: $notebook_name"
+    print_status "PROGRESS" "Creating premium Jupyter notebook server: $notebook_name"
     
     local docker_cmd="docker run -d"
     docker_cmd+=" --name jupyter-$notebook_name"
     docker_cmd+=" -p $available_port:8888"
     docker_cmd+=" -v $volume_path:/home/jovyan/work"
     docker_cmd+=" -e JUPYTER_TOKEN=$jupyter_token"
+    docker_cmd+=" -e GRANT_SUDO=yes"
+    docker_cmd+=" --memory=$memory_limit"
+    docker_cmd+=" --cpus=$cpu_limit"
     docker_cmd+=" --restart unless-stopped"
     docker_cmd+=" $notebook_image"
     
     if eval "$docker_cmd"; then
-        print_status "SUCCESS" "Jupyter notebook server created successfully!"
+        print_status "SUCCESS" "Premium Jupyter notebook server created successfully!"
         
         # Save configuration
         local config_file="$DATA_DIR/jupyter/${notebook_name}.conf"
@@ -1148,20 +1321,24 @@ JUPYTER_IMAGE="$notebook_image"
 JUPYTER_PORT="$available_port"
 JUPYTER_TOKEN="$jupyter_token"
 VOLUME_PATH="$volume_path"
+MEMORY_LIMIT="$memory_limit"
+CPU_LIMIT="$cpu_limit"
 CREATED="$(date -Iseconds)"
 STATUS="running"
 EOF
         
-        log_message "JUPYTER" "Created notebook server: $notebook_name"
+        log_message "JUPYTER" "Created premium notebook server: $notebook_name"
         
         # Show access details
         echo
-        echo -e "${GREEN}📋 Jupyter Details:${NC}"
+        echo -e "${GREEN}📋 Jupyter Specifications:${NC}"
         echo "─────────────────────────────────────"
         echo "Name: $notebook_name"
         echo "URL: http://localhost:$available_port"
         echo "Token: $jupyter_token"
         echo "Volume: $volume_path"
+        echo "Memory: $memory_limit"
+        echo "CPU: $cpu_limit"
         echo
         echo -e "${YELLOW}Access your notebook at: http://localhost:$available_port${NC}"
         echo -e "${YELLOW}Use token: $jupyter_token${NC}"
@@ -1179,8 +1356,343 @@ EOF
 }
 
 # =============================================================================
-# VM MANAGEMENT DASHBOARD
+# MAIN MENU - ENHANCED
 # =============================================================================
+
+main_menu() {
+    while true; do
+        print_header
+        
+        local vms=($(get_vm_list))
+        local vm_count=${#vms[@]}
+        
+        # Display VM status if any exist
+        if [ $vm_count -gt 0 ]; then
+            echo -e "${GREEN}📊 Virtual Machines (${vm_count} total):${NC}"
+            echo "─────────────────────────────────────"
+            
+            for i in "${!vms[@]}"; do
+                local vm_name="${vms[$i]}"
+                local status="🔴 Stopped"
+                local config_file="$DATA_DIR/vms/$vm_name.conf"
+                
+                if [[ -f "$config_file" ]]; then
+                    source "$config_file" 2>/dev/null
+                    
+                    # Check if VM is running
+                    if ps aux | grep -q "[q]emu-system.*$IMG_FILE"; then
+                        status="🟢 Running"
+                    fi
+                    
+                    printf "  %2d) %-25s %-12s %s\n" $((i+1)) "$vm_name" "$status" "(${CPUS}vCPU/${MEMORY}MB)"
+                else
+                    printf "  %2d) %-25s %-12s\n" $((i+1)) "$vm_name" "❓ Unknown"
+                fi
+            done
+            echo
+        fi
+        
+        # System Info
+        echo -e "${CYAN}System Status:${NC}"
+        echo "  KVM: $([ "$KVM_AVAILABLE" = true ] && echo "🟢 Available" || echo "🔴 Not Available")"
+        echo "  CPU: ${MAX_CPU_CORES} cores"
+        echo "  RAM: ${MAX_RAM_MB}MB"
+        echo "  Disk: ${MAX_DISK_GB}GB free"
+        echo
+        
+        # Enhanced Main Menu Options
+        echo -e "${GREEN}🏠 Main Menu:${NC}"
+        echo "   1) ⚡ Create New Virtual Machine (Premium)"
+        echo "   2) 🖥️  VM Management Dashboard"
+        echo "   3) 🌐 Premium Nodes Deployment"
+        echo "   4) 🐳 Docker Container Platform"
+        echo "   5) 🔬 Jupyter Cloud Lab (Premium)"
+        echo "   6) 📦 ISO & Template Library"
+        echo "   7) 📊 Performance Monitoring"
+        echo "   8) 💾 Backup & Disaster Recovery"
+        echo "   9) ⚙️  Advanced Settings"
+        echo "  10) 🔧 System Diagnostics"
+        echo "  11) 📚 Documentation & Help"
+        echo "   0) 🚪 Exit"
+        echo
+        
+        read -rp "$(print_status "INPUT" "Select option (0-11): ")" choice
+        
+        case $choice in
+            1) create_new_vm_advanced ;;
+            2) vm_management_dashboard ;;
+            3) nodes_menu ;;
+            4) docker_vm_menu ;;
+            5) jupyter_cloud_menu ;;
+            6) iso_library_menu ;;
+            7) monitoring_menu ;;
+            8) backup_menu ;;
+            9) settings_menu ;;
+            10) system_diagnostics_menu ;;
+            11) show_documentation ;;
+            0) 
+                print_status "INFO" "Thank you for using ZynexForge CloudStack™!"
+                log_message "SYSTEM" "User exited from main menu"
+                exit 0
+                ;;
+            *) 
+                print_status "ERROR" "Invalid option. Please try again."
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+create_new_vm_advanced() {
+    print_header
+    echo -e "${GREEN}🚀 Create New Virtual Machine (Premium)${NC}"
+    echo -e "${YELLOW}Step 1: Select Deployment Location${NC}"
+    echo
+    
+    # Node Selection
+    local node_options=("local|Local Development|127.0.0.1")
+    local node_index=1
+    
+    echo -e "${GREEN}${node_index}) 🇺🇳 Local Development${NC}"
+    echo "   └─ IP: 127.0.0.1 | Capabilities: QEMU/KVM, Docker, Jupyter"
+    echo "      Resources: ${MAX_CPU_CORES} Cores • ${MAX_RAM_MB}MB RAM • ${MAX_DISK_GB}GB Disk"
+    echo "      Acceleration: $([ "$KVM_AVAILABLE" = true ] && echo "KVM" || echo "QEMU-only")"
+    echo
+    
+    # Premium Production Nodes
+    echo -e "${YELLOW}🌍 Premium Production Nodes (Enterprise Grade):${NC}"
+    for node_id in "${!REAL_NODES[@]}"; do
+        IFS='|' read -r location region ip latency ram disk specs capabilities <<< "${REAL_NODES[$node_id]}"
+        ((node_index++))
+        node_options+=("$node_id|$location|$ip")
+        
+        # Emoji mapping
+        local emoji="🌐"
+        case "$location" in
+            *"India"*) emoji="🇮🇳" ;;
+            *"Singapore"*) emoji="🇸🇬" ;;
+            *"Germany"*) emoji="🇩🇪" ;;
+            *"USA"*) emoji="🇺🇸" ;;
+            *"Japan"*) emoji="🇯🇵" ;;
+        esac
+        
+        echo -e "${GREEN}${node_index}) ${emoji} ${location}${NC}"
+        echo "   └─ IP: $ip | Latency: ${latency}ms"
+        echo "      Specs: $specs"
+        echo "      Resources: ${ram}GB RAM • ${disk}GB NVMe SSD"
+        echo "      Capabilities: $capabilities"
+        echo
+    done
+    
+    # Node selection
+    while true; do
+        read -rp "$(print_status "INPUT" "Select node (1-${#node_options[@]}): ")" node_choice
+        
+        if [[ "$node_choice" =~ ^[0-9]+$ ]] && [ "$node_choice" -ge 1 ] && [ "$node_choice" -le ${#node_options[@]} ]; then
+            IFS='|' read -r selected_node_id selected_node_name selected_node_ip <<< "${node_options[$((node_choice-1))]}"
+            break
+        else
+            print_status "ERROR" "Invalid selection. Please enter a number between 1 and ${#node_options[@]}"
+        fi
+    done
+    
+    # VM Type Selection
+    print_header
+    echo -e "${GREEN}🚀 Create New Virtual Machine (Premium)${NC}"
+    echo -e "${YELLOW}Step 2: Select Virtualization Technology${NC}"
+    echo
+    
+    echo "Available Virtualization Types:"
+    echo "───────────────────────────────"
+    echo "  1) 🖥️  QEMU/KVM Virtual Machine (Premium)"
+    echo "     └─ Complete OS isolation • $([ "$KVM_AVAILABLE" = true ] && echo "KVM Accelerated" || echo "QEMU-only") • Snapshots"
+    echo
+    echo "  2) 🐳 Docker Container (Application Container)"
+    echo "     └─ Lightweight • Fast startup • Portable • Microservices"
+    echo
+    echo "  3) 🔬 Jupyter Notebook Server (Data Science)"
+    echo "     └─ Data science • Machine learning • Code sandbox • GPU Support"
+    echo
+    
+    while true; do
+        read -rp "$(print_status "INPUT" "Select virtualization type (1-3): ")" vm_type_choice
+        
+        case $vm_type_choice in
+            1)
+                create_kvm_vm "$selected_node_id" "$selected_node_name" "$selected_node_ip"
+                break
+                ;;
+            2)
+                create_docker_vm_advanced "$selected_node_id" "$selected_node_name"
+                break
+                ;;
+            3)
+                create_jupyter_vm "$selected_node_id" "$selected_node_name"
+                break
+                ;;
+            *)
+                print_status "ERROR" "Invalid selection. Please enter 1-3."
+                ;;
+        esac
+    done
+}
+
+# =============================================================================
+# OPTIMIZED VM MANAGEMENT DASHBOARD
+# =============================================================================
+
+vm_management_dashboard() {
+    while true; do
+        print_header
+        echo -e "${GREEN}🖥️ VM Management Dashboard${NC}"
+        echo "─────────────────────────────────────"
+        
+        local vms=($(get_vm_list))
+        local vm_count=${#vms[@]}
+        
+        if [ $vm_count -eq 0 ]; then
+            echo -e "${YELLOW}No virtual machines found.${NC}"
+            echo
+            read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to return...")"
+            return
+        fi
+        
+        # Display VMs with status
+        echo -e "${CYAN}Virtual Machines (${vm_count} total):${NC}"
+        echo "─────────────────────────────────────"
+        
+        for i in "${!vms[@]}"; do
+            local vm_name="${vms[$i]}"
+            local config_file="$DATA_DIR/vms/$vm_name.conf"
+            
+            if [[ -f "$config_file" ]]; then
+                source "$config_file" 2>/dev/null
+                
+                # Check if VM is running
+                local status="🔴 Stopped"
+                local pid_file="/tmp/qemu-$vm_name.pid"
+                if [ -f "$pid_file" ] && ps -p "$(cat "$pid_file")" > /dev/null 2>&1; then
+                    status="🟢 Running"
+                fi
+                
+                printf "  %2d) %-25s %-12s %s\n" $((i+1)) "$vm_name" "$status" "(${CPUS}vCPU/${MEMORY}MB)"
+            fi
+        done
+        
+        echo
+        echo -e "${GREEN}📋 Management Options:${NC}"
+        echo "   1) ▶️  Start VM"
+        echo "   2) ⏹️  Stop VM"
+        echo "   3) 🔄 Restart VM"
+        echo "   4) 🗑️  Delete VM"
+        echo "   5) 📊 View VM Details"
+        echo "   6) 💾 Create Snapshot"
+        echo "   7) 🔙 Restore Snapshot"
+        echo "   8) 📡 Connect via SSH"
+        echo "   9) 📋 List All Snapshots"
+        echo "  10) ⚡ Performance Monitor"
+        echo "   0) ↩️  Back to Main Menu"
+        echo
+        
+        read -rp "$(print_status "INPUT" "Select option (0-10): ")" choice
+        
+        case $choice in
+            1)
+                read -rp "$(print_status "INPUT" "Enter VM number to start: ")" vm_num
+                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
+                    start_vm "${vms[$((vm_num-1))]}"
+                else
+                    print_status "ERROR" "Invalid selection"
+                fi
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            2)
+                read -rp "$(print_status "INPUT" "Enter VM number to stop: ")" vm_num
+                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
+                    stop_vm "${vms[$((vm_num-1))]}"
+                else
+                    print_status "ERROR" "Invalid selection"
+                fi
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            3)
+                read -rp "$(print_status "INPUT" "Enter VM number to restart: ")" vm_num
+                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
+                    stop_vm "${vms[$((vm_num-1))]}"
+                    sleep 2
+                    start_vm "${vms[$((vm_num-1))]}"
+                else
+                    print_status "ERROR" "Invalid selection"
+                fi
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            4)
+                read -rp "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
+                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
+                    delete_vm "${vms[$((vm_num-1))]}"
+                else
+                    print_status "ERROR" "Invalid selection"
+                fi
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            5)
+                read -rp "$(print_status "INPUT" "Enter VM number to view: ")" vm_num
+                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
+                    view_vm_details "${vms[$((vm_num-1))]}"
+                else
+                    print_status "ERROR" "Invalid selection"
+                fi
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            6)
+                read -rp "$(print_status "INPUT" "Enter VM number for snapshot: ")" vm_num
+                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
+                    create_snapshot "${vms[$((vm_num-1))]}"
+                else
+                    print_status "ERROR" "Invalid selection"
+                fi
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            7)
+                read -rp "$(print_status "INPUT" "Enter VM number to restore: ")" vm_num
+                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
+                    restore_snapshot "${vms[$((vm_num-1))]}"
+                else
+                    print_status "ERROR" "Invalid selection"
+                fi
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            8)
+                read -rp "$(print_status "INPUT" "Enter VM number to connect: ")" vm_num
+                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
+                    connect_vm_ssh "${vms[$((vm_num-1))]}"
+                else
+                    print_status "ERROR" "Invalid selection"
+                fi
+                ;;
+            9)
+                list_snapshots
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            10)
+                read -rp "$(print_status "INPUT" "Enter VM number to monitor: ")" vm_num
+                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
+                    monitor_vm_performance "${vms[$((vm_num-1))]}"
+                else
+                    print_status "ERROR" "Invalid selection"
+                fi
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            0)
+                return
+                ;;
+            *)
+                print_status "ERROR" "Invalid option"
+                sleep 1
+                ;;
+        esac
+    done
+}
 
 stop_vm() {
     local vm_name=$1
@@ -1243,7 +1755,7 @@ view_vm_details() {
     
     if load_vm_config "$vm_name"; then
         print_header
-        echo -e "${GREEN}📋 VM Details: $vm_name${NC}"
+        echo -e "${GREEN}📋 VM Specifications: $vm_name${NC}"
         echo "─────────────────────────────────────"
         echo "Name: $VM_NAME"
         echo "Node: $NODE_ID"
@@ -1255,12 +1767,13 @@ view_vm_details() {
         echo "Created: $CREATED"
         echo "Status: $STATUS"
         echo
-        echo -e "${CYAN}Resources:${NC}"
-        echo "  CPU Cores: $CPUS"
+        echo -e "${CYAN}Hardware Specifications:${NC}"
+        echo "  CPU Cores: $CPUS vCPUs"
         echo "  Memory: ${MEMORY}MB"
         echo "  Disk: $DISK_SIZE"
+        echo "  Acceleration: $([ "$KVM_AVAILABLE" = true ] && echo "KVM" || echo "QEMU-only")"
         echo
-        echo -e "${CYAN}Network:${NC}"
+        echo -e "${CYAN}Network Configuration:${NC}"
         echo "  SSH: ssh -p $SSH_PORT $USERNAME@localhost"
         if [ "$GUI_MODE" = "yes" ]; then
             echo "  VNC: vncviewer localhost:$VNC_PORT"
@@ -1269,7 +1782,7 @@ view_vm_details() {
             echo "  Port Forwards: $PORT_FORWARDS"
         fi
         echo
-        echo -e "${CYAN}Files:${NC}"
+        echo -e "${CYAN}Storage Files:${NC}"
         echo "  Disk: $IMG_FILE"
         echo "  Seed: $SEED_FILE"
         echo "  Config: $DATA_DIR/vms/$vm_name.conf"
@@ -1299,16 +1812,24 @@ create_snapshot() {
         local snapshot_dir="$DATA_DIR/snapshots/$vm_name"
         mkdir -p "$snapshot_dir"
         
-        # Stop VM before snapshot
-        stop_vm "$vm_name"
+        # Stop VM before snapshot (optional but recommended)
+        read -rp "$(print_status "INPUT" "Stop VM before creating snapshot? (y/n): ")" stop_before
+        if [[ "$stop_before" =~ ^[Yy]$ ]]; then
+            stop_vm "$vm_name"
+        fi
         
-        # Create snapshot copy
-        if cp "$IMG_FILE" "$snapshot_dir/${snapshot_name}.qcow2"; then
+        # Create snapshot of disk
+        if qemu-img snapshot -c "$snapshot_name" "$IMG_FILE" 2>/dev/null; then
             # Copy configuration
             cp "$DATA_DIR/vms/$vm_name.conf" "$snapshot_dir/${snapshot_name}.conf"
             
             print_status "SUCCESS" "Snapshot '$snapshot_name' created successfully"
             log_message "SNAPSHOT" "Created snapshot for VM: $vm_name"
+            
+            # Restart VM if it was stopped
+            if [[ "$stop_before" =~ ^[Yy]$ ]]; then
+                start_vm "$vm_name"
+            fi
         else
             print_status "ERROR" "Failed to create snapshot"
         fi
@@ -1316,260 +1837,161 @@ create_snapshot() {
 }
 
 # =============================================================================
-# MAIN MENU (User Mode)
+# OPTIMIZED NODES MENU
 # =============================================================================
 
-main_menu() {
+nodes_menu() {
     while true; do
         print_header
-        
-        local vms=($(get_vm_list))
-        local vm_count=${#vms[@]}
-        
-        # Display VM status if any exist
-        if [ $vm_count -gt 0 ]; then
-            echo -e "${GREEN}📊 Virtual Machines (${vm_count} total):${NC}"
-            echo "─────────────────────────────────────"
-            
-            for i in "${!vms[@]}"; do
-                local vm_name="${vms[$i]}"
-                local status="🔴 Stopped"
-                local config_file="$DATA_DIR/vms/$vm_name.conf"
-                
-                if [[ -f "$config_file" ]]; then
-                    source "$config_file" 2>/dev/null
-                    
-                    # Check if VM is running
-                    local pid_file="/tmp/qemu-$vm_name.pid"
-                    if [ -f "$pid_file" ] && ps -p "$(cat "$pid_file")" > /dev/null 2>&1; then
-                        status="🟢 Running"
-                    fi
-                    
-                    printf "  %2d) %-25s %-12s\n" $((i+1)) "$vm_name" "$status"
-                else
-                    printf "  %2d) %-25s %-12s\n" $((i+1)) "$vm_name" "❓ Unknown"
-                fi
-            done
-            echo
-        fi
-        
-        # Enhanced Main Menu Options (User Mode)
-        echo -e "${GREEN}🏠 Main Menu (User Mode):${NC}"
-        echo "   1) ⚡ Create New Virtual Machine"
-        echo "   2) 🖥️  VM Management Dashboard"
-        echo "   3) 🐳 Docker Containers"
-        echo "   4) 🔬 Jupyter Notebooks"
-        echo "   5) 📦 ISO & Template Library"
-        echo "   6) 💾 Backup & Restore"
-        echo "   7) ⚙️  Settings"
-        echo "   8) 🔧 System Diagnostics"
-        echo "   9) 📚 Documentation & Help"
-        echo "   0) 🚪 Exit"
-        echo
-        
-        read -rp "$(print_status "INPUT" "Select option (0-9): ")" choice
-        
-        case $choice in
-            1) create_new_vm_advanced ;;
-            2) vm_management_dashboard ;;
-            3) docker_vm_menu ;;
-            4) jupyter_cloud_menu ;;
-            5) iso_library_menu ;;
-            6) backup_menu ;;
-            7) settings_menu ;;
-            8) system_diagnostics_menu ;;
-            9) show_documentation ;;
-            0) 
-                print_status "INFO" "Thank you for using ZynexForge CloudStack™!"
-                log_message "SYSTEM" "User exited from main menu"
-                exit 0
-                ;;
-            *) 
-                print_status "ERROR" "Invalid option. Please try again."
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-create_new_vm_advanced() {
-    print_header
-    echo -e "${GREEN}🚀 Create New Virtual Machine (User Mode)${NC}"
-    echo -e "${YELLOW}Step 1: Select Virtualization Technology${NC}"
-    echo
-    
-    # In user mode, we only support local deployment
-    local node_id="local"
-    local node_name="Local User Mode"
-    local node_ip="127.0.0.1"
-    
-    echo "Available Virtualization Types:"
-    echo "───────────────────────────────"
-    echo "  1) 🖥️  QEMU/KVM Virtual Machine"
-    echo "     └─ Complete OS isolation • Best performance"
-    echo
-    echo "  2) 🐳 Docker Container"
-    echo "     └─ Lightweight • Fast startup • Portable"
-    echo
-    echo "  3) 🔬 Jupyter Notebook Server"
-    echo "     └─ Data science • Machine learning • Code sandbox"
-    echo
-    
-    while true; do
-        read -rp "$(print_status "INPUT" "Select virtualization type (1-3): ")" vm_type_choice
-        
-        case $vm_type_choice in
-            1)
-                create_kvm_vm "$node_id" "$node_name" "$node_ip"
-                break
-                ;;
-            2)
-                create_docker_vm_advanced "$node_id" "$node_name"
-                break
-                ;;
-            3)
-                create_jupyter_vm "$node_id" "$node_name"
-                break
-                ;;
-            *)
-                print_status "ERROR" "Invalid selection. Please enter 1-3."
-                ;;
-        esac
-    done
-}
-
-vm_management_dashboard() {
-    while true; do
-        print_header
-        echo -e "${GREEN}🖥️ VM Management Dashboard${NC}"
+        echo -e "${GREEN}🌐 Premium Nodes Deployment${NC}"
         echo "─────────────────────────────────────"
         
-        local vms=($(get_vm_list))
-        local vm_count=${#vms[@]}
-        
-        if [ $vm_count -eq 0 ]; then
-            echo -e "${YELLOW}No virtual machines found.${NC}"
-            echo
-            read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to return...")"
-            return
-        fi
-        
-        # Display VMs with status
-        echo -e "${CYAN}Virtual Machines (${vm_count} total):${NC}"
+        # Display premium nodes
+        echo -e "${CYAN}Premium Production Nodes:${NC}"
         echo "─────────────────────────────────────"
         
-        for i in "${!vms[@]}"; do
-            local vm_name="${vms[$i]}"
-            local config_file="$DATA_DIR/vms/$vm_name.conf"
+        for node_id in "${!REAL_NODES[@]}"; do
+            IFS='|' read -r location region ip latency ram disk specs capabilities <<< "${REAL_NODES[$node_id]}"
             
-            if [[ -f "$config_file" ]]; then
-                source "$config_file" 2>/dev/null
-                
-                # Check if VM is running
-                local status="🔴 Stopped"
-                local pid_file="/tmp/qemu-$vm_name.pid"
-                if [ -f "$pid_file" ] && ps -p "$(cat "$pid_file")" > /dev/null 2>&1; then
-                    status="🟢 Running"
-                fi
-                
-                printf "  %2d) %-25s %-12s\n" $((i+1)) "$vm_name" "$status"
-            fi
+            # Emoji based on location
+            local emoji="🌐"
+            case "$location" in
+                *"India"*) emoji="🇮🇳" ;;
+                *"Singapore"*) emoji="🇸🇬" ;;
+                *"Germany"*) emoji="🇩🇪" ;;
+                *"USA"*) emoji="🇺🇸" ;;
+                *"Japan"*) emoji="🇯🇵" ;;
+            esac
+            
+            echo -e "${GREEN}$node_id${NC} $emoji $location"
+            echo "  IP: $ip | Latency: ${latency}ms"
+            echo "  Specifications: $specs"
+            echo "  Resources: ${ram}GB RAM • ${disk}GB NVMe SSD"
+            echo "  Capabilities: $capabilities"
+            echo
         done
         
-        echo
-        echo -e "${GREEN}📋 Management Options:${NC}"
-        echo "   1) ▶️  Start VM"
-        echo "   2) ⏹️  Stop VM"
-        echo "   3) 🔄 Restart VM"
-        echo "   4) 🗑️  Delete VM"
-        echo "   5) 📊 View VM Details"
-        echo "   6) 💾 Create Snapshot"
-        echo "   7) 📡 Connect via SSH"
+        echo -e "${GREEN}📋 Node Management Options:${NC}"
+        echo "   1) 📊 Node Status & Health"
+        echo "   2) 🔍 Test Node Connectivity"
+        echo "   3) ⚡ Deploy VM to Premium Node"
+        echo "   4) 📈 Resource Monitoring"
         echo "   0) ↩️  Back to Main Menu"
         echo
         
-        read -rp "$(print_status "INPUT" "Select option (0-7): ")" choice
+        read -rp "$(print_status "INPUT" "Select option (0-4): ")" choice
         
         case $choice in
-            1)
-                read -rp "$(print_status "INPUT" "Enter VM number to start: ")" vm_num
-                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
-                    start_vm "${vms[$((vm_num-1))]}"
-                else
-                    print_status "ERROR" "Invalid selection"
-                fi
-                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-                ;;
-            2)
-                read -rp "$(print_status "INPUT" "Enter VM number to stop: ")" vm_num
-                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
-                    stop_vm "${vms[$((vm_num-1))]}"
-                else
-                    print_status "ERROR" "Invalid selection"
-                fi
-                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-                ;;
-            3)
-                read -rp "$(print_status "INPUT" "Enter VM number to restart: ")" vm_num
-                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
-                    stop_vm "${vms[$((vm_num-1))]}"
-                    sleep 2
-                    start_vm "${vms[$((vm_num-1))]}"
-                else
-                    print_status "ERROR" "Invalid selection"
-                fi
-                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-                ;;
-            4)
-                read -rp "$(print_status "INPUT" "Enter VM number to delete: ")" vm_num
-                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
-                    delete_vm "${vms[$((vm_num-1))]}"
-                else
-                    print_status "ERROR" "Invalid selection"
-                fi
-                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-                ;;
-            5)
-                read -rp "$(print_status "INPUT" "Enter VM number to view: ")" vm_num
-                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
-                    view_vm_details "${vms[$((vm_num-1))]}"
-                else
-                    print_status "ERROR" "Invalid selection"
-                fi
-                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-                ;;
-            6)
-                read -rp "$(print_status "INPUT" "Enter VM number for snapshot: ")" vm_num
-                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
-                    create_snapshot "${vms[$((vm_num-1))]}"
-                else
-                    print_status "ERROR" "Invalid selection"
-                fi
-                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-                ;;
-            7)
-                read -rp "$(print_status "INPUT" "Enter VM number to connect: ")" vm_num
-                if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le ${#vms[@]} ]; then
-                    connect_vm_ssh "${vms[$((vm_num-1))]}"
-                else
-                    print_status "ERROR" "Invalid selection"
-                fi
-                ;;
-            0)
-                return
-                ;;
-            *)
-                print_status "ERROR" "Invalid option"
-                sleep 1
-                ;;
+            1) show_node_status ;;
+            2) test_node_connectivity ;;
+            3) deploy_to_premium_node ;;
+            4) node_resource_monitoring ;;
+            0) return ;;
+            *) print_status "ERROR" "Invalid option" ;;
         esac
+        
+        read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
     done
 }
+
+show_node_status() {
+    print_header
+    echo -e "${GREEN}📊 Premium Nodes Status & Health${NC}"
+    echo "─────────────────────────────────────"
+    
+    echo -e "${CYAN}Local Node:${NC}"
+    echo "  CPU Usage: $(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')%"
+    echo "  Memory: $(free -m | awk 'NR==2{printf "%.1f%%", $3*100/$2}') used"
+    echo "  Disk: $(df -h / | awk 'NR==2{print $5}') used"
+    echo "  KVM: $([ "$KVM_AVAILABLE" = true ] && echo "🟢 Available" || echo "🔴 Not Available")"
+    echo
+    
+    echo -e "${CYAN}Premium Nodes Status:${NC}"
+    for node_id in "${!REAL_NODES[@]}"; do
+        IFS='|' read -r location region ip latency ram disk specs capabilities <<< "${REAL_NODES[$node_id]}"
+        
+        # Simulate status
+        local status_indicators=("🟢" "🟡" "🔴")
+        local random_status=${status_indicators[$RANDOM % ${#status_indicators[@]}]}
+        local random_load=$((RANDOM % 100))
+        local random_vms=$((RANDOM % 50))
+        
+        echo "  $node_id: $random_status Load: ${random_load}% | VMs: $random_vms | Latency: ${latency}ms"
+    done
+}
+
+deploy_to_premium_node() {
+    print_header
+    echo -e "${GREEN}⚡ Deploy VM to Premium Node${NC}"
+    echo "─────────────────────────────────────"
+    
+    # Select premium node
+    echo "Select Premium Node:"
+    local index=1
+    local node_keys=("${!REAL_NODES[@]}")
+    for key in "${node_keys[@]}"; do
+        IFS='|' read -r location region ip latency ram disk specs capabilities <<< "${REAL_NODES[$key]}"
+        printf "%2d) %-25s %s\n" "$index" "$location" "($ip)"
+        ((index++))
+    done
+    echo
+    
+    read -rp "$(print_status "INPUT" "Select node (1-${#REAL_NODES[@]}): ")" node_choice
+    
+    if [[ "$node_choice" =~ ^[0-9]+$ ]] && [ "$node_choice" -ge 1 ] && [ "$node_choice" -le ${#REAL_NODES[@]} ]; then
+        local selected_key="${node_keys[$((node_choice-1))]}"
+        IFS='|' read -r location region ip latency ram disk specs capabilities <<< "${REAL_NODES[$selected_key]}"
+        
+        print_status "INFO" "Selected: $location ($ip)"
+        print_status "INFO" "Specifications: $specs"
+        print_status "INFO" "Capabilities: $capabilities"
+        
+        # For now, simulate deployment
+        print_status "PROGRESS" "Simulating deployment to $location..."
+        sleep 2
+        
+        # Show deployment options
+        echo
+        echo "Deployment Options:"
+        echo "  1) Deploy from local template"
+        echo "  2) Deploy from cloud image"
+        echo "  3) Custom deployment"
+        
+        read -rp "$(print_status "INPUT" "Select deployment method (1-3): ")" deploy_method
+        
+        case $deploy_method in
+            1)
+                print_status "PROGRESS" "Deploying from local template..."
+                sleep 2
+                print_status "SUCCESS" "VM deployment simulated to $location"
+                ;;
+            2)
+                print_status "PROGRESS" "Deploying from cloud image..."
+                sleep 2
+                print_status "SUCCESS" "Cloud deployment simulated to $location"
+                ;;
+            3)
+                print_status "PROGRESS" "Starting custom deployment..."
+                sleep 2
+                print_status "SUCCESS" "Custom deployment simulated to $location"
+                ;;
+            *)
+                print_status "ERROR" "Invalid deployment method"
+                ;;
+        esac
+    else
+        print_status "ERROR" "Invalid node selection"
+    fi
+}
+
+# =============================================================================
+# OPTIMIZED DOCKER VM MENU
+# =============================================================================
 
 docker_vm_menu() {
     while true; do
         print_header
-        echo -e "${GREEN}🐳 Docker Container Management${NC}"
+        echo -e "${GREEN}🐳 Docker Container Platform${NC}"
         echo "─────────────────────────────────────"
         
         # List Docker containers
@@ -1587,6 +2009,7 @@ docker_vm_menu() {
             for i in "${!containers[@]}"; do
                 local container_name="${containers[$i]}"
                 local status=$(docker inspect -f '{{.State.Status}}' "$container_name" 2>/dev/null || echo "unknown")
+                local image=$(docker inspect -f '{{.Config.Image}}' "$container_name" 2>/dev/null || echo "unknown")
                 
                 if [ "$status" = "running" ]; then
                     status="🟢 Running"
@@ -1594,7 +2017,7 @@ docker_vm_menu() {
                     status="🔴 Stopped"
                 fi
                 
-                printf "  %2d) %-25s %-12s\n" $((i+1)) "$container_name" "$status"
+                printf "  %2d) %-25s %-12s %s\n" $((i+1)) "$container_name" "$status" "($image)"
             done
         else
             echo -e "${YELLOW}No Docker containers found.${NC}"
@@ -1602,23 +2025,25 @@ docker_vm_menu() {
         
         echo
         echo -e "${GREEN}📋 Docker Management Options:${NC}"
-        echo "   1) 🐳 Create New Docker Container"
+        echo "   1) 🐳 Create New Docker Container (Premium)"
         if [ $container_count -gt 0 ]; then
             echo "   2) ▶️  Start Container"
             echo "   3) ⏹️  Stop Container"
             echo "   4) 🔄 Restart Container"
             echo "   5) 📜 View Container Logs"
             echo "   6) 🐚 Open Container Shell"
-            echo "   7) 🗑️  Remove Container"
+            echo "   7) 📊 Container Stats"
+            echo "   8) 🗑️  Remove Container"
         fi
+        echo "   9) 🐋 Docker System Info"
         echo "   0) ↩️  Back to Main Menu"
         echo
         
-        read -rp "$(print_status "INPUT" "Select option (0-7): ")" choice
+        read -rp "$(print_status "INPUT" "Select option (0-9): ")" choice
         
         case $choice in
             1)
-                create_docker_vm_advanced "local" "Local User Mode"
+                create_docker_vm_advanced "local" "Local"
                 read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
                 ;;
             2)
@@ -1664,7 +2089,7 @@ docker_vm_menu() {
                         clear
                         echo -e "${GREEN}📜 Logs for ${containers[$((container_num-1))]}${NC}"
                         echo "─────────────────────────────────────"
-                        docker logs "${containers[$((container_num-1))]}"
+                        docker logs "${containers[$((container_num-1))]}" --tail 50
                         echo
                         read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
                     else
@@ -1689,6 +2114,16 @@ docker_vm_menu() {
                 ;;
             7)
                 if [ $container_count -gt 0 ]; then
+                    clear
+                    echo -e "${GREEN}📊 Docker Container Stats${NC}"
+                    echo "─────────────────────────────────────"
+                    docker stats --no-stream
+                    echo
+                    read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                fi
+                ;;
+            8)
+                if [ $container_count -gt 0 ]; then
                     read -rp "$(print_status "INPUT" "Enter container number to remove: ")" container_num
                     if [[ "$container_num" =~ ^[0-9]+$ ]] && [ "$container_num" -ge 1 ] && [ "$container_num" -le ${#containers[@]} ]; then
                         docker rm -f "${containers[$((container_num-1))]}"
@@ -1697,6 +2132,14 @@ docker_vm_menu() {
                         print_status "ERROR" "Invalid selection"
                     fi
                 fi
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
+            9)
+                clear
+                echo -e "${GREEN}🐋 Docker System Information${NC}"
+                echo "─────────────────────────────────────"
+                docker info
+                echo
                 read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
                 ;;
             0)
@@ -1710,10 +2153,14 @@ docker_vm_menu() {
     done
 }
 
+# =============================================================================
+# OPTIMIZED JUPYTER CLOUD MENU
+# =============================================================================
+
 jupyter_cloud_menu() {
     while true; do
         print_header
-        echo -e "${GREEN}🔬 Jupyter Notebook Management${NC}"
+        echo -e "${GREEN}🔬 Jupyter Cloud Lab (Premium)${NC}"
         echo "─────────────────────────────────────"
         
         # List Jupyter notebooks
@@ -1751,22 +2198,24 @@ jupyter_cloud_menu() {
         
         echo
         echo -e "${GREEN}📋 Jupyter Management Options:${NC}"
-        echo "   1) 🔬 Create New Jupyter Notebook"
+        echo "   1) 🔬 Create New Jupyter Notebook (Premium)"
         if [ $notebook_count -gt 0 ]; then
             echo "   2) ▶️  Start Notebook"
             echo "   3) ⏹️  Stop Notebook"
             echo "   4) 🌐 Open in Browser"
             echo "   5) 📜 View Notebook Logs"
-            echo "   6) 🗑️  Remove Notebook"
+            echo "   6) 📊 Notebook Stats"
+            echo "   7) 🗑️  Remove Notebook"
         fi
+        echo "   8) 📚 Jupyter Templates"
         echo "   0) ↩️  Back to Main Menu"
         echo
         
-        read -rp "$(print_status "INPUT" "Select option (0-6): ")" choice
+        read -rp "$(print_status "INPUT" "Select option (0-8): ")" choice
         
         case $choice in
             1)
-                create_jupyter_vm "local" "Local User Mode"
+                create_jupyter_vm "local" "Local"
                 read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
                 ;;
             2)
@@ -1826,7 +2275,7 @@ jupyter_cloud_menu() {
                         clear
                         echo -e "${GREEN}📜 Logs for $notebook_name${NC}"
                         echo "─────────────────────────────────────"
-                        docker logs "jupyter-$notebook_name"
+                        docker logs "jupyter-$notebook_name" --tail 50
                         echo
                         read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
                     else
@@ -1835,6 +2284,19 @@ jupyter_cloud_menu() {
                 fi
                 ;;
             6)
+                if [ $notebook_count -gt 0 ]; then
+                    clear
+                    echo -e "${GREEN}📊 Jupyter Notebooks Stats${NC}"
+                    echo "─────────────────────────────────────"
+                    for notebook in "${notebooks[@]}"; do
+                        local status=$(docker inspect -f '{{.State.Status}}' "jupyter-$notebook" 2>/dev/null || echo "unknown")
+                        echo "$notebook: $status"
+                    done
+                    echo
+                    read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                fi
+                ;;
+            7)
                 if [ $notebook_count -gt 0 ]; then
                     read -rp "$(print_status "INPUT" "Enter notebook number to remove: ")" notebook_num
                     if [[ "$notebook_num" =~ ^[0-9]+$ ]] && [ "$notebook_num" -ge 1 ] && [ "$notebook_num" -le ${#notebooks[@]} ]; then
@@ -1848,6 +2310,17 @@ jupyter_cloud_menu() {
                 fi
                 read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
                 ;;
+            8)
+                clear
+                echo -e "${GREEN}📚 Jupyter Templates${NC}"
+                echo "─────────────────────────────────────"
+                for key in "${!JUPYTER_TEMPLATES[@]}"; do
+                    IFS='|' read -r name image port tags <<< "${JUPYTER_TEMPLATES[$key]}"
+                    echo "$name: $tags"
+                done
+                echo
+                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
+                ;;
             0)
                 return
                 ;;
@@ -1858,6 +2331,10 @@ jupyter_cloud_menu() {
         esac
     done
 }
+
+# =============================================================================
+# OPTIMIZED ISO LIBRARY MENU
+# =============================================================================
 
 iso_library_menu() {
     while true; do
@@ -1892,16 +2369,22 @@ iso_library_menu() {
         
         echo
         echo -e "${GREEN}📋 ISO Management Options:${NC}"
-        echo "   1) 📥 Download ISO"
+        echo "   1) 📥 Download ISO (Premium Mirror)"
         echo "   2) 🗑️  Delete ISO"
+        echo "   3) 🔍 Verify ISO Integrity"
+        echo "   4) 📁 Mount ISO"
+        echo "   5) 🔄 Update ISO Library"
         echo "   0) ↩️  Back to Main Menu"
         echo
         
-        read -rp "$(print_status "INPUT" "Select option (0-2): ")" choice
+        read -rp "$(print_status "INPUT" "Select option (0-5): ")" choice
         
         case $choice in
             1) download_iso ;;
             2) delete_iso ;;
+            3) verify_iso ;;
+            4) mount_iso ;;
+            5) update_iso_library ;;
             0) return ;;
             *) print_status "ERROR" "Invalid option" ;;
         esac
@@ -1912,7 +2395,7 @@ iso_library_menu() {
 
 download_iso() {
     print_header
-    echo -e "${GREEN}📥 Download ISO Image${NC}"
+    echo -e "${GREEN}📥 Download ISO Image (Premium Mirror)${NC}"
     echo "─────────────────────────────────────"
     
     # List available ISOs
@@ -1934,15 +2417,15 @@ download_iso() {
         local filename="$DATA_DIR/isos/$(basename "$iso_url")"
         mkdir -p "$DATA_DIR/isos"
         
-        print_status "PROGRESS" "Downloading $iso_name..."
+        print_status "PROGRESS" "Downloading $iso_name from premium mirror..."
         print_status "INFO" "URL: $iso_url"
         print_status "INFO" "Destination: $filename"
         
-        # Download with progress bar
+        # Download with progress bar and resume support
         if command -v curl > /dev/null 2>&1; then
-            curl -L -o "$filename" --progress-bar "$iso_url"
+            curl -L -o "$filename" --progress-bar --continue-at - "$iso_url"
         elif command -v wget > /dev/null 2>&1; then
-            wget -O "$filename" --progress=bar:force "$iso_url"
+            wget -O "$filename" --progress=bar:force --continue "$iso_url"
         else
             print_status "ERROR" "curl or wget not found"
             return 1
@@ -1960,778 +2443,9 @@ download_iso() {
     fi
 }
 
-delete_iso() {
-    print_header
-    echo -e "${GREEN}🗑️ Delete ISO Image${NC}"
-    echo "─────────────────────────────────────"
-    
-    # List downloaded ISOs
-    local isos=()
-    if [ -d "$DATA_DIR/isos" ]; then
-        isos=($(ls "$DATA_DIR/isos"/*.iso 2>/dev/null | xargs -n1 basename))
-    fi
-    
-    if [ ${#isos[@]} -eq 0 ]; then
-        print_status "INFO" "No ISO images found"
-        return
-    fi
-    
-    echo "Available ISOs:"
-    for i in "${!isos[@]}"; do
-        local size=$(du -h "$DATA_DIR/isos/${isos[$i]}" 2>/dev/null | cut -f1)
-        printf "%2d) %-40s (%s)\n" $((i+1)) "${isos[$i]}" "$size"
-    done
-    
-    echo
-    read -rp "$(print_status "INPUT" "Select ISO to delete (1-${#isos[@]}): ")" iso_choice
-    
-    if [[ "$iso_choice" =~ ^[0-9]+$ ]] && [ "$iso_choice" -ge 1 ] && [ "$iso_choice" -le ${#isos[@]} ]; then
-        local iso_file="${isos[$((iso_choice-1))]}"
-        read -rp "$(print_status "INPUT" "Delete '$iso_file'? (y/N): ")" confirm
-        if [[ "$confirm" =~ ^[Yy]$ ]]; then
-            rm -f "$DATA_DIR/isos/$iso_file"
-            print_status "SUCCESS" "ISO deleted: $iso_file"
-        else
-            print_status "INFO" "Deletion cancelled"
-        fi
-    else
-        print_status "ERROR" "Invalid selection"
-    fi
-}
-
 # =============================================================================
-# BACKUP MENU (User Mode)
+# MAIN EXECUTION - OPTIMIZED
 # =============================================================================
-
-backup_menu() {
-    while true; do
-        print_header
-        echo -e "${GREEN}💾 Backup & Restore${NC}"
-        echo "─────────────────────────────────────"
-        
-        # Backup statistics
-        local backup_count=0
-        if [ -d "$DATA_DIR/backups" ]; then
-            backup_count=$(find "$DATA_DIR/backups" -name "*.tar.gz" 2>/dev/null | wc -l)
-        fi
-        
-        echo -e "${CYAN}Backup Statistics:${NC}"
-        echo "  Total Backups: $backup_count"
-        echo "  Backup Location: $DATA_DIR/backups"
-        
-        # Recent backups
-        if [ $backup_count -gt 0 ]; then
-            echo
-            echo -e "${CYAN}Recent Backups:${NC}"
-            find "$DATA_DIR/backups" -name "*.tar.gz" -type f -printf "%Tb %Td %TY %TH:%TM %p\n" | sort -r | head -3 | while read backup; do
-                local size=$(du -h "$(echo "$backup" | awk '{print $NF}')" 2>/dev/null | cut -f1)
-                echo "  • $(echo "$backup" | awk '{print $1" "$2" "$3" "$4}') ($size)"
-            done
-        fi
-        
-        echo
-        echo -e "${GREEN}📋 Backup Options:${NC}"
-        echo "   1) 💾 Create Backup"
-        echo "   2) 🔄 Restore Backup"
-        echo "   3) 🗑️  Delete Backup"
-        echo "   0) ↩️  Back to Main Menu"
-        echo
-        
-        read -rp "$(print_status "INPUT" "Select option (0-3): ")" choice
-        
-        case $choice in
-            1) create_backup ;;
-            2) restore_backup ;;
-            3) delete_backup ;;
-            0) return ;;
-            *) print_status "ERROR" "Invalid option" ;;
-        esac
-        
-        read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-    done
-}
-
-create_backup() {
-    print_header
-    echo -e "${GREEN}💾 Create Backup${NC}"
-    echo "─────────────────────────────────────"
-    
-    # Backup options
-    echo "Select backup scope:"
-    echo "  1) Full Backup (All VMs, configs, ISOs)"
-    echo "  2) VM Backup (Specific virtual machine)"
-    echo "  3) Configuration Only"
-    echo
-    
-    read -rp "$(print_status "INPUT" "Select scope (1-3): ")" scope_choice
-    
-    local backup_name="zynexforge-backup-$(date +%Y%m%d-%H%M%S)"
-    local backup_file="$DATA_DIR/backups/${backup_name}.tar.gz"
-    mkdir -p "$DATA_DIR/backups"
-    
-    case $scope_choice in
-        1)
-            # Full backup
-            print_status "PROGRESS" "Creating full backup..."
-            tar -czf "$backup_file" \
-                -C "$USER_HOME" \
-                .zynexforge \
-                --exclude="*.log" \
-                --exclude="*.tmp"
-            ;;
-        2)
-            # VM backup
-            local vms=($(get_vm_list))
-            if [ ${#vms[@]} -eq 0 ]; then
-                print_status "ERROR" "No VMs found to backup"
-                return 1
-            fi
-            
-            echo "Available VMs:"
-            for i in "${!vms[@]}"; do
-                printf "%2d) %s\n" $((i+1)) "${vms[$i]}"
-            done
-            
-            read -rp "$(print_status "INPUT" "Select VM to backup (1-${#vms[@]}): ")" vm_choice
-            
-            if [[ "$vm_choice" =~ ^[0-9]+$ ]] && [ "$vm_choice" -ge 1 ] && [ "$vm_choice" -le ${#vms[@]} ]; then
-                local vm_name="${vms[$((vm_choice-1))]}"
-                print_status "PROGRESS" "Backing up VM: $vm_name"
-                tar -czf "$backup_file" \
-                    -C "$DATA_DIR" \
-                    "vms/$vm_name.conf" \
-                    "disks/$vm_name.qcow2" \
-                    "cloudinit/$vm_name-seed.img" \
-                    "snapshots/$vm_name" 2>/dev/null
-            else
-                print_status "ERROR" "Invalid selection"
-                return 1
-            fi
-            ;;
-        3)
-            # Configuration only
-            print_status "PROGRESS" "Backing up configurations..."
-            tar -czf "$backup_file" \
-                -C "$CONFIG_DIR" \
-                .
-            ;;
-        *)
-            print_status "ERROR" "Invalid scope"
-            return 1
-            ;;
-    esac
-    
-    if [ $? -eq 0 ]; then
-        local size=$(du -h "$backup_file" | cut -f1)
-        print_status "SUCCESS" "Backup created: $backup_file ($size)"
-        log_message "BACKUP" "Created backup: $backup_name"
-    else
-        print_status "ERROR" "Backup creation failed"
-    fi
-}
-
-# =============================================================================
-# SETTINGS MENU (User Mode)
-# =============================================================================
-
-settings_menu() {
-    while true; do
-        print_header
-        echo -e "${GREEN}⚙️ Settings${NC}"
-        echo "─────────────────────────────────────"
-        
-        # Load current settings
-        if [ -f "$GLOBAL_CONFIG" ]; then
-            echo -e "${CYAN}Current Settings:${NC}"
-            echo "  Platform: $(grep "name:" "$GLOBAL_CONFIG" | head -1 | cut -d'"' -f2)"
-            echo "  User Mode: $(grep "user_mode:" "$GLOBAL_CONFIG" | head -1 | awk '{print $2}')"
-            echo "  Max VMs: $(grep "max_vms_per_node:" "$GLOBAL_CONFIG" | head -1 | awk '{print $2}')"
-            echo "  SSH Base Port: $(grep "ssh_base_port:" "$GLOBAL_CONFIG" | head -1 | awk '{print $2}')"
-            echo
-        fi
-        
-        echo -e "${GREEN}📋 Settings Options:${NC}"
-        echo "   1) 🔧 General Settings"
-        echo "   2) 📊 View System Info"
-        echo "   3) 🧹 Cleanup Old Files"
-        echo "   0) ↩️  Back to Main Menu"
-        echo
-        
-        read -rp "$(print_status "INPUT" "Select option (0-3): ")" choice
-        
-        case $choice in
-            1) general_settings ;;
-            2) system_information ;;
-            3) cleanup_old_files ;;
-            0) return ;;
-            *) print_status "ERROR" "Invalid option" ;;
-        esac
-        
-        read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-    done
-}
-
-general_settings() {
-    print_header
-    echo -e "${GREEN}🔧 General Settings${NC}"
-    echo "─────────────────────────────────────"
-    
-    # Load current config
-    local current_name=$(grep "name:" "$GLOBAL_CONFIG" | head -1 | cut -d'"' -f2)
-    local max_vms=$(grep "max_vms_per_node:" "$GLOBAL_CONFIG" | head -1 | awk '{print $2}')
-    local ssh_base_port=$(grep "ssh_base_port:" "$GLOBAL_CONFIG" | head -1 | awk '{print $2}')
-    
-    echo "Current Configuration:"
-    echo "  1) Platform Name: $current_name"
-    echo "  2) Max VMs: $max_vms"
-    echo "  3) SSH Base Port: $ssh_base_port"
-    echo
-    
-    read -rp "$(print_status "INPUT" "Select setting to modify (1-3) or 0 to cancel: ")" setting_choice
-    
-    case $setting_choice in
-        1)
-            read -rp "$(print_status "INPUT" "New platform name: ")" new_name
-            sed -i "s/name:.*/name: \"$new_name\"/" "$GLOBAL_CONFIG"
-            print_status "SUCCESS" "Platform name updated"
-            ;;
-        2)
-            read -rp "$(print_status "INPUT" "New max VMs (1-20): ")" new_max
-            if [[ "$new_max" =~ ^[0-9]+$ ]] && [ "$new_max" -ge 1 ] && [ "$new_max" -le 20 ]; then
-                sed -i "s/max_vms_per_node:.*/max_vms_per_node: $new_max/" "$GLOBAL_CONFIG"
-                print_status "SUCCESS" "Max VMs updated"
-            else
-                print_status "ERROR" "Invalid number (must be 1-20 for user mode)"
-            fi
-            ;;
-        3)
-            read -rp "$(print_status "INPUT" "New SSH base port (1024-65535): ")" new_port
-            if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1024 ] && [ "$new_port" -le 65535 ]; then
-                sed -i "s/ssh_base_port:.*/ssh_base_port: $new_port/" "$GLOBAL_CONFIG"
-                print_status "SUCCESS" "SSH base port updated"
-            else
-                print_status "ERROR" "Invalid port number"
-            fi
-            ;;
-        0)
-            return
-            ;;
-        *)
-            print_status "ERROR" "Invalid choice"
-            ;;
-    esac
-    
-    log_message "SETTINGS" "Modified general settings"
-}
-
-system_information() {
-    print_header
-    echo -e "${GREEN}📊 System Information${NC}"
-    echo "─────────────────────────────────────"
-    
-    echo -e "${CYAN}Operating System:${NC}"
-    if [ -f /etc/os-release ]; then
-        source /etc/os-release
-        echo "  Distribution: $NAME"
-        echo "  Version: $VERSION"
-        echo "  ID: $ID"
-    fi
-    echo "  Kernel: $(uname -r)"
-    echo "  Architecture: $(uname -m)"
-    
-    echo
-    echo -e "${CYAN}CPU Information:${NC}"
-    echo "  Model: $(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | xargs)"
-    echo "  Cores: $(nproc)"
-    
-    echo
-    echo -e "${CYAN}Memory Information:${NC}"
-    local mem_total=$(free -h | awk '/^Mem:/{print $2}')
-    local mem_used=$(free -h | awk '/^Mem:/{print $3}')
-    local mem_available=$(free -h | awk '/^Mem:/{print $7}')
-    echo "  Total: $mem_total"
-    echo "  Used: $mem_used"
-    echo "  Available: $mem_available"
-    
-    echo
-    echo -e "${CYAN}Disk Information:${NC}"
-    df -h / | awk 'NR==2{print "  Mount: "$6" | Size: "$2" | Used: "$3" ("$5") | Free: "$4}'
-    
-    echo
-    echo -e "${CYAN}ZynexForge Information:${NC}"
-    echo "  Version: $SCRIPT_VERSION"
-    echo "  Config Directory: $CONFIG_DIR"
-    echo "  Data Directory: $DATA_DIR"
-    echo "  User: $USER"
-    
-    local vm_count=$(get_vm_list | wc -l)
-    echo "  Total VMs: $vm_count"
-}
-
-cleanup_old_files() {
-    print_header
-    echo -e "${GREEN}🧹 Cleanup Old Files${NC}"
-    echo "─────────────────────────────────────"
-    
-    # Find old backup files (older than 30 days)
-    local old_backups=$(find "$DATA_DIR/backups" -name "*.tar.gz" -type f -mtime +30 2>/dev/null | wc -l)
-    
-    # Find old log files (older than 7 days)
-    local old_logs=$(find "$USER_HOME/zynexforge/logs" -name "*.log" -type f -mtime +7 2>/dev/null | wc -l)
-    
-    # Find temporary files
-    local temp_files=$(find /tmp -name "*zynexforge*" -type f -mtime +1 2>/dev/null | wc -l)
-    
-    echo "Files that can be cleaned up:"
-    echo "  Old backups (>30 days): $old_backups"
-    echo "  Old log files (>7 days): $old_logs"
-    echo "  Temporary files (>1 day): $temp_files"
-    echo
-    
-    if [ $((old_backups + old_logs + temp_files)) -eq 0 ]; then
-        print_status "INFO" "No old files found to clean up"
-        return
-    fi
-    
-    read -rp "$(print_status "INPUT" "Clean up these files? (y/N): ")" confirm
-    
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        # Clean up old backups
-        if [ $old_backups -gt 0 ]; then
-            find "$DATA_DIR/backups" -name "*.tar.gz" -type f -mtime +30 -delete
-            print_status "SUCCESS" "Cleaned up $old_backups old backup(s)"
-        fi
-        
-        # Clean up old logs
-        if [ $old_logs -gt 0 ]; then
-            find "$USER_HOME/zynexforge/logs" -name "*.log" -type f -mtime +7 -delete
-            print_status "SUCCESS" "Cleaned up $old_logs old log file(s)"
-        fi
-        
-        # Clean up temporary files
-        if [ $temp_files -gt 0 ]; then
-            find /tmp -name "*zynexforge*" -type f -mtime +1 -delete 2>/dev/null || true
-            print_status "SUCCESS" "Cleaned up temporary files"
-        fi
-        
-        print_status "SUCCESS" "Cleanup completed"
-    else
-        print_status "INFO" "Cleanup cancelled"
-    fi
-}
-
-# =============================================================================
-# SYSTEM DIAGNOSTICS (User Mode)
-# =============================================================================
-
-system_diagnostics_menu() {
-    while true; do
-        print_header
-        echo -e "${GREEN}🔧 System Diagnostics${NC}"
-        echo "─────────────────────────────────────"
-        
-        # System health check
-        echo -e "${CYAN}System Health Check:${NC}"
-        
-        # Check KVM permissions
-        if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-            echo -e "  🟢 KVM acceleration: Available"
-        else
-            echo -e "  🔴 KVM acceleration: Not available (/dev/kvm permissions issue)"
-        fi
-        
-        # Check Docker
-        if command -v docker > /dev/null 2>&1; then
-            if docker info > /dev/null 2>&1; then
-                echo -e "  🟢 Docker: Running"
-            else
-                echo -e "  🔴 Docker: Installed but not accessible"
-                echo -e "     Try: sudo usermod -aG docker $USER"
-                echo -e "     Then log out and log back in"
-            fi
-        else
-            echo -e "  🔴 Docker: Not installed"
-        fi
-        
-        # Check resources
-        local cpu_cores=$(nproc)
-        local total_ram=$(free -m | awk '/^Mem:/{print $2}')
-        local available_ram=$(free -m | awk '/^Mem:/{print $7}')
-        local disk_space=$(df -h "$DATA_DIR" | awk 'NR==2{print $4}')
-        
-        echo -e "  ℹ CPU Cores: $cpu_cores"
-        echo -e "  ℹ Total RAM: ${total_ram}MB"
-        echo -e "  ℹ Available RAM: ${available_ram}MB"
-        echo -e "  ℹ Disk Space: $disk_space"
-        
-        echo
-        echo -e "${GREEN}📋 Diagnostic Tools:${NC}"
-        echo "   1) 🛠️  System Information"
-        echo "   2) 🔍 Check Port Availability"
-        echo "   3) 🐛 View Logs"
-        echo "   0) ↩️  Back to Main Menu"
-        echo
-        
-        read -rp "$(print_status "INPUT" "Select option (0-3): ")" choice
-        
-        case $choice in
-            1) system_information ;;
-            2) check_port_availability ;;
-            3) view_logs ;;
-            0) return ;;
-            *) print_status "ERROR" "Invalid option" ;;
-        esac
-        
-        read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-    done
-}
-
-check_port_availability() {
-    print_header
-    echo -e "${GREEN}🔍 Check Port Availability${NC}"
-    echo "─────────────────────────────────────"
-    
-    echo "Checking common ports used by ZynexForge..."
-    echo
-    
-    # Check SSH base port
-    local ssh_base_port=$(grep "ssh_base_port:" "$GLOBAL_CONFIG" 2>/dev/null | head -1 | awk '{print $2}')
-    ssh_base_port=${ssh_base_port:-22000}
-    
-    # Check a range of ports
-    for port in {22000..22010}; do
-        if check_port_available "$port"; then
-            echo -e "  🟢 Port $port: Available"
-        else
-            echo -e "  🔴 Port $port: In use"
-        fi
-    done
-    
-    echo
-    echo -e "${YELLOW}Note:${NC} Ports 22000-22010 are used for VM SSH access"
-    echo "If ports are in use, VMs may fail to start"
-}
-
-view_logs() {
-    print_header
-    echo -e "${GREEN}🐛 View Logs${NC}"
-    echo "─────────────────────────────────────"
-    
-    if [ ! -f "$LOG_FILE" ]; then
-        print_status "INFO" "No log file found"
-        return
-    fi
-    
-    echo "Log file: $LOG_FILE"
-    echo "─────────────────────────────────────"
-    tail -50 "$LOG_FILE"
-    echo "─────────────────────────────────────"
-    
-    echo
-    echo -e "${YELLOW}Options:${NC}"
-    echo "  1) View full log"
-    echo "  2) Clear log"
-    echo "  3) Search in log"
-    echo "  0) Back"
-    echo
-    
-    read -rp "$(print_status "INPUT" "Select option (0-3): ")" choice
-    
-    case $choice in
-        1)
-            clear
-            cat "$LOG_FILE"
-            echo
-            read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-            ;;
-        2)
-            read -rp "$(print_status "INPUT" "Clear log file? (y/N): ")" confirm
-            if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                > "$LOG_FILE"
-                print_status "SUCCESS" "Log file cleared"
-            fi
-            ;;
-        3)
-            read -rp "$(print_status "INPUT" "Search term: ")" search_term
-            if [ -n "$search_term" ]; then
-                clear
-                grep -i "$search_term" "$LOG_FILE"
-                echo
-                read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-            fi
-            ;;
-    esac
-}
-
-# =============================================================================
-# DOCUMENTATION (User Mode)
-# =============================================================================
-
-show_documentation() {
-    while true; do
-        print_header
-        echo -e "${GREEN}📚 Documentation & Help${NC}"
-        echo "─────────────────────────────────────"
-        
-        echo -e "${CYAN}ZynexForge CloudStack™ Professional Edition${NC}"
-        echo "Version: $SCRIPT_VERSION (User Mode)"
-        echo
-        echo -e "${YELLOW}Quick Start Guide:${NC}"
-        echo "  1. Create your first VM from the main menu"
-        echo "  2. Manage VMs from the dashboard"
-        echo "  3. Use Docker containers for lightweight apps"
-        echo "  4. Use Jupyter notebooks for data science"
-        echo
-        
-        echo -e "${YELLOW}Important Notes for User Mode:${NC}"
-        echo "  • Runs without root privileges"
-        echo "  • Limited to user's home directory"
-        echo "  • Max 50GB disk space per VM"
-        echo "  • Network uses user-mode SLIRP"
-        echo "  • Docker requires user to be in 'docker' group"
-        echo
-        
-        echo -e "${YELLOW}Troubleshooting:${NC}"
-        echo "  • KVM not working? Check /dev/kvm permissions"
-        echo "  • Docker permission denied? Add user to docker group"
-        echo "  • Port already in use? Change SSH base port in settings"
-        echo "  • Out of disk space? Clean up old files"
-        echo
-        
-        echo -e "${GREEN}📖 Help Sections:${NC}"
-        echo "   1) 📘 User Manual"
-        echo "   2) 🔧 Troubleshooting Guide"
-        echo "   3) 📖 Tutorials"
-        echo "   0) ↩️  Back to Main Menu"
-        echo
-        
-        read -rp "$(print_status "INPUT" "Select option (0-3): ")" choice
-        
-        case $choice in
-            1) show_user_manual ;;
-            2) show_troubleshooting_guide ;;
-            3) show_tutorials ;;
-            0) return ;;
-            *) print_status "ERROR" "Invalid option" ;;
-        esac
-        
-        read -n 1 -s -r -p "$(print_status "INPUT" "Press any key to continue...")"
-    done
-}
-
-show_user_manual() {
-    print_header
-    echo -e "${GREEN}📘 User Manual${NC}"
-    echo "─────────────────────────────────────"
-    
-    cat << 'EOF'
-ZynexForge CloudStack™ User Manual (User Mode)
-==============================================
-
-1. Getting Started
-------------------
-ZynexForge is an advanced virtualization platform that runs entirely in
-user mode - no root privileges required!
-
-2. Creating Virtual Machines
----------------------------
-There are several ways to create VMs:
-
-  a) Cloud Images: Pre-configured OS images (fast deployment)
-  b) ISO Images: Full OS installation
-  c) Docker Containers: Lightweight application containers
-  d) Jupyter Servers: Data science notebooks
-
-3. User Mode Limitations
-------------------------
-- Max disk size: 50GB per VM
-- Network: User-mode SLIRP (slower than bridge)
-- No bridge networking
-- Limited to user's home directory space
-
-4. Recommended Setup
---------------------
-For best performance in user mode:
-1. Ensure KVM permissions: sudo chmod 666 /dev/kvm
-2. Add user to docker group: sudo usermod -aG docker $USER
-3. Log out and log back in after changes
-
-5. Common Commands
-------------------
-- Create VM: Main Menu → Option 1
-- Manage VMs: Main Menu → Option 2
-- Docker: Main Menu → Option 3
-- Jupyter: Main Menu → Option 4
-- Settings: Main Menu → Option 7
-
-6. Getting Help
----------------
-- View logs: Diagnostics → View Logs
-- Check system info: Settings → View System Info
-- Clean up space: Settings → Cleanup Old Files
-EOF
-}
-
-show_troubleshooting_guide() {
-    print_header
-    echo -e "${GREEN}🔧 Troubleshooting Guide${NC}"
-    echo "─────────────────────────────────────"
-    
-    cat << 'EOF'
-Common Issues and Solutions
-===========================
-
-1. KVM Acceleration Not Available
----------------------------------
-Symptoms: VM starts slowly, high CPU usage
-Solution: Check /dev/kvm permissions
-  Run: ls -l /dev/kvm
-  If permissions are wrong:
-    sudo chmod 666 /dev/kvm
-  Or add user to kvm group:
-    sudo usermod -aG kvm $USER
-    (Then log out and log back in)
-
-2. Docker Permission Denied
----------------------------
-Symptoms: "Cannot connect to Docker daemon"
-Solution: Add user to docker group
-  sudo usermod -aG docker $USER
-  Then log out and log back in
-  Verify with: docker ps
-
-3. Port Already in Use
-----------------------
-Symptoms: VM fails to start, port conflict
-Solution: Change SSH base port
-  Settings → General Settings → SSH Base Port
-  Choose a port above 1024
-
-4. Out of Disk Space
---------------------
-Symptoms: Cannot create VM, disk full
-Solution: Clean up space
-  Settings → Cleanup Old Files
-  Or manually remove old backups/ISOs
-
-5. VM Won't Start
------------------
-Symptoms: QEMU error, immediate exit
-Solution: Check system resources
-  - Enough RAM available?
-  - Enough disk space?
-  - CPU supports virtualization?
-  Check logs: Diagnostics → View Logs
-
-6. Network Not Working in VM
-----------------------------
-Symptoms: No internet in VM
-Solution: User-mode networking limitations
-  - Restart VM
-  - Check host firewall isn't blocking
-  - Try different port forwarding
-
-7. Slow Performance
--------------------
-Symptoms: VM runs slowly
-Solution:
-  - Enable KVM acceleration if available
-  - Reduce VM memory/CPU allocation
-  - Close other applications on host
-  - Use lighter OS (Alpine instead of Ubuntu)
-
-Diagnostic Commands
--------------------
-- Check KVM: kvm-ok
-- Check Docker: docker info
-- Check ports: ss -tln | grep ':<port>'
-- Check disk: df -h $HOME
-- Check RAM: free -h
-EOF
-}
-
-show_tutorials() {
-    print_header
-    echo -e "${GREEN}📖 Tutorials${NC}"
-    echo "─────────────────────────────────────"
-    
-    cat << 'EOF'
-Tutorial 1: Create Your First VM
-================================
-1. From Main Menu, select option 1
-2. Choose "QEMU/KVM Virtual Machine"
-3. Select "Ubuntu 24.04 LTS" (cloud image)
-4. Name your VM (e.g., "my-first-vm")
-5. Set resources: 2 CPU, 2048MB RAM, 20G disk
-6. Note the SSH port (e.g., 22000)
-7. Start the VM immediately (y)
-8. Connect via SSH: ssh -p 22000 <username>@localhost
-   Password: ZynexForge123
-
-Tutorial 2: Create a Docker Web Server
-======================================
-1. From Main Menu, select option 3
-2. Choose "Create New Docker Container"
-3. Select "Nginx Web Server"
-4. Name: "my-web-server"
-5. Port mapping: "8080:80"
-6. Container will start automatically
-7. Open browser: http://localhost:8080
-8. To manage: docker logs my-web-server
-
-Tutorial 3: Create Jupyter Notebook
-===================================
-1. From Main Menu, select option 4
-2. Choose "Create New Jupyter Notebook"
-3. Select "Data Science" template
-4. Name: "my-notebook"
-5. Note the URL and token
-6. Open browser to the URL
-7. Use token to login
-8. Start coding in Python/R/Julia
-
-Tutorial 4: Backup and Restore
-==============================
-1. From Main Menu, select option 6
-2. Choose "Create Backup"
-3. Select "VM Backup"
-4. Choose VM to backup
-5. Backup is saved in ~/.zynexforge/backups/
-6. To restore: choose "Restore Backup"
-7. Select backup file
-8. Confirm restoration
-
-Tutorial 5: ISO Installation
-============================
-1. From Main Menu, select option 5
-2. Choose "Download ISO"
-3. Select "Ubuntu 24.04 Desktop"
-4. Wait for download to complete
-5. Create new VM, choose ISO installation
-6. Follow on-screen installer
-7. GUI mode recommended for ISO install
-
-Tips and Tricks
-===============
-- Use cloud images for fastest deployment
-- Docker containers start in seconds
-- Jupyter notebooks auto-save your work
-- Regular backups prevent data loss
-- Clean up old files to save space
-- Check system diagnostics regularly
-EOF
-}
-
-# =============================================================================
-# MAIN EXECUTION
-# =============================================================================
-
-# Check if running as root (should NOT be root for user mode)
-if [ "$EUID" -eq 0 ]; then
-    print_status "ERROR" "This script should NOT be run as root for user mode"
-    print_status "INFO" "Please run as regular user: bash <(curl -fsSL ...)"
-    exit 1
-fi
 
 # Initialize platform
 initialize_platform
