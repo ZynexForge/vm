@@ -386,11 +386,12 @@ start_vm() {
             return 1
         fi
         
-        # Base QEMU command
+        # Base QEMU command - FIXED: Added machine type and removed problematic options
         local qemu_cmd=(
             qemu-system-x86_64
             -name "$vm_name"
             -enable-kvm
+            -machine q35,accel=kvm
             -m "$MEMORY"
             -smp "$CPUS"
             -cpu host
@@ -415,33 +416,85 @@ start_vm() {
 
         # Add GUI or console mode
         if [[ "$GUI_MODE" == true ]]; then
-            qemu_cmd+=(-vga virtio -display gtk,gl=on)
+            qemu_cmd+=(-vga virtio)
+            qemu_cmd+=(-display gtk)
         else
-            qemu_cmd+=(-nographic -serial mon:stdio)
+            qemu_cmd+=(-nographic)
+            qemu_cmd+=(-serial mon:stdio)
         fi
 
-        # Add performance enhancements
-        qemu_cmd+=(
-            -device virtio-balloon-pci
-            -object rng-random,filename=/dev/urandom,id=rng0
-            -device virtio-rng-pci,rng=rng0
-        )
+        # Add performance enhancements (commented out for now - can cause issues)
+        # qemu_cmd+=(
+        #     -device virtio-balloon-pci
+        #     -object rng-random,filename=/dev/urandom,id=rng0
+        #     -device virtio-rng-pci,rng=rng0
+        # )
 
         print_status "INFO" "Starting QEMU..."
-        print_status "INFO" "Command: ${qemu_cmd[*]}"
+        print_status "DEBUG" "Command: ${qemu_cmd[*]}"
         
         # Run QEMU in background
         local log_file="$VM_DIR/$vm_name.log"
+        
+        # First, let's test if QEMU can run with this command
+        print_status "INFO" "Testing QEMU command..."
+        if ! qemu-system-x86_64 --version &>/dev/null; then
+            print_status "ERROR" "QEMU is not properly installed or configured"
+            return 1
+        fi
+        
+        # Check KVM availability
+        if [[ ! -e /dev/kvm ]]; then
+            print_status "WARN" "/dev/kvm not found. KVM acceleration may not be available."
+            print_status "INFO" "You may need to: sudo modprobe kvm && sudo chmod 666 /dev/kvm"
+            # Remove -enable-kvm flag if KVM is not available
+            qemu_cmd=("${qemu_cmd[@]/-enable-kvm/}")
+            qemu_cmd=("${qemu_cmd[@]/-machine q35,accel=kvm/}")
+            qemu_cmd+=(-machine q35)
+        fi
+        
+        # Check for huge memory requirements
+        if [[ $MEMORY -gt 16384 ]]; then  # If memory > 16GB
+            print_status "INFO" "Large memory detected ($MEMORY MB), adding huge pages support..."
+            qemu_cmd+=(-mem-path /dev/hugepages)
+        fi
+        
+        print_status "INFO" "Starting VM (this may take a moment)..."
+        
+        # Start QEMU and capture PID
         "${qemu_cmd[@]}" > "$log_file" 2>&1 &
         local qemu_pid=$!
         
-        # Wait a bit to check if QEMU started successfully
-        sleep 3
+        # Wait longer to check if QEMU started successfully
+        sleep 5
+        
         if ps -p $qemu_pid > /dev/null 2>&1; then
             print_status "SUCCESS" "VM '$vm_name' started with PID $qemu_pid"
             print_status "INFO" "Logs available at: $log_file"
+            print_status "INFO" "VM is booting up. SSH will be available in 30-60 seconds."
+            
+            # Show initial logs
+            if [[ -f "$log_file" ]]; then
+                print_status "INFO" "Last few lines of log:"
+                tail -n 10 "$log_file"
+            fi
         else
-            print_status "ERROR" "Failed to start QEMU. Check logs: $log_file"
+            print_status "ERROR" "Failed to start QEMU. Process exited immediately."
+            print_status "INFO" "Check logs for details: $log_file"
+            
+            # Show error from log file
+            if [[ -f "$log_file" ]]; then
+                print_status "ERROR" "Last 20 lines of error log:"
+                tail -n 20 "$log_file"
+            fi
+            
+            # Common troubleshooting
+            print_status "INFO" "Troubleshooting tips:"
+            print_status "INFO" "1. Check if KVM is enabled: lsmod | grep kvm"
+            print_status "INFO" "2. Check disk image: qemu-img info $IMG_FILE"
+            print_status "INFO" "3. Try running QEMU manually to see error:"
+            echo "    ${qemu_cmd[@]}"
+            
             return 1
         fi
     fi
@@ -807,9 +860,90 @@ show_vm_logs() {
         echo "=========================================="
         tail -n 50 "$log_file"
         echo "=========================================="
+        
+        # Check for common errors
+        if grep -q "failed to initialize KVM" "$log_file"; then
+            print_status "ERROR" "KVM initialization failed. Check if virtualization is enabled in BIOS."
+        fi
+        if grep -q "Permission denied" "$log_file"; then
+            print_status "ERROR" "Permission denied. You may need to run with sudo or check /dev/kvm permissions."
+        fi
+        if grep -q "Could not open" "$log_file"; then
+            print_status "ERROR" "Could not open file. Check if disk image exists: $IMG_FILE"
+        fi
     else
         print_status "INFO" "No log file found for VM: $vm_name"
     fi
+    read -p "$(print_status "INPUT" "Press Enter to continue...")"
+}
+
+# Function to troubleshoot VM
+troubleshoot_vm() {
+    local vm_name=$1
+    
+    print_status "INFO" "Troubleshooting VM: $vm_name"
+    echo "=========================================="
+    
+    # Check if config exists
+    if [[ ! -f "$VM_DIR/$vm_name.conf" ]]; then
+        print_status "ERROR" "VM configuration not found"
+        return 1
+    fi
+    
+    # Load config
+    load_vm_config "$vm_name"
+    
+    echo "1. Checking disk image..."
+    if [[ -f "$IMG_FILE" ]]; then
+        echo "   ✓ Disk image exists: $IMG_FILE"
+        qemu-img info "$IMG_FILE" | head -5
+    else
+        echo "   ✗ Disk image missing: $IMG_FILE"
+    fi
+    
+    echo "2. Checking seed image..."
+    if [[ -f "$SEED_FILE" ]]; then
+        echo "   ✓ Seed image exists: $SEED_FILE"
+        file "$SEED_FILE"
+    else
+        echo "   ✗ Seed image missing: $SEED_FILE"
+    fi
+    
+    echo "3. Checking KVM..."
+    if [[ -e /dev/kvm ]]; then
+        echo "   ✓ /dev/kvm exists"
+        if ls -l /dev/kvm | grep -q "crw"; then
+            echo "   ✓ /dev/kvm is a character device"
+        else
+            echo "   ✗ /dev/kvm is not a character device"
+        fi
+    else
+        echo "   ✗ /dev/kvm does not exist"
+    fi
+    
+    echo "4. Checking memory..."
+    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
+    if [[ $MEMORY -lt $total_mem ]]; then
+        echo "   ✓ VM memory ($MEMORY MB) is less than system memory ($total_mem MB)"
+    else
+        echo "   ⚠ VM memory ($MEMORY MB) is high compared to system memory ($total_mem MB)"
+    fi
+    
+    echo "5. Checking port availability..."
+    if ss -tln | grep -q ":$SSH_PORT "; then
+        echo "   ✗ Port $SSH_PORT is already in use"
+    else
+        echo "   ✓ Port $SSH_PORT is available"
+    fi
+    
+    echo "=========================================="
+    
+    if is_vm_running "$vm_name"; then
+        print_status "INFO" "VM is currently running"
+    else
+        print_status "INFO" "VM is not running"
+    fi
+    
     read -p "$(print_status "INPUT" "Press Enter to continue...")"
 }
 
@@ -844,6 +978,7 @@ main_menu() {
             echo "  7) Resize VM disk"
             echo "  8) Show VM performance"
             echo "  9) Show VM logs"
+            echo " 10) Troubleshoot VM"
         fi
         echo "  0) Exit"
         echo
@@ -943,6 +1078,18 @@ main_menu() {
                     read -p "$(print_status "INPUT" "Enter VM number to show logs: ")" vm_num
                     if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
                         show_vm_logs "${vms[$((vm_num-1))]}"
+                    else
+                        print_status "ERROR" "Invalid selection"
+                    fi
+                else
+                    print_status "ERROR" "No VMs available"
+                fi
+                ;;
+            10)
+                if [ $vm_count -gt 0 ]; then
+                    read -p "$(print_status "INPUT" "Enter VM number to troubleshoot: ")" vm_num
+                    if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                        troubleshoot_vm "${vms[$((vm_num-1))]}"
                     else
                         print_status "ERROR" "Invalid selection"
                     fi
