@@ -107,7 +107,7 @@ check_dependencies() {
 cleanup() {
     if [ -f "user-data" ]; then rm -f "user-data"; fi
     if [ -f "meta-data" ]; then rm -f "meta-data"; fi
-    if [ -f "${IMG_FILE}.tmp" ]; then rm -f "${IMG_FILE}.tmp"; fi
+    if [ -f "${IMG_FILE:-}.tmp" ]; then rm -f "${IMG_FILE:-}.tmp"; fi
 }
 
 # Function to get all VM configurations
@@ -404,10 +404,12 @@ start_vm() {
         # Add port forwards if specified
         if [[ -n "$PORT_FORWARDS" ]]; then
             IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
+            local net_index=1
             for forward in "${forwards[@]}"; do
                 IFS=':' read -r host_port guest_port <<< "$forward"
-                qemu_cmd+=(-device "virtio-net-pci,netdev=net${#qemu_cmd[@]}")
-                qemu_cmd+=(-netdev "user,id=net${#qemu_cmd[@]},hostfwd=tcp::$host_port-:$guest_port")
+                qemu_cmd+=(-device "virtio-net-pci,netdev=net$net_index")
+                qemu_cmd+=(-netdev "user,id=net$net_index,hostfwd=tcp::$host_port-:$guest_port")
+                ((net_index++))
             done
         fi
 
@@ -429,18 +431,19 @@ start_vm() {
         print_status "INFO" "Command: ${qemu_cmd[*]}"
         
         # Run QEMU in background
-        ("${qemu_cmd[@]}" > "$VM_DIR/$vm_name.log" 2>&1 &)
+        local log_file="$VM_DIR/$vm_name.log"
+        "${qemu_cmd[@]}" > "$log_file" 2>&1 &
         local qemu_pid=$!
         
         # Wait a bit to check if QEMU started successfully
-        sleep 2
-        if ! ps -p $qemu_pid > /dev/null 2>&1; then
-            print_status "ERROR" "Failed to start QEMU. Check logs: $VM_DIR/$vm_name.log"
+        sleep 3
+        if ps -p $qemu_pid > /dev/null 2>&1; then
+            print_status "SUCCESS" "VM '$vm_name' started with PID $qemu_pid"
+            print_status "INFO" "Logs available at: $log_file"
+        else
+            print_status "ERROR" "Failed to start QEMU. Check logs: $log_file"
             return 1
         fi
-        
-        print_status "SUCCESS" "VM '$vm_name' started with PID $qemu_pid"
-        print_status "INFO" "Logs available at: $VM_DIR/$vm_name.log"
     fi
 }
 
